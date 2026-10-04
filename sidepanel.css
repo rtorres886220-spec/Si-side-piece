@@ -865,7 +865,8 @@ body {
 }
 
 /* Specular Titanium Conic Gradient Border:
-   Ultra-thin 1px, platinum specular highlight with smooth linear continuous orbit */
+   Thinner lightweight full-moon bright specular beam with perfected taper points
+   and uniform single rotation around the input box. */
 .choreo-conic-border {
   position: absolute;
   inset: 0;
@@ -876,36 +877,70 @@ body {
   mask-composite: exclude;
   pointer-events: none;
   overflow: hidden;
-  opacity: 0.8;
+  opacity: 1;
 }
 
 .choreo-conic-inner {
   position: absolute;
-  width: 260%;
-  height: 260%;
-  top: -80%;
-  left: -80%;
+  top: 50%;
+  left: 50%;
+  width: 700px;
+  height: 700px;
+  margin-top: -350px;
+  margin-left: -350px;
+  border-radius: 50%;
   background: conic-gradient(
     from 0deg,
-    transparent 0deg,
-    transparent 210deg,
-    rgba(255, 255, 255, 0) 230deg,
-    rgba(148, 163, 184, 0.12) 255deg,
-    rgba(226, 232, 240, 0.42) 275deg,
-    rgba(255, 255, 255, 0.9) 290deg,
-    rgba(226, 232, 240, 0.42) 305deg,
-    rgba(148, 163, 184, 0.12) 325deg,
-    rgba(255, 255, 255, 0) 345deg,
-    transparent 360deg
+    #ffffff 0deg,
+    rgba(255, 255, 255, 0.95) 2deg,
+    rgba(255, 255, 255, 0.70) 6deg,
+    rgba(255, 255, 255, 0.32) 12deg,
+    rgba(255, 255, 255, 0.12) 18deg,
+    rgba(255, 255, 255, 0.03) 24deg,
+    rgba(255, 255, 255, 0) 30deg,
+    transparent 30deg,
+    transparent 330deg,
+    rgba(255, 255, 255, 0) 330deg,
+    rgba(255, 255, 255, 0.03) 336deg,
+    rgba(255, 255, 255, 0.12) 342deg,
+    rgba(255, 255, 255, 0.32) 348deg,
+    rgba(255, 255, 255, 0.70) 354deg,
+    rgba(255, 255, 255, 0.95) 358deg,
+    #ffffff 360deg
   );
-  animation: choreoSpin 9s linear infinite;
+  animation: choreoSpin 7.5s linear infinite;
   transform-origin: center center;
   will-change: transform;
 }
 
 @keyframes choreoSpin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: scale(2.2, 0.55) rotate(0deg);
+  }
+  21% {
+    transform: scale(1.6, 0.65) rotate(70deg);
+  }
+  25% {
+    transform: scale(0.65, 0.75) rotate(90deg);
+  }
+  29% {
+    transform: scale(1.6, 0.65) rotate(110deg);
+  }
+  50% {
+    transform: scale(2.2, 0.55) rotate(180deg);
+  }
+  71% {
+    transform: scale(1.6, 0.65) rotate(250deg);
+  }
+  75% {
+    transform: scale(0.65, 0.75) rotate(270deg);
+  }
+  79% {
+    transform: scale(1.6, 0.65) rotate(290deg);
+  }
+  100% {
+    transform: scale(2.2, 0.55) rotate(360deg);
+  }
 }
 
 .composer-form {
