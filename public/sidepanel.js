@@ -1741,6 +1741,10 @@ function initWordmarkAndRenaming() {
   const input = document.getElementById("renameInput");
   if (!wrapper || !input) return;
 
+  // Ensure rename input is strictly hidden on load
+  input.classList.add("hidden");
+  input.style.display = "none";
+
   const savedName = localStorage.getItem("si_custom_assistant_name") || "";
   if (savedName) {
     wrapper.innerHTML = `<span class="wordmark-custom">${escapeXml(savedName)}</span>`;
@@ -1754,7 +1758,9 @@ function initWordmarkAndRenaming() {
     const currentName = localStorage.getItem("si_custom_assistant_name") || (wrapper.classList.contains("collapsed") ? "Si" : "Super Intelligence");
     input.value = currentName === "Si" || currentName === "Super Intelligence" ? "" : currentName;
     wrapper.classList.add("hidden");
+    wrapper.style.display = "none";
     input.classList.remove("hidden");
+    input.style.display = "inline-block";
     input.focus();
   });
 
@@ -1765,11 +1771,13 @@ function initWordmarkAndRenaming() {
       wrapper.innerHTML = `<span class="wordmark-custom">${escapeXml(val)}</span>`;
     } else {
       localStorage.removeItem("si_custom_assistant_name");
-      wrapper.innerHTML = `<span id="wordmarkS">S</span><span id="wordmarkUper" class="wordmark-foldable">uper </span><span id="wordmarkI">i</span><span id="wordmarkNtelligence" class="wordmark-foldable">ntelligence</span>`;
+      wrapper.innerHTML = `<span id="wordmarkS">S</span><span id="wordmarkUper" class="wordmark-foldable">uper </span><span id="wordmarkI">I</span><span id="wordmarkNtelligence" class="wordmark-foldable">ntelligence</span>`;
       wrapper.classList.add("collapsed");
     }
     input.classList.add("hidden");
+    input.style.display = "none";
     wrapper.classList.remove("hidden");
+    wrapper.style.display = "flex";
   };
 
   input.addEventListener("blur", saveRename);
@@ -1777,7 +1785,9 @@ function initWordmarkAndRenaming() {
     if (e.key === "Enter") saveRename();
     if (e.key === "Escape") {
       input.classList.add("hidden");
+      input.style.display = "none";
       wrapper.classList.remove("hidden");
+      wrapper.style.display = "flex";
     }
   });
 }

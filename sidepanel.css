@@ -52,12 +52,24 @@
   initial-value: 0deg;
 }
 
+/* Universal hidden utility - strictly prevents overflow and visual glitches */
+.hidden {
+  display: none !important;
+}
+
 /* Reset */
-* {
+*, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
+}
+
+html {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 body {
@@ -68,7 +80,13 @@ body {
   background-color: var(--bg);
   color: var(--ink);
   height: 100vh;
-  overflow: hidden;
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 /* Panel Layout */
@@ -78,8 +96,11 @@ body {
   flex-direction: column;
   height: 100vh;
   width: 100%;
+  max-width: 100vw;
   background-color: var(--bg);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  box-sizing: border-box;
 }
 
 /* Restrained Quiet Obsidian Glow - Upper Half */
@@ -88,13 +109,15 @@ body {
   top: -40px;
   left: 50%;
   transform: translateX(-50%);
-  width: 500px;
+  width: 100%;
+  max-width: 480px;
   height: 320px;
   background: radial-gradient(ellipse at top, rgba(30, 41, 59, 0.28) 0%, rgba(15, 23, 42, 0.18) 45%, rgba(7, 8, 11, 0.6) 80%, transparent 100%);
   filter: blur(60px);
   opacity: 0.2;
   pointer-events: none;
   z-index: 0;
+  overflow: hidden;
   transition: transform 1.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 1.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -109,6 +132,8 @@ body {
   top: 0;
   left: 0;
   right: 0;
+  width: 100%;
+  max-width: 100%;
   height: 48%;
   pointer-events: none;
   overflow: hidden;
@@ -120,13 +145,14 @@ body {
 .rr-shooting-star-track {
   position: absolute;
   top: 20%;
-  left: -40px;
-  width: 520px;
+  left: -20px;
+  width: 100%;
+  max-width: 480px;
   height: 2px;
   transform: rotate(-24deg);
   transform-origin: left top;
   pointer-events: none;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .rr-shooting-star {
@@ -208,10 +234,13 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 16px;
+  padding: 6px 14px;
   background-color: var(--bg);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+  gap: 8px;
 }
 
 /* Dynamic Wordmark: "Super Intelligence" morphs to "Si" */
@@ -228,6 +257,8 @@ body {
   padding: 2px 4px;
   border-radius: 4px;
   transition: background-color 0.15s ease;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .wordmark-wrapper:hover {
@@ -264,12 +295,15 @@ body {
   font-weight: 300;
   color: var(--ink);
   outline: none;
+  max-width: 130px;
+  flex: 0 1 auto;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
 .icon-btn {
@@ -484,12 +518,16 @@ body {
   z-index: 5;
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px 10px;
+  overflow-x: hidden;
+  padding: 16px 16px 10px;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
   scrollbar-width: thin;
   scrollbar-color: var(--soft) transparent;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .thread-container.has-messages {
@@ -501,6 +539,8 @@ body {
   flex-direction: column;
   gap: 18px;
   width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 /* Empty State */
@@ -510,17 +550,21 @@ body {
   align-items: flex-start;
   text-align: left;
   margin-top: auto;
-  margin-bottom: 26px;
-  gap: 14px;
+  margin-bottom: 22px;
+  gap: 12px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .empty-headline {
-  font-size: 28px;
+  font-size: 26px;
   font-weight: 200;
-  line-height: 1.28;
-  letter-spacing: 0.055em;
+  line-height: 1.25;
+  letter-spacing: 0.035em;
   color: var(--ink);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
+  word-break: break-word;
 }
 
 .headline-mute {
@@ -533,9 +577,10 @@ body {
   font-size: 13px;
   font-weight: 200;
   color: var(--mute);
-  line-height: 1.7;
-  letter-spacing: 0.045em;
-  max-width: 330px;
+  line-height: 1.65;
+  letter-spacing: 0.035em;
+  max-width: 100%;
+  word-break: break-word;
 }
 
 .empty-action-btn {
@@ -734,15 +779,20 @@ body {
 .composer-section {
   position: relative;
   z-index: 10;
-  padding: 2px 14px 22px;
+  padding: 2px 14px 16px;
   flex-shrink: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .composer-subtext-slot {
   min-height: 14px;
-  margin-top: 4px;
+  margin-top: 5px;
   text-align: center;
   font-size: 11px;
+  width: 100%;
+  overflow: hidden;
 }
 
 .selection-quote {
@@ -862,6 +912,9 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   padding: 10px 14px 8px;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 /* Specular Titanium Conic Gradient Border:
@@ -1182,6 +1235,10 @@ body {
   font-family: var(--font-mono);
   font-size: 10px;
   color: rgba(119, 124, 138, 0.6);
+  display: block;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 
 .subtext-tip code {
