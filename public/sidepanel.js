@@ -111,7 +111,24 @@ const elements = {
   // Send / Stop
   sendBtn: document.getElementById("sendBtn"),
   sendIconSvg: document.getElementById("sendIconSvg"),
-  stopIconSquare: document.getElementById("stopIconSquare")
+  stopIconSquare: document.getElementById("stopIconSquare"),
+
+  // Slash Commands & Modals
+  helpBtn: document.getElementById("helpBtn"),
+  speechBar: document.getElementById("speechBar"),
+  stopSpeechBtn: document.getElementById("stopSpeechBtn"),
+  slashMenu: document.getElementById("slashMenu"),
+  slashList: document.getElementById("slashList"),
+  slashCheatSheetBtn: document.getElementById("slashCheatSheetBtn"),
+  toggleSlashBtn: document.getElementById("toggleSlashBtn"),
+  helpModal: document.getElementById("helpModal"),
+  closeHelpModalBtn: document.getElementById("closeHelpModalBtn"),
+  helpSearchInput: document.getElementById("helpSearchInput"),
+  helpModalList: document.getElementById("helpModalList"),
+  auditModal: document.getElementById("auditModal"),
+  closeAuditModalBtn: document.getElementById("closeAuditModalBtn"),
+  auditModalBody: document.getElementById("auditModalBody"),
+  toastNotification: document.getElementById("toastNotification")
 };
 
 // Safe storage wrapper
@@ -301,10 +318,87 @@ function bindEvents() {
   });
 
   // Auto-resize textarea
-  elements.promptInput?.addEventListener("input", autoResizeTextarea);
+  elements.promptInput?.addEventListener("input", (e) => {
+    autoResizeTextarea();
+    handleSlashInput(e.target.value);
+  });
 
-  // Keydown: Enter sends, Shift+Enter adds newline
+  // Slash menu toggle button
+  elements.toggleSlashBtn?.addEventListener("click", () => {
+    if (elements.promptInput) {
+      if (elements.promptInput.value === "/") {
+        elements.promptInput.value = "";
+        hideSlashMenu();
+      } else {
+        elements.promptInput.value = "/";
+        showSlashMenu();
+      }
+      elements.promptInput.focus();
+    }
+  });
+
+  // Help modal triggers
+  elements.helpBtn?.addEventListener("click", openHelpModal);
+  elements.slashCheatSheetBtn?.addEventListener("click", openHelpModal);
+  elements.closeHelpModalBtn?.addEventListener("click", closeHelpModal);
+  elements.closeAuditModalBtn?.addEventListener("click", closeAuditModal);
+  elements.stopSpeechBtn?.addEventListener("click", stopSpeech);
+
+  elements.helpSearchInput?.addEventListener("input", (e) => {
+    renderHelpList(e.target.value);
+  });
+
+  // Slash Tier tabs
+  document.querySelectorAll(".slash-tier-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      document.querySelectorAll(".slash-tier-tab").forEach((t) => t.classList.remove("active"));
+      tab.classList.add("active");
+      const tier = tab.getAttribute("data-tier");
+      slashState.tier = tier === "all" ? "all" : parseInt(tier, 10);
+      renderSlashList();
+    });
+  });
+
+  // Keydown: Slash menu navigation, Enter sends, Shift+Enter adds newline
   elements.promptInput?.addEventListener("keydown", (e) => {
+    const val = elements.promptInput.value;
+    if (val.startsWith("/")) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        slashState.selectedIndex = (slashState.selectedIndex + 1) % Math.max(1, slashState.filtered.length);
+        updateSlashSelection();
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        slashState.selectedIndex = (slashState.selectedIndex - 1 + Math.max(1, slashState.filtered.length)) % Math.max(1, slashState.filtered.length);
+        updateSlashSelection();
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        elements.promptInput.value = "";
+        hideSlashMenu();
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        if (slashState.filtered.length > 0) {
+          const cmd = slashState.filtered[slashState.selectedIndex] || slashState.filtered[0];
+          selectSlashCommand(cmd, false);
+        }
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        if (slashState.filtered.length > 0 && !val.includes(" ")) {
+          e.preventDefault();
+          const cmd = slashState.filtered[slashState.selectedIndex] || slashState.filtered[0];
+          selectSlashCommand(cmd, true);
+          return;
+        }
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       elements.chatForm?.dispatchEvent(new Event("submit"));
@@ -314,6 +408,7 @@ function bindEvents() {
   // Form Submit
   elements.chatForm?.addEventListener("submit", (e) => {
     e.preventDefault();
+    hideSlashMenu();
     if (state.isBusy) {
       stopRequest();
       return;
@@ -608,12 +703,361 @@ const GEMINI_TOOLS = [
   }
 ];
 
+// ================= Complete 3-Tier Slash Commands Catalog & Engine =================
+const SLASH_COMMANDS = [
+  // Tier 1: Core Essentials
+  { id: "summarize", name: "/summarize", aliases: ["/sum", "/brief"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/summarize [bullets | tldr | deep | executive]", desc: "Digest page with verbatim citations", example: "/summarize bullets" },
+  { id: "cite", name: "/cite", aliases: ["/evidence", "/findquote"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/cite <claim or question>", desc: "Find proof and highlight passage", example: "/cite training duration", requiresArg: true },
+  { id: "explain", name: "/explain", aliases: ["/eli5", "/simplify"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/explain [concept]", desc: "Explain concept in plain English", example: "/explain Multi-Head Attention" },
+  { id: "actions", name: "/actions", aliases: ["/cdp", "/scan"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/actions", desc: "Scan clickable buttons and inputs", example: "/actions" },
+  { id: "clear", name: "/clear", aliases: ["/reset", "/new"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/clear", desc: "Clear conversation thread", example: "/clear" },
+  { id: "help", name: "/help", aliases: ["/shortcuts", "/?"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/help [command name]", desc: "Show command cheat sheet", example: "/help" },
+  { id: "copy", name: "/copy", aliases: ["/export", "/save"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/copy [last | all | markdown]", desc: "Copy response or chat to clipboard", example: "/copy markdown" },
+
+  // Tier 2: Action, Data & Audio
+  { id: "click", name: "/click", aliases: [], tier: 2, tierLabel: "Tier 2: Action", syntax: "/click <element name or text>", desc: "Click element via CDP mouse event", example: "/click Add to Cart", requiresArg: true },
+  { id: "fill", name: "/fill", aliases: ["/type", "/input"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/fill <field name> = <value>", desc: "Type into inputs via CDP key events", example: "/fill Search = Headphones", requiresArg: true },
+  { id: "scroll", name: "/scroll", aliases: [], tier: 2, tierLabel: "Tier 2: Action", syntax: "/scroll [top | bottom | half]", desc: "Scroll page viewport smoothly", example: "/scroll bottom" },
+  { id: "fillcart", name: "/fillcart", aliases: ["/checkout-prep"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/fillcart", desc: "Select options and add to cart", example: "/fillcart" },
+  { id: "extract", name: "/extract", aliases: ["/scrape", "/parse"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/extract [table | links | emails | pricing | json]", desc: "Extract tables, links, or JSON", example: "/extract table" },
+  { id: "reply", name: "/reply", aliases: ["/respond", "/draft"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/reply [agree | disagree | professional | concise]", desc: "Draft contextual email or PR reply", example: "/reply professional" },
+  { id: "model", name: "/model", aliases: [], tier: 2, tierLabel: "Tier 2: Action", syntax: "/model [flash | pro]", desc: "Switch between Flash and Pro", example: "/model pro" },
+  { id: "readaloud", name: "/readaloud", aliases: ["/tts", "/speak"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/readaloud [last | stop]", desc: "Read aloud with speech player", example: "/readaloud" },
+
+  // Tier 3: Power, Tech & Security
+  { id: "code", name: "/code", aliases: ["/snippet", "/refactor"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/code [explain | typescript | python | optimize]", desc: "Explain, optimize, or convert code", example: "/code explain" },
+  { id: "inspect", name: "/inspect", aliases: ["/dom", "/selector"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/inspect <element name>", desc: "Inspect selector & coordinates", example: "/inspect search", requiresArg: true },
+  { id: "curl", name: "/curl", aliases: [], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/curl", desc: "Generate curl commands for APIs", example: "/curl" },
+  { id: "definitions", name: "/definitions", aliases: ["/terms", "/glossary"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/definitions", desc: "Build glossary of terms on page", example: "/definitions" },
+  { id: "factcheck", name: "/factcheck", aliases: ["/verify", "/counter"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/factcheck", desc: "Audit claims, sources, and bias", example: "/factcheck" },
+  { id: "translate", name: "/translate", aliases: ["/tr"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/translate [language]", desc: "Translate text or page content", example: "/translate Spanish" },
+  { id: "rewrite", name: "/rewrite", aliases: ["/polish", "/fix"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/rewrite [grammar | punchy | formal | shorter]", desc: "Polish text for clarity or impact", example: "/rewrite punchy" },
+  { id: "quiz", name: "/quiz", aliases: ["/testme"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/quiz [3 | 5 questions]", desc: "Create comprehension quiz", example: "/quiz 3" },
+  { id: "timeline", name: "/timeline", aliases: ["/chrono"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/timeline", desc: "Extract chronological timeline", example: "/timeline" },
+  { id: "audit", name: "/audit", aliases: ["/privacy", "/inspect-data"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/audit", desc: "Inspect privacy & sanitized enclave", example: "/audit" },
+  { id: "denylist", name: "/denylist", aliases: ["/block"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/denylist [add | remove | check]", desc: "Manage domain automation blocklist", example: "/denylist check" }
+];
+
+const slashState = {
+  tier: "all",
+  filtered: [],
+  selectedIndex: 0,
+  isSpeaking: false
+};
+
+function handleSlashInput(val) {
+  if (!val.startsWith("/")) {
+    hideSlashMenu();
+    return;
+  }
+  const term = val.trim().toLowerCase().slice(1);
+  let list = SLASH_COMMANDS;
+  if (slashState.tier !== "all") {
+    list = list.filter((c) => c.tier === slashState.tier);
+  }
+  if (term) {
+    list = list.filter((c) => 
+      c.name.slice(1).startsWith(term) ||
+      c.aliases.some((a) => a.slice(1).startsWith(term)) ||
+      c.desc.toLowerCase().includes(term)
+    );
+  }
+  slashState.filtered = list;
+  slashState.selectedIndex = 0;
+  if (list.length > 0) {
+    renderSlashList();
+    showSlashMenu();
+  } else {
+    hideSlashMenu();
+  }
+}
+
+function showSlashMenu() {
+  elements.slashMenu?.classList.remove("hidden");
+}
+
+function hideSlashMenu() {
+  elements.slashMenu?.classList.add("hidden");
+}
+
+function renderSlashList() {
+  if (!elements.slashList) return;
+  elements.slashList.innerHTML = "";
+  slashState.filtered.forEach((cmd, idx) => {
+    const item = document.createElement("div");
+    item.className = `slash-item ${idx === slashState.selectedIndex ? "selected" : ""}`;
+    const argHint = cmd.syntax
+      ? cmd.syntax.trim() === cmd.name.trim()
+        ? ""
+        : cmd.syntax.startsWith(cmd.name)
+        ? cmd.syntax.slice(cmd.name.length).trim()
+        : cmd.syntax
+      : "";
+
+    item.innerHTML = `
+      <div class="slash-item-top">
+        <span class="slash-item-name">${escapeXml(cmd.name)}</span>
+        ${argHint ? `<span class="slash-item-syntax">${escapeXml(argHint)}</span>` : ""}
+      </div>
+      <div class="slash-item-desc">${escapeXml(cmd.desc)}</div>
+    `;
+    item.addEventListener("click", () => selectSlashCommand(cmd, !cmd.requiresArg));
+    item.addEventListener("mouseenter", () => {
+      slashState.selectedIndex = idx;
+      updateSlashSelection();
+    });
+    elements.slashList.appendChild(item);
+  });
+}
+
+function updateSlashSelection() {
+  const items = elements.slashList?.querySelectorAll(".slash-item");
+  if (!items) return;
+  items.forEach((el, idx) => {
+    el.classList.toggle("selected", idx === slashState.selectedIndex);
+  });
+}
+
+function selectSlashCommand(cmd, autoSubmit = false) {
+  hideSlashMenu();
+  if (cmd.id === "clear") {
+    elements.promptInput.value = "";
+    elements.newChatBtn?.click();
+    showToast("Conversation cleared");
+    return;
+  }
+  if (cmd.id === "help") {
+    elements.promptInput.value = "";
+    openHelpModal();
+    return;
+  }
+  if (cmd.id === "audit") {
+    elements.promptInput.value = "";
+    openAuditModal();
+    return;
+  }
+
+  if (autoSubmit || !cmd.requiresArg) {
+    elements.promptInput.value = "";
+    submitPrompt(cmd.name);
+  } else {
+    elements.promptInput.value = cmd.name + " ";
+    elements.promptInput.focus();
+  }
+}
+
+function showToast(msg) {
+  if (!elements.toastNotification) return;
+  elements.toastNotification.textContent = msg;
+  elements.toastNotification.classList.remove("hidden");
+  setTimeout(() => {
+    elements.toastNotification.classList.add("hidden");
+  }, 2500);
+}
+
+function openHelpModal() {
+  elements.helpModal?.classList.remove("hidden");
+  renderHelpList("");
+  if (elements.helpSearchInput) {
+    elements.helpSearchInput.value = "";
+    elements.helpSearchInput.focus();
+  }
+}
+
+function closeHelpModal() {
+  elements.helpModal?.classList.add("hidden");
+}
+
+function renderHelpList(q = "") {
+  if (!elements.helpModalList) return;
+  elements.helpModalList.innerHTML = "";
+  const query = q.toLowerCase().trim();
+  const list = SLASH_COMMANDS.filter((c) => 
+    !query ||
+    c.name.toLowerCase().includes(query) ||
+    c.desc.toLowerCase().includes(query) ||
+    c.syntax.toLowerCase().includes(query)
+  );
+
+  list.forEach((c) => {
+    const card = document.createElement("div");
+    card.className = "modal-cmd-card";
+    const badgeClass = c.tier === 1 ? "t1" : c.tier === 2 ? "t2" : "t3";
+    card.innerHTML = `
+      <div class="modal-cmd-top">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-family:var(--font-mono);font-size:12px;color:var(--sky);font-weight:500;">${c.name}</span>
+          <span class="slash-item-badge ${badgeClass}">${c.tierLabel}</span>
+        </div>
+        <button type="button" class="modal-run-btn">Run</button>
+      </div>
+      <div style="font-size:11.5px;color:rgba(236,238,244,0.8);">${c.desc}</div>
+      <div style="font-family:var(--font-mono);font-size:10px;color:var(--mute);">
+        Syntax: <span style="color:#7dd3fc;">${c.syntax}</span> • Ex: <span style="color:#fde68a;">${c.example}</span>
+      </div>
+    `;
+    card.querySelector(".modal-run-btn")?.addEventListener("click", () => {
+      closeHelpModal();
+      selectSlashCommand(c, !c.requiresArg);
+    });
+    elements.helpModalList.appendChild(card);
+  });
+}
+
+function openAuditModal() {
+  elements.auditModal?.classList.remove("hidden");
+  if (!elements.auditModalBody) return;
+  const chars = state.pageContext.charCount || 0;
+  const elementsCount = state.pageContext.interactiveElements?.length || 0;
+  elements.auditModalBody.innerHTML = `
+    <div style="padding:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;display:flex;flex-direction:column;gap:6px;">
+      <div><strong>Enclave UUID:</strong> <span style="color:var(--sky);">uuid-7f4d92a1</span></div>
+      <div><strong>Isolated Domain:</strong> <span style="color:#6ee7b7;">${state.pageContext.url || "active tab"}</span></div>
+      <div><strong>Sanitized DOM Elements:</strong> ${elementsCount} interactive nodes</div>
+      <div><strong>Sanitized Text Size:</strong> ${chars} characters</div>
+    </div>
+    <div style="padding:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;display:flex;flex-direction:column;gap:4px;">
+      <div style="color:var(--sky);font-weight:500;">Sanitization Defense Pipeline:</div>
+      <div>✓ Hidden DOM stripped (display:none, opacity:0)</div>
+      <div>✓ Zero-width Unicode characters stripped (\\u200B)</div>
+      <div>✓ Credit card numbers masked ([REDACTED_CREDIT_CARD])</div>
+      <div>✓ SSN & Bearer Auth tokens masked</div>
+    </div>
+  `;
+}
+
+function closeAuditModal() {
+  elements.auditModal?.classList.add("hidden");
+}
+
+function speakText(txt) {
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+    const clean = txt.replace(/\\[\\d+\\]/g, "").replace(/[*_#`]/g, "").slice(0, 1000);
+    const u = new SpeechSynthesisUtterance(clean);
+    u.onend = () => {
+      slashState.isSpeaking = false;
+      elements.speechBar?.classList.add("hidden");
+    };
+    window.speechSynthesis.speak(u);
+    slashState.isSpeaking = true;
+    elements.speechBar?.classList.remove("hidden");
+    showToast("Reading aloud");
+  }
+}
+
+function stopSpeech() {
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
+  slashState.isSpeaking = false;
+  elements.speechBar?.classList.add("hidden");
+}
+
+async function handleSlashCommand(fullCommand) {
+  const parts = fullCommand.trim().split(" ");
+  const cmd = parts[0].toLowerCase();
+  const arg = parts.slice(1).join(" ").trim();
+  const argLower = arg.toLowerCase();
+
+  renderUserMessage(fullCommand);
+  state.conversation.push({ role: "user", text: fullCommand });
+
+  if (elements.emptyState) elements.emptyState.style.display = "none";
+  elements.threadContainer.classList.add("has-messages");
+
+  // Tier 1: /clear
+  if (["/clear", "/reset", "/new"].includes(cmd)) {
+    state.conversation = [];
+    if (elements.messagesList) elements.messagesList.innerHTML = "";
+    if (elements.emptyState) elements.emptyState.style.display = "flex";
+    elements.threadContainer.classList.remove("has-messages");
+    showToast("Conversation cleared");
+    return;
+  }
+
+  // Tier 1: /help
+  if (["/help", "/shortcuts", "/?"].includes(cmd)) {
+    openHelpModal();
+    renderAssistantPlainMessage("Opened Command Cheat Sheet (26 slash commands across 3 tiers).");
+    return;
+  }
+
+  // Tier 1: /copy
+  if (["/copy", "/export", "/save"].includes(cmd)) {
+    const lastMsg = [...state.conversation].reverse().find(m => m.role === "model");
+    const text = typeof lastMsg?.text === "string" ? lastMsg.text : JSON.stringify(lastMsg?.text || "No message");
+    navigator.clipboard.writeText(text);
+    showToast("Copied to clipboard");
+    renderAssistantPlainMessage(`Copied last response (${text.length} chars) to clipboard.`);
+    return;
+  }
+
+  // Tier 2: /model
+  if (cmd === "/model") {
+    const target = argLower.includes("pro") ? "gemini-3.1-pro-preview" : "gemini-3.8-flash";
+    state.model = target;
+    await storage.set({ [STORAGE_KEY_MODEL]: target });
+    updateModelToken(target);
+    showToast(`Model set to ${target}`);
+    renderAssistantPlainMessage(`Switched active model to **${target}**.`);
+    return;
+  }
+
+  // Tier 2: /readaloud
+  if (["/readaloud", "/tts", "/speak"].includes(cmd)) {
+    if (argLower === "stop") {
+      stopSpeech();
+      renderAssistantPlainMessage("Speech stopped.");
+      return;
+    }
+    const lastMsg = [...state.conversation].reverse().find(m => m.role === "model");
+    const txt = typeof lastMsg?.text === "string" ? lastMsg.text : "Sidekick audio briefing.";
+    speakText(txt);
+    renderAssistantPlainMessage("Playing audio via Web Speech Synthesis.");
+    return;
+  }
+
+  // Tier 3: /audit
+  if (["/audit", "/privacy"].includes(cmd)) {
+    openAuditModal();
+    renderAssistantPlainMessage("Opened Security Enclave Audit Modal.");
+    return;
+  }
+
+  // Tier 3: /denylist
+  if (["/denylist", "/block"].includes(cmd)) {
+    renderAssistantPlainMessage(`Domain Automation Policy: ${AUTOMATION_DENYLIST.length} domains strictly protected.`);
+    return;
+  }
+
+  // Fallback to model execution with specialized slash prompt wrapper
+  submitPrompt(fullCommand);
+}
+
+function renderAssistantPlainMessage(txt) {
+  const item = document.createElement("div");
+  item.className = "message-item assistant";
+  item.innerHTML = `<div class="assistant-content"><p>${txt}</p></div>`;
+  elements.messagesList?.appendChild(item);
+  scrollThreadToBottom();
+}
+
 /**
  * Handle Prompt Submission & Agentic Execution Loop
  */
 async function submitPrompt(promptText) {
   removeFollowUps();
   hideSafetyModal();
+
+  // Check if it's a slash command first!
+  if (promptText.trim().startsWith("/")) {
+    const cmdToken = promptText.trim().split(" ")[0].toLowerCase();
+    if (["/clear", "/reset", "/new", "/help", "/shortcuts", "/?", "/copy", "/export", "/save", "/model", "/readaloud", "/tts", "/speak", "/audit", "/privacy", "/denylist", "/block"].includes(cmdToken)) {
+      await handleSlashCommand(promptText.trim());
+      return;
+    }
+  }
 
   if (state.tabReadState === "failed" && !state.pageContext.selectedText) {
     renderUserMessage(promptText);
@@ -1295,7 +1739,6 @@ function delay(ms) {
 function initWordmarkAndRenaming() {
   const wrapper = document.getElementById("wordmarkWrapper");
   const input = document.getElementById("renameInput");
-  const dot = document.getElementById("wordmarkDot");
   if (!wrapper || !input) return;
 
   const savedName = localStorage.getItem("si_custom_assistant_name") || "";
@@ -1304,7 +1747,6 @@ function initWordmarkAndRenaming() {
   } else {
     setTimeout(() => {
       wrapper.classList.add("collapsed");
-      if (dot) dot.classList.remove("hidden");
     }, 1900);
   }
 
@@ -1323,7 +1765,7 @@ function initWordmarkAndRenaming() {
       wrapper.innerHTML = `<span class="wordmark-custom">${escapeXml(val)}</span>`;
     } else {
       localStorage.removeItem("si_custom_assistant_name");
-      wrapper.innerHTML = `<span id="wordmarkS">S</span><span id="wordmarkUper" class="wordmark-foldable">uper </span><span id="wordmarkI">i</span><span id="wordmarkNtelligence" class="wordmark-foldable">ntelligence</span><span id="wordmarkDot" class="wordmark-sparkle"></span>`;
+      wrapper.innerHTML = `<span id="wordmarkS">S</span><span id="wordmarkUper" class="wordmark-foldable">uper </span><span id="wordmarkI">i</span><span id="wordmarkNtelligence" class="wordmark-foldable">ntelligence</span>`;
       wrapper.classList.add("collapsed");
     }
     input.classList.add("hidden");

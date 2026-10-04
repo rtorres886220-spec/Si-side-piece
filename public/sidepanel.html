@@ -26,7 +26,6 @@
     <header class="header">
       <div id="wordmarkWrapper" class="wordmark-wrapper" title="Click to rename">
         <span id="wordmarkS">S</span><span id="wordmarkUper" class="wordmark-foldable">uper </span><span id="wordmarkI">I</span><span id="wordmarkNtelligence" class="wordmark-foldable">ntelligence</span>
-        <span id="wordmarkDot" class="wordmark-sparkle hidden"></span>
       </div>
       <input type="text" id="renameInput" class="rename-input hidden" placeholder="Name..." />
 
@@ -54,6 +53,14 @@
             <line x1="1" y1="14" x2="7" y2="14"></line>
             <line x1="9" y1="8" x2="15" y2="8"></line>
             <line x1="17" y1="16" x2="23" y2="16"></line>
+          </svg>
+        </button>
+
+        <button id="helpBtn" class="icon-btn" title="Slash commands cheat sheet (/help)" aria-label="Slash commands">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
           </svg>
         </button>
       </div>
@@ -119,7 +126,7 @@
           <span class="headline-mute">do with this page?</span>
         </h1>
         <p class="empty-subline">
-          Try <button type="button" class="empty-action-btn" data-prompt="Summarize this page">summarize</button>, <button type="button" class="empty-action-btn" data-prompt="Find the action items on this page">find the action items</button>, or <button type="button" class="empty-action-btn" data-prompt="Explain this page simply">explain it simply</button>.
+          Try <button type="button" class="empty-action-btn" data-prompt="Verify core claims with grounded citations">verify core claims</button>, <button type="button" class="empty-action-btn" data-prompt="Dispatch multi-step CDP automation">dispatch CDP automation</button>, or <button type="button" class="empty-action-btn" data-prompt="Audit cryptographic security enclave">audit security enclave</button>.
         </p>
       </div>
 
@@ -148,6 +155,23 @@
         </div>
       </div>
 
+      <!-- Speech Synthesis Status Bar -->
+      <div id="speechBar" class="speech-bar hidden">
+        <div class="speech-info">
+          <svg class="speech-icon pulse" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+          </svg>
+          <span class="speech-label">Reading aloud…</span>
+        </div>
+        <button id="stopSpeechBtn" type="button" class="speech-stop-btn">Stop</button>
+      </div>
+
+      <!-- Autocomplete Floating Slash Menu -->
+      <div id="slashMenu" class="slash-menu hidden">
+        <div id="slashList" class="slash-list"></div>
+      </div>
+
       <!-- Rounded Composer Box with Choreographic Conic Border -->
       <div id="composerBox" class="composer-box">
         <!-- Ultra-thin choreographic conic gradient - midnight with cyan blue hint, no off glow -->
@@ -159,7 +183,7 @@
           <textarea 
             id="promptInput" 
             class="composer-textarea" 
-            placeholder="Ask or automate…" 
+            placeholder="Ask, automate, or type / for commands…" 
             rows="1" 
             maxlength="8000"
           ></textarea>
@@ -180,8 +204,38 @@
       </div>
 
       <!-- Reserved slot for future small subtext below input box -->
-      <div id="composerSubtextSlot" class="composer-subtext-slot"></div>
+      <div id="composerSubtextSlot" class="composer-subtext-slot">
+        <span class="subtext-tip">Type <code>/</code> to trigger all 26 commands across 3 tiers</span>
+      </div>
     </footer>
+
+    <!-- Command Cheat Sheet Modal (/help) -->
+    <div id="helpModal" class="app-modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <span class="modal-title">Slash Command Cheat Sheet (26 Commands)</span>
+          <button id="closeHelpModalBtn" class="modal-close-btn">&times;</button>
+        </div>
+        <div class="modal-search-row">
+          <input type="text" id="helpSearchInput" class="modal-search-input" placeholder="Search commands, syntax, keywords…" />
+        </div>
+        <div id="helpModalList" class="modal-command-list"></div>
+      </div>
+    </div>
+
+    <!-- Security Enclave Audit Modal (/audit) -->
+    <div id="auditModal" class="app-modal hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <span class="modal-title">Security Enclave Data Audit</span>
+          <button id="closeAuditModalBtn" class="modal-close-btn">&times;</button>
+        </div>
+        <div id="auditModalBody" class="modal-audit-body"></div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toastNotification" class="toast-notice hidden"></div>
   </div>
 
   <script src="sidepanel.js"></script>
