@@ -1,0 +1,6 @@
+{
+  "name": "Gemini Sidekick - Chrome Extension",
+  "description": "Production-ready Chrome Side Panel Extension (Manifest V3) powered by Google Gemini streaming API.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
