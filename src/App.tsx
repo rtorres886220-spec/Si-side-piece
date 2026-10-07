@@ -666,7 +666,7 @@ export default function App() {
   const [engineMode, setEngineMode] = useState<"server-live" | "workbench-sim">("server-live");
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("gemini-3.8-flash");
+  const [selectedModel, setSelectedModel] = useState("gemini-3.1-flash-lite");
   const [tabReadState, setTabReadState] = useState<"reading" | "ready" | "off" | "failed">("ready");
   const [tabEnabled, setTabEnabled] = useState(true);
   const [activeSelectionQuote, setActiveSelectionQuote] = useState<string>("");
@@ -2911,7 +2911,8 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                       onChange={(e) => setSelectedModel(e.target.value)}
                       className="w-full bg-white/[0.04] border border-white/[0.06] rounded-lg px-3 py-1.5 text-xs text-[#eceef4] font-mono outline-none"
                     >
-                      <option value="gemini-3.8-flash">gemini-3.8-flash (Recommended)</option>
+                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Constrained & High Availability)</option>
+                      <option value="gemini-3.8-flash">gemini-3.8-flash</option>
                       <option value="gemini-3.7-flash">gemini-3.7-flash</option>
                       <option value="gemini-flash-latest">gemini-flash-latest</option>
                       <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>

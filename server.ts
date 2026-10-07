@@ -3,9 +3,19 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Type, FunctionDeclaration, GenerateContentConfig } from '@google/genai';
+import { GoogleGenAI, Type, FunctionDeclaration, GenerateContentConfig, ThinkingLevel } from '@google/genai';
 import { setGlobalDispatcher, Agent } from 'undici';
-import { GROUNDING_SYSTEM_POLICY, validateAndEnforceGrounding, classifyUserRequestIntent, getEvidenceAwareWindow, filterTargetedInteractiveElements } from './src/groundingEngine.ts';
+import {
+  GROUNDING_SYSTEM_POLICY,
+  validateAndEnforceGrounding,
+  classifyUserRequestIntent,
+  filterTargetedInteractiveElements
+} from './src/groundingEngine.ts';
+import { routeUserRequest } from './src/deterministicRouter.ts';
+import { resolveActionTarget } from './src/actionResolver.ts';
+import { retrieveAdaptiveEvidence } from './src/adaptiveEvidenceRetriever.ts';
+import { globalRateLimitScheduler } from './src/rateLimitScheduler.ts';
+import { globalTelemetry } from './src/instrumentation.ts';
 
 dotenv.config();
 
@@ -35,7 +45,7 @@ async function startServer() {
     res.json({
       status: 'ok',
       hasApiKey: !!process.env.GEMINI_API_KEY,
-      defaultModel: 'gemini-3.8-flash',
+      defaultModel: 'gemini-3.1-flash-lite',
     });
   });
 
@@ -61,7 +71,7 @@ async function startServer() {
         promptText,
         currentQuote,
         currentPage,
-        model = 'gemini-3.8-flash',
+        model = 'gemini-3.1-flash-lite',
         stream = false,
       } = req.body;
 
@@ -81,8 +91,72 @@ async function startServer() {
       });
       const enclaveId = Math.random().toString(36).substring(2, 10);
 
-      // Minimum Sufficient Context Routing
-      const intentResult = classifyUserRequestIntent(promptText);
+      // Deterministic Intent Routing
+      const intentResult = routeUserRequest(promptText);
+
+      // FAST PATH 1: Deterministic Pure Action Resolution (Zero Gemini Call!)
+      const elementsList = currentPage?.interactiveElements || currentPage?.elements || [];
+      if (intentResult.intent === 'pure_action') {
+        if (intentResult.actionTypes.has('scroll') && intentResult.actionTypes.size === 1) {
+          const tPayloadEnd = performance.now();
+          return res.json({
+            success: true,
+            text: null,
+            functionCall: {
+              name: 'scroll_viewport',
+              args: {
+                direction: intentResult.scrollPayload?.direction || 'down',
+                pixels: intentResult.scrollPayload?.pixels || 450,
+                resolvedDeterministically: true,
+              },
+            },
+            usedModel: 'deterministic-action-resolver',
+            timings: {
+              payloadConstructionMs: Math.round((tPayloadEnd - tPayloadStart) * 10) / 10,
+              ttftMs: 0,
+              geminiApiMs: 0,
+              groundingValidationMs: 0,
+              totalServerMs: Math.round((performance.now() - tStart) * 10) / 10,
+            },
+          });
+        }
+
+        if (elementsList.length > 0 && (intentResult.actionTypes.has('click') || intentResult.actionTypes.has('type'))) {
+          const resolution = resolveActionTarget(intentResult.targetTerms, intentResult.actionTypes, elementsList);
+          if (resolution.isUnambiguous && resolution.directTarget) {
+            const tPayloadEnd = performance.now();
+            const actionName = intentResult.actionTypes.has('type') && intentResult.typeTextPayload ? 'type_text' : 'click_element';
+            const actionArgs: any = {
+              x: resolution.directTarget.x,
+              y: resolution.directTarget.y,
+              element_description: resolution.directTarget.label,
+              selector: resolution.directTarget.selector,
+              resolvedDeterministically: true,
+            };
+            if (actionName === 'type_text' && intentResult.typeTextPayload) {
+              actionArgs.text = intentResult.typeTextPayload.text;
+              actionArgs.press_enter = intentResult.typeTextPayload.pressEnter ?? true;
+            }
+
+            return res.json({
+              success: true,
+              text: null,
+              functionCall: {
+                name: actionName,
+                args: actionArgs,
+              },
+              usedModel: 'deterministic-action-resolver',
+              timings: {
+                payloadConstructionMs: Math.round((tPayloadEnd - tPayloadStart) * 10) / 10,
+                ttftMs: 0,
+                geminiApiMs: 0,
+                groundingValidationMs: 0,
+                totalServerMs: Math.round((performance.now() - tStart) * 10) / 10,
+              },
+            });
+          }
+        }
+      }
 
       let systemInstruction = '';
       if (intentResult.intent === 'conversational') {
@@ -108,7 +182,6 @@ ${GROUNDING_SYSTEM_POLICY}`;
       }
 
       // Filter Interactive Elements
-      const elementsList = currentPage?.interactiveElements || currentPage?.elements || [];
       let visibleElements = '';
       if (intentResult.requiresDomElements && elementsList.length > 0) {
         const targetedElements = filterTargetedInteractiveElements(elementsList, intentResult.targetTerms, intentResult.actionTypes);
@@ -146,9 +219,9 @@ ${GROUNDING_SYSTEM_POLICY}`;
         }
       }
 
-      // Evidence-Aware Context Preparation & Deduplication
+      // Adaptive Evidence Context Preparation
       let payload = '';
-      let windowResult: any = null;
+      let adaptiveEvidenceResult: any = null;
 
       if (intentResult.intent === 'conversational') {
         payload = `User command: ${promptText}`;
@@ -160,26 +233,56 @@ ${GROUNDING_SYSTEM_POLICY}`;
         payload += `<<<END_ACTION_CONTEXT_${enclaveId}>>>\n\nUser command: ${promptText}`;
       } else {
         const rawBody = currentPage?.content || currentPage?.bodyText || '';
-        windowResult = getEvidenceAwareWindow(rawBody, promptText, {
+        adaptiveEvidenceResult = retrieveAdaptiveEvidence(rawBody, promptText, {
           title: currentPage?.title,
           author: currentPage?.author,
           date: currentPage?.date,
           selectedText: currentQuote
         });
 
-        if (currentPage && windowResult.windowedContent) {
+        // FAST PATH 2: Deterministic Evidence Absent check
+        if (adaptiveEvidenceResult.insufficientEvidence && !currentQuote && !intentResult.isBroadSummary) {
+          const tPayloadEnd = performance.now();
+          return res.json({
+            success: true,
+            text: "I cannot verify this from the available evidence.",
+            functionCall: {
+              name: 'finish_task',
+              args: {
+                paragraphs: [
+                  {
+                    text: "I cannot verify this from the available evidence.",
+                    citations: [],
+                  },
+                ],
+                unverifiedClaims: [promptText],
+                serverValidated: true,
+              },
+            },
+            usedModel: 'deterministic-evidence-retriever',
+            timings: {
+              payloadConstructionMs: Math.round((tPayloadEnd - tPayloadStart) * 10) / 10,
+              ttftMs: 0,
+              geminiApiMs: 0,
+              groundingValidationMs: 0,
+              totalServerMs: Math.round((performance.now() - tStart) * 10) / 10,
+            },
+          });
+        }
+
+        if (currentPage && adaptiveEvidenceResult.retrievedContent) {
           payload += `<<<UNTRUSTED_CONTENT_${enclaveId} title="${currentPage.title || ''}" url="${currentPage.url || ''}" author="${currentPage.author || ''}" date="${currentPage.date || ''}">>>\n`;
           if (formattedTables) {
             payload += `${formattedTables}\n`;
           }
-          payload += `${windowResult.windowedContent}\n`;
+          payload += `${adaptiveEvidenceResult.retrievedContent}\n`;
           if (visibleElements) {
             payload += `INTERACTIVE ELEMENTS:\n${visibleElements}\n`;
           }
           payload += `<<<END_UNTRUSTED_CONTENT_${enclaveId}>>>\n\n`;
         }
         if (currentQuote) {
-          if (windowResult.selectedTextDeduplicated) {
+          if (adaptiveEvidenceResult.selectedTextDeduplicated) {
             payload += `[Active User Selection: "${currentQuote.slice(0, 100)}${currentQuote.length > 100 ? '…' : ''}"]\n\n`;
           } else {
             payload += `Selection: "${currentQuote}"\n\n`;
@@ -345,20 +448,19 @@ ${GROUNDING_SYSTEM_POLICY}`;
 
       const generateConfig: GenerateContentConfig = {
         systemInstruction,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
       };
       if (activeTools && activeTools.length > 0) {
         generateConfig.tools = activeTools;
       }
 
-      // Sanitize model input: never use gemini-3.1-flash-lite; default to gemini-3.8-flash
-      let targetModel = model || 'gemini-3.8-flash';
-      if (targetModel === 'gemini-3.1-flash-lite') {
-        targetModel = 'gemini-3.8-flash';
-      }
+      // Model cascade: prioritize gemini-3.1-flash-lite
+      let targetModel = model || 'gemini-3.1-flash-lite';
 
       const cascade = [
         targetModel,
-        targetModel !== 'gemini-3.7-flash' ? 'gemini-3.7-flash' : 'gemini-flash-latest',
+        targetModel !== 'gemini-3.1-flash-lite' ? 'gemini-3.1-flash-lite' : 'gemini-3.8-flash',
+        'gemini-3.8-flash',
         'gemini-flash-latest',
       ].filter((m, i, a) => a.indexOf(m) === i);
 

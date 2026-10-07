@@ -228,6 +228,12 @@ When completing an informational task, call "finish_task" with structured paragr
 // Backwards-compatible alias for existing imports
 export const GROUNDING_SYSTEM_POLICY = CANONICAL_GROUNDING_POLICY;
 
+export { routeUserRequest } from "./deterministicRouter.ts";
+export { resolveActionTarget, validateModelActionSelection, isElementRestricted } from "./actionResolver.ts";
+export { retrieveAdaptiveEvidence } from "./adaptiveEvidenceRetriever.ts";
+export { globalRateLimitScheduler, RateLimitScheduler } from "./rateLimitScheduler.ts";
+export { globalTelemetry, TelemetryCollector } from "./instrumentation.ts";
+
 // ============================================================================
 // 3. REQUEST INTENT CLASSIFIER & MINIMUM SUFFICIENT CONTEXT PIPELINE
 // ============================================================================

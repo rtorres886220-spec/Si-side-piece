@@ -9,7 +9,7 @@ const STORAGE_KEY_MODEL = "gemini_sidekick_model";
 const STORAGE_KEY_SESSIONS = "gemini_sidekick_sessions";
 
 // Configuration
-const DEFAULT_MODEL = "gemini-3.8-flash";
+const DEFAULT_MODEL = "gemini-3.1-flash-lite";
 const MAX_AGENT_STEPS = 5;
 
 // Domain Deny-List (Automation is strictly prohibited on sensitive platforms)
@@ -170,7 +170,7 @@ async function init() {
 
   state.apiKey = (saved[STORAGE_KEY_API_KEY] || "").replace(/['"\s]/g, "").trim();
   let loadedModel = saved[STORAGE_KEY_MODEL] || DEFAULT_MODEL;
-  if (loadedModel === "gemini-1.5-flash" || loadedModel === "gemini-3.1-flash-lite" || !loadedModel) {
+  if (loadedModel === "gemini-1.5-flash" || loadedModel === "gemini-3.8-flash" || !loadedModel) {
     loadedModel = DEFAULT_MODEL;
     await storage.set({ [STORAGE_KEY_MODEL]: DEFAULT_MODEL });
   }
@@ -225,8 +225,8 @@ async function verifyApiKey(rawKey, preferredModel = state.model) {
     return { valid: false, error: "Please enter your Gemini API key." };
   }
 
-  const baseModel = (preferredModel === "gemini-3.1-flash-lite" || !preferredModel) ? "gemini-3.8-flash" : preferredModel;
-  const modelsToTry = [baseModel, "gemini-3.7-flash", "gemini-flash-latest"].filter((m, i, a) => a.indexOf(m) === i);
+  const baseModel = preferredModel || DEFAULT_MODEL;
+  const modelsToTry = [baseModel, "gemini-3.1-flash-lite", "gemini-3.8-flash"].filter((m, i, a) => a.indexOf(m) === i);
   
   let keyIsExplicitlyInvalid = false;
   let lastDetailedError = "";
@@ -285,7 +285,7 @@ async function verifyApiKey(rawKey, preferredModel = state.model) {
   }
 
   // All tested models returned 503/429 (traffic spike on free tier): Key was authenticated by Google
-  return { valid: true, model: "gemini-3.7-flash", highDemand: true };
+  return { valid: true, model: preferredModel || "gemini-3.1-flash-lite", highDemand: true };
 }
 
 /**
@@ -1022,8 +1022,144 @@ const GEMINI_TOOLS = [
 ];
 
 // ============================================================================
-// MINIMUM SUFFICIENT CONTEXT PIPELINE (Zero-Waste Client Routing & Windowing)
+// DETERMINISTIC ROUTING, RESOLUTION & ADAPTIVE EVIDENCE RETRIEVAL PIPELINE
 // ============================================================================
+
+const PAYMENT_KEYWORDS = [
+  "stripe", "paypal", "braintree", "credit-card", "cardnumber",
+  "cvv", "cvc", "exp-date", "cc-number", "payment-widget", "checkout-card"
+];
+
+function isElementRestricted(el) {
+  const combined = `${el.label || ""} ${el.role || ""} ${el.selector || ""}`.toLowerCase();
+  return PAYMENT_KEYWORDS.some((kw) => combined.includes(kw));
+}
+
+function computeSimilarity(label, term) {
+  const l = (label || "").toLowerCase().trim();
+  const t = (term || "").toLowerCase().trim();
+  if (!l || !t) return 0;
+  if (l === t) return 1.0;
+  const wordRegex = new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+  if (wordRegex.test(l)) return 0.95;
+  if (l.includes(t)) {
+    const ratio = t.length / l.length;
+    return Math.max(0.7, Math.min(0.9, 0.7 + ratio * 0.2));
+  }
+  if (t.includes(l) && l.length >= 3) {
+    const ratio = l.length / t.length;
+    return Math.max(0.65, Math.min(0.85, 0.65 + ratio * 0.2));
+  }
+  return 0;
+}
+
+function resolveActionTarget(targetTerms, actionTypes, elements, viewportBounds = { width: 1920, height: 1080 }) {
+  if (actionTypes.has("scroll") && actionTypes.size === 1) {
+    return { isUnambiguous: true, isAmbiguous: false, hasTarget: false, directTarget: null, candidates: [] };
+  }
+  if (!elements || elements.length === 0) {
+    return { isUnambiguous: false, isAmbiguous: false, hasTarget: false, directTarget: null, candidates: [] };
+  }
+  const safeElements = elements.filter((el) => {
+    if (isElementRestricted(el)) return false;
+    if (el.x < 0 || el.y < 0 || el.x > viewportBounds.width || el.y > viewportBounds.height) return false;
+    return true;
+  });
+  if (safeElements.length === 0) {
+    return { isUnambiguous: false, isAmbiguous: false, hasTarget: false, directTarget: null, candidates: [] };
+  }
+  if (!targetTerms || targetTerms.length === 0) {
+    return { isUnambiguous: false, isAmbiguous: true, hasTarget: true, directTarget: null, candidates: safeElements.slice(0, 5) };
+  }
+  const scoredCandidates = [];
+  for (const el of safeElements) {
+    let maxScore = 0;
+    for (const rawTerm of targetTerms) {
+      const term = (rawTerm || "").toLowerCase().trim();
+      if (!term) continue;
+      const score = computeSimilarity(el.label, term);
+      if (score > maxScore) maxScore = score;
+    }
+    if (actionTypes.has("type") && ((el.role || "").includes("input") || (el.role || "").includes("text"))) maxScore += 0.05;
+    if (actionTypes.has("click") && ((el.role || "").includes("button") || (el.role || "").includes("link"))) maxScore += 0.02;
+    if (maxScore > 0.35) {
+      scoredCandidates.push({ element: { ...el, matchScore: Math.round(maxScore * 100) / 100 }, score: maxScore });
+    }
+  }
+  scoredCandidates.sort((a, b) => b.score - a.score);
+  if (scoredCandidates.length === 0) {
+    return { isUnambiguous: false, isAmbiguous: true, hasTarget: true, directTarget: null, candidates: safeElements.slice(0, 5) };
+  }
+  const best = scoredCandidates[0];
+  const secondBest = scoredCandidates[1];
+  const isClearSingle = scoredCandidates.length === 1 && best.score >= 0.65;
+  const isDominantWinner = best.score >= 0.85 && (!secondBest || best.score - secondBest.score >= 0.25);
+  if (isClearSingle || isDominantWinner) {
+    return { isUnambiguous: true, isAmbiguous: false, hasTarget: true, directTarget: best.element, candidates: [best.element] };
+  }
+  return { isUnambiguous: false, isAmbiguous: true, hasTarget: true, directTarget: null, candidates: scoredCandidates.slice(0, 5).map(sc => sc.element) };
+}
+
+function retrieveAdaptiveEvidence(rawBodyText, promptText, options) {
+  const rawBody = (rawBodyText || "").trim();
+  const selectedText = (options?.selectedText || "").trim();
+  if (!rawBody) {
+    return { retrievedContent: "", retainedRegionsCount: 0, totalSectionsCount: 0, isFullDocument: true, isTruncated: false, insufficientEvidence: true, selectedTextDeduplicated: false };
+  }
+  if (rawBody.length <= 8000) {
+    const isDup = selectedText.length > 0 && rawBody.includes(selectedText);
+    return { retrievedContent: rawBody, retainedRegionsCount: 1, totalSectionsCount: 1, isFullDocument: true, isTruncated: false, insufficientEvidence: false, selectedTextDeduplicated: isDup };
+  }
+  const sectionRegex = /(?=^#{1,6}\s+)/gm;
+  const rawSections = rawBody.split(sectionRegex);
+  if (rawSections.length <= 2) {
+    const isDup = selectedText.length > 0 && rawBody.includes(selectedText);
+    return { retrievedContent: rawBody, retainedRegionsCount: rawSections.length, totalSectionsCount: rawSections.length, isFullDocument: true, isTruncated: false, insufficientEvidence: false, selectedTextDeduplicated: isDup };
+  }
+  const parsedSections = [];
+  const headingStack = [];
+  for (let i = 0; i < rawSections.length; i++) {
+    const secText = rawSections[i].trim();
+    if (!secText) continue;
+    const headingMatch = secText.match(/^(#{1,6})\s+(.+)$/m);
+    const level = headingMatch ? headingMatch[1].length : 1;
+    const heading = headingMatch ? headingMatch[2].trim() : (i === 0 ? "Document Header" : `Section ${i}`);
+    while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) headingStack.pop();
+    headingStack.push({ level, heading });
+    parsedSections.push({ index: i, level, heading, text: secText, lowerText: secText.toLowerCase(), hasTable: secText.includes("|") || secText.includes("[Table"), score: 0 });
+  }
+  const stopWords = new Set(["what", "when", "where", "which", "who", "whom", "whose", "why", "how", "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "up", "about", "into", "over", "after", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "can", "could", "should", "would", "may", "might", "this", "that", "these", "those", "page", "document", "tell", "show", "find"]);
+  const queryTokens = (promptText.toLowerCase().match(/[a-z0-9_-]{2,}/g) || []).filter(w => !stopWords.has(w));
+  for (const sec of parsedSections) {
+    let score = 0;
+    for (const tok of queryTokens) {
+      if (sec.heading.toLowerCase().includes(tok)) score += 3.0;
+      if (sec.lowerText.includes(tok)) score += 1.0;
+    }
+    sec.score = score;
+  }
+  const scoredSections = parsedSections.filter(s => s.score > 0).sort((a, b) => b.score - a.score);
+  const isBroad = /(?:summarize|overview|entire|all|table\s+of\s+contents|outline)/i.test(promptText);
+  if (scoredSections.length === 0 && !isBroad) {
+    return { retrievedContent: rawSections[0] || "", retainedRegionsCount: 1, totalSectionsCount: rawSections.length, isFullDocument: false, isTruncated: true, insufficientEvidence: true, selectedTextDeduplicated: false };
+  }
+  const selectedIndices = new Set([0]);
+  if (isBroad) {
+    for (let k = 0; k < Math.min(parsedSections.length, 5); k++) selectedIndices.add(k);
+  } else {
+    for (let k = 0; k < Math.min(scoredSections.length, 4); k++) {
+      selectedIndices.add(scoredSections[k].index);
+      if (scoredSections[k].text.length < 600 || scoredSections[k].hasTable) {
+        if (scoredSections[k].index > 0) selectedIndices.add(scoredSections[k].index - 1);
+        if (scoredSections[k].index < rawSections.length - 1) selectedIndices.add(scoredSections[k].index + 1);
+      }
+    }
+  }
+  const orderedIndices = Array.from(selectedIndices).sort((a, b) => a - b);
+  const retrievedContent = orderedIndices.map(i => rawSections[i]).join("\n\n");
+  const isDeduplicated = selectedText.length > 0 && retrievedContent.includes(selectedText);
+  return { retrievedContent, retainedRegionsCount: orderedIndices.length, totalSectionsCount: rawSections.length, isFullDocument: orderedIndices.length >= rawSections.length, isTruncated: orderedIndices.length < rawSections.length, insufficientEvidence: false, selectedTextDeduplicated: isDeduplicated };
+}
 
 /**
  * Classifies user prompt into Minimum Sufficient Context categories:
@@ -1425,11 +1561,12 @@ function recordTokenDiagnostics(metrics) {
  */
 async function callGeminiWithResilience(requestBody, preferredModel, apiKey, signal) {
   const cleanKey = (apiKey || "").replace(/['"\s]/g, "").trim();
-  // Ordered fallback cascade: if latest gemini-3.8-flash experiences high demand, move down to gemini-3.7-flash
-  const baseModel = (preferredModel === "gemini-3.1-flash-lite" || !preferredModel) ? "gemini-3.8-flash" : preferredModel;
+  // Ordered fallback cascade: if requested model experiences high demand, seamlessly fall back to high availability
+  const baseModel = preferredModel || DEFAULT_MODEL;
   const fallbackCascade = [
     baseModel,
-    baseModel !== "gemini-3.7-flash" ? "gemini-3.7-flash" : "gemini-flash-latest",
+    baseModel !== "gemini-3.1-flash-lite" ? "gemini-3.1-flash-lite" : "gemini-3.8-flash",
+    "gemini-3.8-flash",
     "gemini-flash-latest"
   ].filter((m, i, a) => a.indexOf(m) === i);
 
@@ -2086,6 +2223,114 @@ async function submitPrompt(promptText) {
 
   // 2. Classify User Request Intent (Minimum Sufficient Context routing)
   const intentResult = classifyUserRequestIntent(promptText);
+
+  // FAST PATH A: Pure Social / Conversational Direct Response (0 Gemini Call!)
+  if (intentResult.intent === "conversational" && intentResult.hasGreeting && !intentResult.hasInformationQuery) {
+    const isWho = /who\s+are\s+you|what\s+are\s+you/i.test(promptText);
+    const greetingMsg = isWho
+      ? "I am Sidekick, your browser companion powered by Gemini Flash-Lite. I can inspect pages, find citations, extract tables, and click or fill controls on this active tab."
+      : "Hello! I am Sidekick, your browser companion. Ask me a question about this page, or ask me to click, search, or summarize.";
+    renderAssistantPlainMessage(greetingMsg);
+    state.conversation.push({ role: "model", text: greetingMsg });
+    saveSession();
+    setBusyState(false);
+    return;
+  }
+
+  // FAST PATH B: Deterministic Pure Action Execution (0 Gemini Call!)
+  if (intentResult.intent === "pure_action") {
+    // Pure Scroll
+    if (intentResult.actionTypes.has("scroll") && intentResult.actionTypes.size === 1) {
+      const scrollMatch = promptText.toLowerCase().match(/(?:down|up|top|bottom)/i);
+      const dir = scrollMatch ? scrollMatch[0].toLowerCase() : "down";
+      try {
+        await executeJITAction("scroll_viewport", { direction: dir, pixels: 450 });
+        renderAgentStepBadge(`Step 1: Scrolled page ${dir} [Deterministic Direct Action]`, true);
+        renderAssistantPlainMessage(`Viewport smoothly scrolled ${dir} via Chrome DevTools Protocol.`);
+        state.conversation.push({ role: "model", text: `Viewport scrolled ${dir}.` });
+        saveSession();
+        setBusyState(false);
+        return;
+      } catch (err) {
+        console.warn("Direct scroll failed:", err);
+      }
+    }
+
+    // Pure Click or Type with Interactive Elements
+    if (state.pageContext.interactiveElements && state.pageContext.interactiveElements.length > 0) {
+      const resolution = resolveActionTarget(
+        intentResult.targetTerms,
+        intentResult.actionTypes,
+        state.pageContext.interactiveElements
+      );
+      if (resolution.isUnambiguous && resolution.directTarget) {
+        const target = resolution.directTarget;
+        const isClick = intentResult.actionTypes.has("click");
+        const actionTool = isClick ? "click_element" : "type_text";
+        const actionArgs = {
+          x: target.x,
+          y: target.y,
+          element_description: target.label,
+          selector: target.selector,
+          resolvedDeterministically: true
+        };
+
+        if (!isClick) {
+          const typeMatch = promptText.match(/(?:type|enter|fill)\s+["']?([^"']+)["']?/i);
+          actionArgs.text = typeMatch ? typeMatch[1].trim() : "test";
+          actionArgs.press_enter = true;
+        }
+
+        const isHighRisk = checkHighRiskAction(actionTool, actionArgs);
+        if (isHighRisk) {
+          const approved = await requestSafetyApproval(actionTool, actionArgs, 1);
+          if (!approved) {
+            renderAgentStepBadge(`Action cancelled by user: ${target.label}`, false);
+            renderNotice("Task stopped by user.");
+            setBusyState(false);
+            return;
+          }
+        }
+
+        try {
+          updateTurnAction(`Executing ${formatActionSummary(actionTool, actionArgs)}…`, "Deterministic direct action", 1);
+          await executeJITAction(actionTool, actionArgs);
+          renderAgentStepBadge(`Step 1: ${formatActionSummary(actionTool, actionArgs)} [Deterministic Direct Action]`, true);
+          const feedbackMsg = isClick
+            ? `Successfully clicked "${target.label}". Hardware event dispatched via Chrome DevTools Protocol.`
+            : `Input updated: typed "${actionArgs.text}" into "${target.label}". Keystrokes dispatched via Chrome DevTools Protocol.`;
+          renderAssistantPlainMessage(feedbackMsg);
+          state.conversation.push({ role: "model", text: feedbackMsg });
+          await delay(60);
+          await extractContext();
+          saveSession();
+          setBusyState(false);
+          return;
+        } catch (err) {
+          console.warn("Direct action failed, falling back to model loop:", err);
+        }
+      }
+    }
+  }
+
+  // FAST PATH C: Deterministic Insufficient Evidence Refusal (0 Hallucination / 0 Gemini Call!)
+  if (intentResult.intent === "informational" && state.pageContext.bodyText) {
+    const adaptiveEv = retrieveAdaptiveEvidence(state.pageContext.bodyText, promptText, {
+      title: state.pageContext.title,
+      selectedText: state.pageContext.selectedText
+    });
+    if (adaptiveEv.insufficientEvidence && !state.pageContext.selectedText && !intentResult.isBroadSummary) {
+      const refusalMsg = {
+        paragraphs: [{ text: "I cannot verify this from the available evidence.", citations: [] }],
+        unverifiedClaims: [promptText]
+      };
+      await renderAssistantResponse(refusalMsg);
+      state.conversation.push({ role: "model", text: refusalMsg });
+      saveSession();
+      setBusyState(false);
+      return;
+    }
+  }
 
   if (intentResult.intent === "conversational") {
     startTurnIndicator("Thinking…", "Sidekick direct conversational response", 1);
@@ -3231,7 +3476,7 @@ function renderErrorCard(error, promptText) {
       </p>
       <div class="error-recovery-actions">
         <button type="button" class="error-action-btn primary" id="errSwitchModelBtn">
-          Switch to Gemini 3.7 Flash &amp; Retry ↗
+          Switch to High-Availability (3.1 Flash-Lite) &amp; Retry ↗
         </button>
         <button type="button" class="error-action-btn" id="errRetryBtn">
           Retry Current Model ↻
@@ -3240,11 +3485,11 @@ function renderErrorCard(error, promptText) {
     `;
     card.querySelector("#errSwitchModelBtn")?.addEventListener("click", async () => {
       card.remove();
-      state.model = "gemini-3.7-flash";
-      await storage.set({ [STORAGE_KEY_MODEL]: "gemini-3.7-flash" });
-      updateModelToken("gemini-3.7-flash");
-      if (elements.modelSelect) elements.modelSelect.value = "gemini-3.7-flash";
-      showToast("Switched to gemini-3.7-flash");
+      state.model = "gemini-3.1-flash-lite";
+      await storage.set({ [STORAGE_KEY_MODEL]: "gemini-3.1-flash-lite" });
+      updateModelToken("gemini-3.1-flash-lite");
+      if (elements.modelSelect) elements.modelSelect.value = "gemini-3.1-flash-lite";
+      showToast("Switched to gemini-3.1-flash-lite");
       submitPrompt(promptText);
     });
     card.querySelector("#errRetryBtn")?.addEventListener("click", () => {
