@@ -229,8 +229,30 @@ When completing an informational task, call "finish_task" with structured paragr
 export const GROUNDING_SYSTEM_POLICY = CANONICAL_GROUNDING_POLICY;
 
 // ============================================================================
-// 3. REQUEST INTENT CLASSIFIER
+// 3. REQUEST INTENT CLASSIFIER & MINIMUM SUFFICIENT CONTEXT PIPELINE
 // ============================================================================
+
+export interface UserIntentClassification {
+  intent: "conversational" | "pure_action" | "informational" | "hybrid";
+  actionTypes: Set<"click" | "type" | "scroll" | "navigate" | "upload">;
+  targetTerms: string[];
+  isBroadSummary: boolean;
+  requiresDomElements: boolean;
+  requiresPageEvidence: boolean;
+  hasGreeting: boolean;
+  hasAction: boolean;
+  hasInformationQuery: boolean;
+}
+
+export interface EvidenceWindowResult {
+  windowedContent: string;
+  isTruncated: boolean;
+  isFullDocument: boolean;
+  retainedSectionsCount: number;
+  totalSectionsCount: number;
+  selectedTextDeduplicated: boolean;
+  formattedTables?: string;
+}
 
 export function classifyRequestIntent(
   prompt: string
@@ -267,6 +289,428 @@ export function classifyRequestIntent(
   // Factual Q&A (default for informational browser assistant)
   return "factual";
 }
+
+/**
+ * Robust outcome-oriented classifier for Minimum Sufficient Context routing.
+ * Distinguishes conversational, pure action, informational, and hybrid queries.
+ * Never relies on isolated keywords alone; analyzes surrounding grammar and intent.
+ */
+export function classifyUserRequestIntent(prompt: string): UserIntentClassification {
+  const p = (prompt || "").trim();
+  const pLower = p.toLowerCase();
+
+  // 1. Detect Greeting / Social Conversational components
+  const GREETING_PATTERNS = [
+    /^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|howdy)(?:[\s,!.?]|$)/i,
+    /(?:how\s+are\s+you(?:\s+doing)?|how's\s+it\s+going|what's\s+up)(?:[\s,!.?]|$)/i,
+    /^(?:thank\s+you|thanks(?:\s+a\s+lot)?|bye|goodbye|see\s+ya)(?:[\s,!.?]|$)/i,
+    /^(?:who\s+are\s+you|what\s+are\s+you|what\s+is\s+your\s+name|what\s+can\s+you\s+do|explain\s+yourself|help\s+me\s+understand\s+your\s+purpose|how\s+do\s+you\s+work)(?:[\s,!.?]|$)/i
+  ];
+  const hasGreeting = GREETING_PATTERNS.some((pat) => pat.test(pLower));
+
+  // 2. Detect Action Intent (Browser Automation Commands)
+  const actionTypes = new Set<"click" | "type" | "scroll" | "navigate" | "upload">();
+  const targetTerms: string[] = [];
+
+  // Exclude cases where user is merely asking ABOUT an action/button
+  const isAskingAboutAction = /(?:what\s+(?:does|is)\s+(?:the\s+)?(?:[a-z0-9_\-\s]{1,30})?(?:button|link|control)\s+(?:do|mean|for)|how\s+(?:do\s+I|to)\s+(?:click|scroll|type)|explain\s+(?:what\s+)?(?:the\s+)?(?:button|link)\s+does)/i.test(
+    pLower
+  );
+
+  // Scroll actions
+  if (/(?:^|\b)scroll(?:\s+(?:down|up|to\s+top|to\s+bottom|to\s+[a-z0-9_\-\s]{1,30}|smoothly|by|\d+|half))?(?:[\s,!.?]|$)/i.test(pLower)) {
+    actionTypes.add("scroll");
+  }
+
+  // Click actions: imperative commands targeting an element
+  if (!isAskingAboutAction) {
+    const clickMatch = pLower.match(
+      /(?:\b)(?:click|press|tap)(?:\s+on)?(?:\s+the)?\s+([a-z0-9_\-\"\'\s]{1,40}?)(?=(?:\s+and\b|\s+then\b|[.,!?]|$))/i
+    );
+    if (clickMatch) {
+      actionTypes.add("click");
+      const target = clickMatch[1]
+        .replace(/["']/g, "")
+        .replace(/\b(?:button|link|item|tab)\b/g, "")
+        .trim();
+      if (target) targetTerms.push(target);
+    }
+  }
+
+  // Type / Fill actions
+  if (!isAskingAboutAction) {
+    const typeMatch = pLower.match(
+      /(?:\b)(?:type|enter|fill|input)\s+(?:["'](.*?)["']\s+(?:in|into)|into\s+(?:the\s+)?([a-z0-9_\-\s]{1,30}))/i
+    );
+    if (typeMatch) {
+      actionTypes.add("type");
+      if (typeMatch[1]) targetTerms.push(typeMatch[1].trim());
+      if (typeMatch[2]) targetTerms.push(typeMatch[2].trim());
+    } else if (/(?:\b)(?:type|enter|fill|input)\b/i.test(pLower) && /(?:search|input|field|form|box)/i.test(pLower)) {
+      actionTypes.add("type");
+    }
+  }
+
+  // Navigate actions
+  if (/(?:\b)(?:navigate\s+to|go\s+to\s+https?:\/\/|open\s+https?:\/\/)/i.test(pLower)) {
+    actionTypes.add("navigate");
+  }
+
+  // Upload actions
+  if (/(?:\b)(?:upload\s+file|attach\s+file)\b/i.test(pLower)) {
+    actionTypes.add("upload");
+  }
+
+  const hasAction = actionTypes.size > 0;
+
+  // 3. Detect Informational / Reading / Research Questions
+  const isBroadSummary = /(?:^|\b)(?:summarize(?:\s+(?:the\s+)?entire\s+page|\s+this\s+page|\s+all)?|overview|entire\s+page|whole\s+document|table\s+of\s+contents|brief\s+summary)(?:[\s,!.?]|$)/i.test(
+    pLower
+  );
+
+  const INFO_PATTERNS = [
+    /\b(?:who|what|when|where|why|which|whose)\b/i,
+    /\b(?:how\s+much|how\s+many|how\s+fast|how\s+long|how\s+often)\b/i,
+    /\b(?:is\s+there|are\s+there|does\s+this|did\s+|was\s+|were\s+|can\s+you\s+find|tell\s+me\s+about)\b/i,
+    /\b(?:summarize|summary|overview|explain|outline|describe|extract|quote|define|table|pricing|price|cost|score|bleu|author|date)\b/i,
+    /\b(?:compare|difference|findings|results|methodology|specifications|specs|terms)\b/i,
+  ];
+
+  let hasInformationQuery = isBroadSummary || INFO_PATTERNS.some((pat) => pat.test(pLower));
+
+  // If the prompt is purely a greeting like "hello", "how are you?", "who are you", strip the greeting to see if any query remains
+  if (hasGreeting) {
+    const strippedGreeting = pLower
+      .replace(/^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|howdy)[,\s.!]*/i, "")
+      .replace(/^(?:how\s+are\s+you(?:\s+doing)?|how's\s+it\s+going|what's\s+up)[,\s.!]*/i, "")
+      .replace(/^(?:thank\s+you|thanks(?:\s+a\s+lot)?|bye|goodbye|see\s+ya)[,\s.!]*/i, "")
+      .replace(/^(?:who\s+are\s+you|what\s+are\s+you|what\s+is\s+your\s+name|what\s+can\s+you\s+do|explain\s+yourself)[,\s.!]*/i, "")
+      .trim();
+
+    if (strippedGreeting.length === 0) {
+      hasInformationQuery = false;
+    }
+  }
+
+  // 4. Synthesize Intent
+  let intent: "conversational" | "pure_action" | "informational" | "hybrid" = "informational";
+  if (hasAction && hasInformationQuery) {
+    intent = "hybrid";
+  } else if (hasAction) {
+    intent = hasGreeting ? "hybrid" : "pure_action";
+  } else if (hasInformationQuery) {
+    intent = hasGreeting ? "hybrid" : "informational";
+  } else if (hasGreeting) {
+    intent = "conversational";
+  } else {
+    intent = "informational";
+  }
+
+  return {
+    intent,
+    actionTypes,
+    targetTerms,
+    isBroadSummary,
+    requiresDomElements: intent === "pure_action" || intent === "hybrid",
+    requiresPageEvidence: intent === "informational" || intent === "hybrid",
+    hasGreeting,
+    hasAction,
+    hasInformationQuery,
+  };
+}
+
+/**
+ * Structure-Preserving Evidence Context Windowing.
+ * Preserves document title, metadata, hierarchy, parent/child headings, tables, and relationships.
+ * Automatically progressively widens context if relationships span headings or conditions.
+ */
+export function getEvidenceAwareWindow(
+  rawBodyText: string,
+  promptText: string,
+  options?: {
+    title?: string;
+    url?: string;
+    author?: string;
+    date?: string;
+    selectedText?: string;
+    tables?: any[];
+  }
+): EvidenceWindowResult {
+  const rawBody = (rawBodyText || "").trim();
+  const title = options?.title || "";
+  const author = options?.author || "";
+  const date = options?.date || "";
+  const selectedText = (options?.selectedText || "").trim();
+
+  // If document is empty, return empty
+  if (!rawBody) {
+    return {
+      windowedContent: "",
+      isTruncated: false,
+      isFullDocument: true,
+      retainedSectionsCount: 0,
+      totalSectionsCount: 0,
+      selectedTextDeduplicated: false,
+    };
+  }
+
+  // Check if query is broad or document is small (<= 10,000 characters)
+  const classification = classifyUserRequestIntent(promptText);
+  if (classification.isBroadSummary || rawBody.length <= 10000) {
+    const isDup = selectedText.length > 0 && rawBody.includes(selectedText);
+    return {
+      windowedContent: rawBody,
+      isTruncated: false,
+      isFullDocument: true,
+      retainedSectionsCount: 1,
+      totalSectionsCount: 1,
+      selectedTextDeduplicated: isDup,
+    };
+  }
+
+  // Structure-preserving section decomposition
+  // Splits on Markdown or HTML headings while preserving headings and hierarchy
+  const sectionRegex = /(?=^#{1,6}\s+)/gm;
+  const rawSections = rawBody.split(sectionRegex);
+
+  if (rawSections.length <= 2) {
+    const isDup = selectedText.length > 0 && rawBody.includes(selectedText);
+    return {
+      windowedContent: rawBody,
+      isTruncated: false,
+      isFullDocument: true,
+      retainedSectionsCount: rawSections.length,
+      totalSectionsCount: rawSections.length,
+      selectedTextDeduplicated: isDup,
+    };
+  }
+
+  // Parse structured sections with hierarchy
+  interface ParsedSection {
+    index: number;
+    level: number;
+    heading: string;
+    parentIndex: number;
+    text: string;
+    lowerText: string;
+    hasTable: boolean;
+  }
+
+  const parsedSections: ParsedSection[] = [];
+  const headingStack: { level: number; index: number }[] = [];
+
+  for (let i = 0; i < rawSections.length; i++) {
+    const secText = rawSections[i].trim();
+    if (!secText) continue;
+
+    const headingMatch = secText.match(/^(#{1,6})\s+(.+)$/m);
+    const level = headingMatch ? headingMatch[1].length : 1;
+    const heading = headingMatch ? headingMatch[2].trim() : (i === 0 ? "Document Header" : "Section");
+
+    while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
+      headingStack.pop();
+    }
+    const parentIndex = headingStack.length > 0 ? headingStack[headingStack.length - 1].index : (i > 0 ? 0 : -1);
+    headingStack.push({ level, index: i });
+
+    parsedSections.push({
+      index: i,
+      level,
+      heading,
+      parentIndex,
+      text: secText,
+      lowerText: secText.toLowerCase(),
+      hasTable: secText.includes("|") || secText.includes("[Table"),
+    });
+  }
+
+  // Extract meaningful query tokens (ignoring stop words)
+  const stopWords = new Set([
+    "what", "when", "where", "which", "who", "whom", "whose", "why", "how",
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "up", "about", "into", "over", "after",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "can", "could", "should", "would", "may", "might",
+    "this", "that", "these", "those", "page", "document", "tell", "show", "find"
+  ]);
+
+  const pWords = (promptText.toLowerCase().match(/[a-z0-9_-]{2,}/g) || []).filter(
+    (w) => !stopWords.has(w)
+  );
+
+  // Score sections based on term match and query specificity
+  const selectedIndices = new Set<number>();
+  selectedIndices.add(0); // Always retain document title, abstract, and header
+
+  parsedSections.forEach((sec) => {
+    let matchCount = 0;
+    for (const word of pWords) {
+      if (sec.lowerText.includes(word)) {
+        matchCount++;
+      }
+    }
+    if (matchCount > 0) {
+      selectedIndices.add(sec.index);
+      // Preserve parent heading / condition section to prevent context isolation loss
+      if (sec.parentIndex >= 0) {
+        selectedIndices.add(sec.parentIndex);
+      }
+      // Progressive widening: preserve immediate context if section is brief or structured table
+      if (sec.text.length < 800 || sec.hasTable) {
+        if (sec.index > 0) selectedIndices.add(sec.index - 1);
+        if (sec.index < rawSections.length - 1) selectedIndices.add(sec.index + 1);
+      }
+    }
+  });
+
+  // If no sections matched or only header was selected, widen to progressive window
+  if (selectedIndices.size <= 1) {
+    for (let k = 0; k < Math.min(parsedSections.length, 4); k++) {
+      selectedIndices.add(k);
+    }
+  }
+
+  // Progressive widening safety check:
+  // Ensure the evidence window contains at least 3,000 characters if document is large
+  const orderedIndices = Array.from(selectedIndices).sort((a, b) => a - b);
+  let assembled = orderedIndices.map((i) => rawSections[i]).join("\n\n");
+
+  if (assembled.length < 3000 && rawSections.length > orderedIndices.length) {
+    for (let k = 0; k < rawSections.length; k++) {
+      if (!selectedIndices.has(k)) {
+        selectedIndices.add(k);
+        orderedIndices.push(k);
+        orderedIndices.sort((a, b) => a - b);
+        assembled = orderedIndices.map((i) => rawSections[i]).join("\n\n");
+        if (assembled.length >= 4000) break;
+      }
+    }
+  }
+
+  const isDeduplicated = selectedText.length > 0 && assembled.includes(selectedText);
+
+  return {
+    windowedContent: assembled,
+    isTruncated: orderedIndices.length < rawSections.length,
+    isFullDocument: orderedIndices.length >= rawSections.length,
+    retainedSectionsCount: orderedIndices.length,
+    totalSectionsCount: rawSections.length,
+    selectedTextDeduplicated: isDeduplicated,
+  };
+}
+
+/**
+ * Filter interactive elements list to minimum sufficient targets for the action.
+ * Omits entire interactive list for conversational and informational queries.
+ */
+export function filterTargetedInteractiveElements(
+  elements: any[],
+  targetTerms: string[],
+  actionTypes: Set<string>
+): any[] {
+  if (!elements || elements.length === 0) return [];
+  if (actionTypes.size === 0) return [];
+
+  // If action is pure scroll, no element is targeted
+  if (actionTypes.has("scroll") && actionTypes.size === 1) {
+    return [];
+  }
+
+  if (targetTerms.length === 0) {
+    // If action target is unspecified (e.g. "click something"), send first 15 viewport elements safely
+    return elements.slice(0, 15);
+  }
+
+  const candidates: any[] = [];
+  const candidateIndices = new Set<number>();
+
+  elements.forEach((el, idx) => {
+    const label = (el.label || "").toLowerCase();
+    const role = (el.role || "").toLowerCase();
+    const selector = (el.selector || "").toLowerCase();
+
+    const matches = targetTerms.some(
+      (term) => label.includes(term.toLowerCase()) || role.includes(term.toLowerCase()) || selector.includes(term.toLowerCase())
+    );
+
+    if (matches) {
+      candidateIndices.add(idx);
+      // Keep adjacent interactive controls to permit disambiguation of duplicate buttons
+      if (idx > 0) candidateIndices.add(idx - 1);
+      if (idx < elements.length - 1) candidateIndices.add(idx + 1);
+    }
+  });
+
+  if (candidateIndices.size > 0) {
+    const ordered = Array.from(candidateIndices).sort((a, b) => a - b);
+    return ordered.map((i) => elements[i]);
+  }
+
+  // Fallback: send top 15 elements safely
+  return elements.slice(0, 15);
+}
+
+/**
+ * Compact conversation history for Gemini prompt.
+ * Preserves user requests, concise answers, assertions, entities, and citation references
+ * without re-serializing redundant raw JSON schema boilerplate.
+ */
+export function compactHistoryForModel(conversation: any[]): Array<{ role: string; parts: Array<{ text: string }> }> {
+  if (!Array.isArray(conversation) || conversation.length === 0) return [];
+
+  const compact: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+
+  for (const item of conversation) {
+    if (!item) continue;
+    const role = item.role === "user" ? "user" : "model";
+
+    if (role === "user") {
+      compact.push({
+        role: "user",
+        parts: [{ text: typeof item.text === "string" ? item.text : JSON.stringify(item.text) }],
+      });
+      continue;
+    }
+
+    // Assistant turn: format compact semantic representation
+    if (typeof item.text === "string") {
+      compact.push({ role: "model", parts: [{ text: item.text }] });
+    } else if (item.text && typeof item.text === "object") {
+      const obj = item.text;
+      let textContent = "";
+      if (Array.isArray(obj.paragraphs)) {
+        textContent = obj.paragraphs
+          .map((p: any) => (p && p.text ? p.text : ""))
+          .filter(Boolean)
+          .join("\n\n");
+
+        const allCites = obj.paragraphs
+          .flatMap((p: any) => (p && Array.isArray(p.citations) ? p.citations : []))
+          .filter((c: any) => c && c.quote);
+
+        if (allCites.length > 0) {
+          const citeStr = allCites
+            .slice(0, 4)
+            .map((c: any) => `"${c.quote.slice(0, 60)}" (${c.label || "Source"})`)
+            .join("; ");
+          textContent += `\n[Citations: ${citeStr}]`;
+        }
+      } else if (obj.text) {
+        textContent = String(obj.text);
+      } else {
+        textContent = JSON.stringify(obj);
+      }
+
+      compact.push({
+        role: "model",
+        parts: [{ text: textContent }],
+      });
+    }
+  }
+
+  return compact;
+}
+
 
 // ============================================================================
 // 4. STRUCTURED SOURCE EXTRACTION & EVIDENCE MODEL

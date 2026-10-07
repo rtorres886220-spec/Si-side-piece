@@ -12,7 +12,8 @@
     "lint": "tsc --noEmit",
     "test:grounding": "tsx scripts/test-grounding.ts",
     "test:benchmark": "tsx scripts/comprehensive-benchmark.ts",
-    "test": "npm run test:grounding && npm run test:benchmark"
+    "test:tokens": "tsx scripts/test-token-optimization.ts",
+    "test": "npm run test:grounding && npm run test:benchmark && npm run test:tokens"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
