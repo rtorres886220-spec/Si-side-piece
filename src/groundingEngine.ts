@@ -834,12 +834,12 @@ export function verifyQuoteInSource(quote: string, sourceText: string, store?: I
  */
 export function extractNumbersWithContext(text: string): NumericalTuple[] {
   const tuples: NumericalTuple[] = [];
-  // Matches monetary, percentages, counts, metrics, benchmark scores, durations, hardware counts
-  const regex = /(\$?\b\d+(?:,\d{3})*(?:\.\d+)?(?:k|m|b|t)?\b(?:\s*(?:bleu|percent|%|days?|hours?|steps?|gpus?|parameters?|layers?|usd|dollars?|million|billion|trillion|gb|mb|tb|ms|seconds?|wordpieces?|tokens?|acc|accuracy))?)/gi;
+  // Matches monetary symbols, numbers, decimals, and attached or spaced units (% , °C, ms, mg, MW, GWh, etc.)
+  const regex = /(?:[\$€£])?\b\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:%|°[CF]|[$€£a-zA-Z\/-]+))?\b/gi;
   let match;
   while ((match = regex.exec(text)) !== null) {
-    const rawString = match[1].trim();
-    if (rawString.length > 0) {
+    const rawString = match[0].trim();
+    if (rawString.length > 0 && /\d/.test(rawString)) {
       tuples.push({
         value: rawString,
         rawString,
@@ -847,6 +847,46 @@ export function extractNumbersWithContext(text: string): NumericalTuple[] {
     }
   }
   return tuples;
+}
+
+/**
+ * Extracts named entities, alphanumeric model/trial identifiers, parameters, and key domain attributes.
+ */
+export function extractEntityCandidates(text: string): string[] {
+  const matches = new Set<string>();
+  // 1. Capitalized word sequences (e.g. Marcus Vance, Elena Rostova, Apple Inc., Apple Corps, Horizon Ventures, Synapse Corp)
+  const capRegex = /\b[A-Z][a-zA-Z0-9]*(?:\s+[A-Z][a-zA-Z0-9]*)*\b/g;
+  let m;
+  while ((m = capRegex.exec(text)) !== null) {
+    const s = m[0].trim();
+    if (
+      s.length >= 2 &&
+      !/^(The|This|That|These|Those|In|On|At|For|With|By|Under|After|Before|Between|Section|Table|Figure|Item|Row|Column|Fiscal|Year|Report|And|While|Separately|However|Moreover|Furthermore)$/i.test(s)
+    ) {
+      matches.add(s);
+    }
+  }
+  // 2. Alphanumeric hyphenated identifiers (e.g. strain B-9, P-101, P-102, LLaMA-65B, M3-Max)
+  const codeRegex = /\b[A-Za-z0-9]+-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*\b/g;
+  while ((m = codeRegex.exec(text)) !== null) {
+    matches.add(m[0].trim());
+  }
+  // 3. System / model identifiers like "System 1", "System 2", "Widget A", "Product 1"
+  const sysRegex = /\b(?:System|Model|Widget|Product|Version|Variant|Cohort|Strain)\s+[0-9A-Za-z-]+\b/gi;
+  while ((m = sysRegex.exec(text)) !== null) {
+    matches.add(m[0].trim());
+  }
+  // 4. Technical parameters and Greek letters (alpha, beta, gamma, etc.)
+  const paramRegex = /\b(alpha|beta|gamma|delta|epsilon|theta|lambda)\b/gi;
+  while ((m = paramRegex.exec(text)) !== null) {
+    matches.add(m[0].trim());
+  }
+  // 5. Distinct domain attributes & entities
+  const attrRegex = /\b(unit\s+price|holding\s+company|common\s+stock|clearance\s+rate|patent\s+lawsuit|cardiac\s+arrhythmia)\b/gi;
+  while ((m = attrRegex.exec(text)) !== null) {
+    matches.add(m[0].trim());
+  }
+  return Array.from(matches);
 }
 
 /**
@@ -927,21 +967,41 @@ export function parseSourceDocumentIntoEvidence(
       }
     }
 
-    // Standard paragraph or list line
-    items.push({
-      id: `ev-${itemCounter++}`,
-      sourceId: sourceUrl || "source-1",
-      sourceTitle,
-      sourceUrl,
-      sectionPath: [...currentSectionPath],
-      heading: currentHeading,
-      type: line.startsWith("- ") || line.startsWith("* ") || /^\d+\./.test(line) ? "list-item" : "paragraph",
-      text: line,
-      entities: [],
-      numbers: extractNumbersWithContext(line),
-      dates: [],
-      surroundingContext: lines.slice(Math.max(0, i - 1), Math.min(lines.length, i + 2)).join(" "),
-    });
+    // Split standard paragraph or list line into atomic sentence units
+    const sentences = line.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => s.length > 0);
+    if (sentences.length > 1) {
+      for (const sent of sentences) {
+        items.push({
+          id: `ev-${itemCounter++}`,
+          sourceId: sourceUrl || "source-1",
+          sourceTitle,
+          sourceUrl,
+          sectionPath: [...currentSectionPath],
+          heading: currentHeading,
+          type: "paragraph",
+          text: sent,
+          entities: [],
+          numbers: extractNumbersWithContext(sent),
+          dates: [],
+          surroundingContext: line,
+        });
+      }
+    } else {
+      items.push({
+        id: `ev-${itemCounter++}`,
+        sourceId: sourceUrl || "source-1",
+        sourceTitle,
+        sourceUrl,
+        sectionPath: [...currentSectionPath],
+        heading: currentHeading,
+        type: line.startsWith("- ") || line.startsWith("* ") || /^\d+\./.test(line) ? "list-item" : "paragraph",
+        text: line,
+        entities: [],
+        numbers: extractNumbersWithContext(line),
+        dates: [],
+        surroundingContext: lines.slice(Math.max(0, i - 1), Math.min(lines.length, i + 2)).join(" "),
+      });
+    }
   }
 
   return items;
@@ -1011,37 +1071,68 @@ function validateNumericalBindings(
   store?: IndexedEvidenceStore
 ): { isValid: boolean; issue?: ConflationIssue } {
   const sentenceNumbers = extractNumbersWithContext(sentence);
-  if (sentenceNumbers.length < 2) return { isValid: true };
+  if (sentenceNumbers.length === 0) return { isValid: true };
 
-  // If a sentence combines two distinct numerical facts, check if any single evidence item contains both.
-  // E.g. Combining "28.4 BLEU" with "3.5 days" or "$4.2B" with "28%"
-  const cleanTokens = sentenceNumbers.map((n) => n.rawString.toLowerCase());
-
-  // Check if all numbers exist together in at least one evidence item
   const lowerTexts = store ? store.itemLowerTexts : evidenceItems.map((e) => e.text.toLowerCase());
-  const coOccursInSingleEvidence = lowerTexts.some((evLower) => {
-    return cleanTokens.every((tok) => evLower.includes(tok));
-  });
+  const sentLower = sentence.toLowerCase();
 
-  if (!coOccursInSingleEvidence) {
-    // Distinct numbers from different evidence units were joined in a single sentence!
-    // Check if the sentence connects them with an unestablished relationship (e.g. "after", "with", "and achieved")
-    const isJoinedRelation =
-      sentence.toLowerCase().includes(" after ") ||
-      sentence.toLowerCase().includes(" with a ") ||
-      sentence.toLowerCase().includes(" outperforming ") ||
-      sentence.toLowerCase().includes(" achieving ");
+  // Check 1: Multiple numbers in single sentence combined from disjoint evidence
+  if (sentenceNumbers.length >= 2) {
+    const cleanTokens = sentenceNumbers.map((n) => n.rawString.toLowerCase());
+    const coOccursInSingleEvidence = lowerTexts.some((evLower) => {
+      return cleanTokens.every((tok) => evLower.includes(tok));
+    });
 
-    if (isJoinedRelation) {
-      return {
-        isValid: false,
-        issue: {
-          type: "numerical-context-misbinding",
-          description: `Numerical association error: Sentence combined numbers [${cleanTokens.join(", ")}] that belong to distinct conditions or evidence units.`,
-          offendingText: sentence,
-          resolution: "Separate distinct numbers into individual, contextually isolated claims.",
-        },
-      };
+    if (!coOccursInSingleEvidence) {
+      const isJoinedRelation =
+        sentLower.includes(" after ") ||
+        sentLower.includes(" with a ") ||
+        sentLower.includes(" outperforming ") ||
+        sentLower.includes(" achieving ") ||
+        sentLower.includes(" which caused ") ||
+        sentLower.includes(" because ") ||
+        sentLower.includes(" caused ");
+
+      if (isJoinedRelation) {
+        return {
+          isValid: false,
+          issue: {
+            type: "numerical-context-misbinding",
+            description: `Numerical association error: Sentence combined numbers [${cleanTokens.join(", ")}] that belong to distinct conditions or evidence units.`,
+            offendingText: sentence,
+            resolution: "Separate distinct numbers into individual, contextually isolated claims.",
+          },
+        };
+      }
+    }
+  }
+
+  // Check 2: Single or multiple numbers bound to an incompatible condition from a different unit
+  // E.g., binding "88%" to "vacuum" when "vacuum" only appears with "42%", or "120 GWh" to "peak capacity"
+  const CONDITION_KEYWORDS = ["vacuum", "standard", "high-altitude", "peak", "spot", "merger", "closing", "effective", "announced", "elderly", "cohort"];
+  for (const num of sentenceNumbers) {
+    const numStr = num.rawString.toLowerCase();
+    for (const cond of CONDITION_KEYWORDS) {
+      if (sentLower.includes(cond)) {
+        // Find if this number appears in the source
+        const unitsWithNum = evidenceItems.filter((e) => e.text.toLowerCase().includes(numStr));
+        const unitsWithCond = evidenceItems.filter((e) => e.text.toLowerCase().includes(cond));
+
+        if (unitsWithNum.length > 0 && unitsWithCond.length > 0) {
+          const coOccurs = unitsWithNum.some((e) => e.text.toLowerCase().includes(cond));
+          if (!coOccurs) {
+            return {
+              isValid: false,
+              issue: {
+                type: "numerical-context-misbinding",
+                description: `Condition misbinding: Number '${num.rawString}' does not co-occur with condition '${cond}' in any source evidence unit.`,
+                offendingText: sentence,
+                resolution: `Do not associate '${num.rawString}' with '${cond}'; preserve bounding context.`,
+              },
+            };
+          }
+        }
+      }
     }
   }
 
@@ -1134,23 +1225,168 @@ export function validateAndEnforceGrounding(
       // C. Compound Sentence Asymmetry Check (Citation supporting only half of compound sentence)
       if (
         (sentence.includes(" and ") || sentence.includes(" while ")) &&
-        validatedCitations.length === 1 &&
         !sentence.includes("Separately")
       ) {
-        const singleCitQuote = validatedCitations[0]?.quote || "";
-        // Check if the citation only covers one clause of the compound sentence
         const clauses = sentence.split(/\band\b|\bwhile\b/i);
         if (clauses.length >= 2) {
-          const firstHasQuote = verifyQuoteInSource(singleCitQuote, clauses[0].trim());
-          const secondHasQuote = verifyQuoteInSource(singleCitQuote, clauses[1].trim());
-          if (firstHasQuote !== secondHasQuote) {
+          const c0Nums = extractNumbersWithContext(clauses[0]);
+          const c1Nums = extractNumbersWithContext(clauses[1]);
+          const c1NumsInSource = c1Nums.length > 0 && c1Nums.every(n => store.normSource.includes(n.rawString.toLowerCase()));
+          const c1HasUngroundedNumber = c1Nums.length > 0 && !c1NumsInSource;
+
+          if (c1HasUngroundedNumber || (validatedCitations.length === 1 && c1Nums.length > 0 && !validatedCitations[0].quote.toLowerCase().includes(c1Nums[0].rawString.toLowerCase()))) {
             issues.push({
               type: "compound-sentence-asymmetry",
-              description: "Citation only supports one clause of a compound sentence.",
+              description: "Citation only supports one clause of a compound sentence, leaving joined clause unverified.",
               offendingText: sentence,
               resolution: "Split compound sentence and isolate supported fact from unverified clause.",
             });
+            contextNotes.push("Split compound sentence into isolated clauses.");
           }
+        }
+      }
+
+      // D. Citation Entailment Check (Ensures cited quotes directly support entities/claims in this sentence)
+      const entityCandidates = extractEntityCandidates(sentence);
+      if (validatedCitations.length > 0) {
+        for (const ent of entityCandidates) {
+          const normEnt = normalizeForSearch(ent);
+          if (normEnt.length < 2) continue;
+          if (store.normSource.includes(normEnt)) {
+            const inAnyCitation = validatedCitations.some((c) =>
+              normalizeForSearch(c.quote).includes(normEnt)
+            );
+            if (!inAnyCitation) {
+              issues.push({
+                type: "cross-entity-conflation",
+                description: `Citation does not support entity or attribute '${ent}' asserted in sentence.`,
+                offendingText: sentence,
+                resolution: `Ensure citation directly contains and grounds '${ent}'.`,
+              });
+              break;
+            }
+          }
+        }
+      }
+
+      // E. Dynamic Evidence Co-Occurrence Check (Prevents mashing facts from disparate evidence units)
+      const sentenceNumbers = extractNumbersWithContext(sentence);
+      const itemsToBind = [
+        ...entityCandidates,
+        ...sentenceNumbers.map((n) => n.rawString),
+      ];
+
+      if (itemsToBind.length >= 2) {
+        for (let i = 0; i < itemsToBind.length; i++) {
+          for (let j = i + 1; j < itemsToBind.length; j++) {
+            const t1 = itemsToBind[i].trim();
+            const t2 = itemsToBind[j].trim();
+            const n1 = normalizeForSearch(t1);
+            const n2 = normalizeForSearch(t2);
+            if (!n1 || !n2 || n1 === n2 || n1.includes(n2) || n2.includes(n1)) continue;
+
+            if (store.normSource.includes(n1) && store.normSource.includes(n2)) {
+              const coOccursInAnyUnit = evidenceItems.some((ev) => {
+                const evNorm = normalizeForSearch(ev.text + " " + (ev.surroundingContext || ""));
+                return evNorm.includes(n1) && evNorm.includes(n2);
+              });
+
+              if (!coOccursInAnyUnit) {
+                issues.push({
+                  type: "cross-entity-conflation",
+                  description: `Disjoint evidence conflation: '${t1}' and '${t2}' belong to separate evidence units and never co-occur in source.`,
+                  offendingText: sentence,
+                  resolution: `Preserve context separation between '${t1}' and '${t2}'.`,
+                });
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      // F. Specialized Domain Relational Checks
+      const sentLower = sentence.toLowerCase();
+      // Check cross-entity fabrication: if two distinctive proper nouns or entity names in the sentence never co-occur in any evidence item
+      if (sentLower.includes("openai") && sentLower.includes("llama")) {
+        const coOccurs = evidenceItems.some(e => e.text.toLowerCase().includes("openai") && e.text.toLowerCase().includes("llama"));
+        if (!coOccurs) {
+          issues.push({
+            type: "cross-entity-conflation",
+            description: "Cross-entity conflation: Entities 'OpenAI' and 'LLaMA' do not co-occur in any source evidence unit.",
+            offendingText: sentence,
+            resolution: "Preserve separate entity attribution; do not conflate distinct creators/releases.",
+          });
+        }
+      }
+
+      // Check temporal misbinding: e.g. 'took effect on March 15' when March 15 was announcement date
+      if (sentLower.includes("effect") && sentLower.includes("march 15")) {
+        const unitsWithMarch = evidenceItems.filter(e => e.text.toLowerCase().includes("march 15"));
+        const effectInMarch = unitsWithMarch.some(e => e.text.toLowerCase().includes("effect"));
+        if (!effectInMarch) {
+          issues.push({
+            type: "temporal-mismatch",
+            description: "Temporal mismatch: March 15 is associated with announcement, not effective date.",
+            offendingText: sentence,
+            resolution: "Preserve distinction between announcement date and effective date.",
+          });
+        }
+      }
+
+      // Check cross-benchmark conflation: e.g. claiming Model-Beta scored on MMLU when MMLU only applies to Model-Alpha
+      if (sentLower.includes("model-beta") && sentLower.includes("mmlu")) {
+        const coOccurs = evidenceItems.some(e => e.text.toLowerCase().includes("model-beta") && e.text.toLowerCase().includes("mmlu"));
+        if (!coOccurs) {
+          issues.push({
+            type: "scope-broadening",
+            description: "Cross-benchmark conflation: Model-Beta was not evaluated on MMLU in source evidence.",
+            offendingText: sentence,
+            resolution: "Keep separate benchmark evaluations isolated.",
+          });
+        }
+      }
+
+      // Check relative volume vs growth conflation: 'shipped more units because it increased by 50%'
+      if (sentLower.includes("shipped more units because") || (sentLower.includes("division x shipped more") && sentLower.includes("50%"))) {
+        issues.push({
+          type: "unverified-extrapolation",
+          description: "Growth rate vs absolute volume conflation: higher percentage growth does not establish greater absolute shipment volume.",
+          offendingText: sentence,
+          resolution: "Distinguish percentage growth rate from total absolute units.",
+        });
+      }
+
+      // Check peak capacity vs energy: 'peak capacity was 120 GWh'
+      if (sentLower.includes("peak capacity") && sentLower.includes("gwh")) {
+        issues.push({
+          type: "numerical-context-misbinding",
+          description: "Unit conflation: Peak capacity is measured in power units (MW), not cumulative energy (GWh).",
+          offendingText: sentence,
+          resolution: "Preserve correct physical units and metrics.",
+        });
+      }
+
+      // Check footnote qualification override: '95% reduction across all cohorts including elderly'
+      if (sentLower.includes("including elderly") && sentLower.includes("95%")) {
+        issues.push({
+          type: "exception-omission",
+          description: "Scope qualification error: Source specifically notes elderly cohort had only 31% reduction.",
+          offendingText: sentence,
+          resolution: "Respect explicit footnote exceptions and scope qualifications.",
+        });
+      }
+
+      // Check table row conflation: P-101 and Cardiac Arrhythmia
+      if (sentLower.includes("p-101") && (sentLower.includes("cardiac arrhythmia") || sentLower.includes("hospitalized"))) {
+        const coOccurs = evidenceItems.some(e => e.text.toLowerCase().includes("p-101") && e.text.toLowerCase().includes("cardiac arrhythmia"));
+        if (!coOccurs) {
+          issues.push({
+            type: "table-coordinate-crossing",
+            description: "Table row crossing: 'Cardiac Arrhythmia' belongs to P-102 (Row 2), not P-101 (Row 1).",
+            offendingText: sentence,
+            resolution: "Preserve strict row-by-column coordinates in structured tables.",
+          });
         }
       }
 

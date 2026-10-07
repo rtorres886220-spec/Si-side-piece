@@ -77,6 +77,72 @@ export function retrieveAdaptiveEvidence(
     };
   }
 
+  // Extract meaningful query tokens early (preserve numbers like '2' for 'Product 2')
+  const queryTokens = (promptText.toLowerCase().match(/[a-z0-9_-]+/g) || []).filter(
+    (w) => !STOP_WORDS.has(w) && (w.length >= 2 || /\d/.test(w))
+  );
+  const isBroadSummary = /(?:summarize|overview|entire|all|table\s+of\s+contents|outline)/i.test(promptText);
+
+  // Deterministic EVIDENCE_ABSENT check: if specific query tokens exist but NONE occur in the document text
+  if (queryTokens.length > 0 && !isBroadSummary) {
+    const rawLower = rawBody.toLowerCase();
+    const hasAnyTokenMatch = queryTokens.some((tok) => rawLower.includes(tok));
+    if (!hasAnyTokenMatch && !selectedText) {
+      return {
+        retrievedContent: rawBody.slice(0, 1000),
+        retainedRegionsCount: 1,
+        totalSectionsCount: 1,
+        isFullDocument: false,
+        isTruncated: true,
+        insufficientEvidence: true,
+        selectedTextDeduplicated: false,
+        regions: [],
+      };
+    }
+
+    // Attribute-level absent evidence check (e.g. asking for "price", "cost", "salary", "bonus", "warranty", etc.)
+    const ATTRIBUTE_TERMS = [
+      "price", "pricing", "cost", "salary", "compensation", "bonus",
+      "warranty", "dividend", "dividends", "fee", "rate", "speed",
+      "depth", "temperature", "lifespan", "horsepower", "revenue"
+    ];
+    const askedAttr = queryTokens.find((tok) => ATTRIBUTE_TERMS.includes(tok));
+    if (askedAttr && !selectedText) {
+      const hasAttrInDoc = rawLower.includes(askedAttr);
+      const hasCurrencyOrUnit = /[\$€£¥]|\b(?:usd|eur|gbp)\b/i.test(rawBody);
+      if (!hasAttrInDoc) {
+        const nonAttrTokens = queryTokens.filter((t) => t !== askedAttr);
+        let hasCoLocatedValue = false;
+        if (nonAttrTokens.length > 0 && hasCurrencyOrUnit && (askedAttr === "price" || askedAttr === "cost")) {
+          // Check each atomic sentence unit
+          const sentenceUnits = rawBody.split(/(?<=[.!?])\s+|\r?\n/);
+          for (const unit of sentenceUnits) {
+            const hasEntity = nonAttrTokens.every((tok) =>
+              new RegExp(`\\b${tok.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\b`, "i").test(unit)
+            );
+            const hasCurrency = /[\$€£¥]|\b(?:usd|eur|gbp)\b/i.test(unit);
+            if (hasEntity && hasCurrency) {
+              hasCoLocatedValue = true;
+              break;
+            }
+          }
+        }
+        if (!hasCoLocatedValue) {
+          return {
+            retrievedContent: rawBody.slice(0, 1000),
+            retainedRegionsCount: 1,
+            totalSectionsCount: 1,
+            isFullDocument: false,
+            isTruncated: true,
+            insufficientEvidence: true,
+            selectedTextDeduplicated: false,
+            regions: [],
+          };
+        }
+      }
+    }
+  }
+
   // Small documents (<= 8,000 characters) are already concise and can be sent intact
   if (rawBody.length <= 8000) {
     const isDup = selectedText.length > 0 && rawBody.includes(selectedText);
@@ -140,11 +206,6 @@ export function retrieveAdaptiveEvidence(
     });
   }
 
-  // Extract meaningful query tokens
-  const queryTokens = (promptText.toLowerCase().match(/[a-z0-9_-]{2,}/g) || []).filter(
-    (w) => !STOP_WORDS.has(w)
-  );
-
   // Score each section
   for (const sec of parsedSections) {
     let score = 0;
@@ -162,9 +223,6 @@ export function retrieveAdaptiveEvidence(
 
   // Check if any section matched
   const scoredSections = parsedSections.filter((s) => s.score > 0).sort((a, b) => b.score - a.score);
-
-  // If no section matched, check if document mentions stop-words or broad summary
-  const isBroadSummary = /(?:summarize|overview|entire|all|table\s+of\s+contents|outline)/i.test(promptText);
 
   if (scoredSections.length === 0 && !isBroadSummary) {
     // Deterministic EVIDENCE_ABSENT detection

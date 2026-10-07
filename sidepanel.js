@@ -1106,6 +1106,19 @@ function retrieveAdaptiveEvidence(rawBodyText, promptText, options) {
   if (!rawBody) {
     return { retrievedContent: "", retainedRegionsCount: 0, totalSectionsCount: 0, isFullDocument: true, isTruncated: false, insufficientEvidence: true, selectedTextDeduplicated: false };
   }
+  const stopWords = new Set(["what", "when", "where", "which", "who", "whom", "whose", "why", "how", "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "up", "about", "into", "over", "after", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "can", "could", "should", "would", "may", "might", "this", "that", "these", "those", "page", "document", "tell", "show", "find"]);
+  const queryTokens = (promptText.toLowerCase().match(/[a-z0-9_-]{2,}/g) || []).filter(w => !stopWords.has(w));
+  const isBroad = /(?:summarize|overview|entire|all|table\s+of\s+contents|outline)/i.test(promptText);
+
+  // Deterministic EVIDENCE_ABSENT early detection
+  if (queryTokens.length > 0 && !isBroad) {
+    const rawLower = rawBody.toLowerCase();
+    const hasAnyTokenMatch = queryTokens.some((tok) => rawLower.includes(tok));
+    if (!hasAnyTokenMatch && !selectedText) {
+      return { retrievedContent: rawBody.slice(0, 1000), retainedRegionsCount: 1, totalSectionsCount: 1, isFullDocument: false, isTruncated: true, insufficientEvidence: true, selectedTextDeduplicated: false };
+    }
+  }
+
   if (rawBody.length <= 8000) {
     const isDup = selectedText.length > 0 && rawBody.includes(selectedText);
     return { retrievedContent: rawBody, retainedRegionsCount: 1, totalSectionsCount: 1, isFullDocument: true, isTruncated: false, insufficientEvidence: false, selectedTextDeduplicated: isDup };
@@ -1128,8 +1141,6 @@ function retrieveAdaptiveEvidence(rawBodyText, promptText, options) {
     headingStack.push({ level, heading });
     parsedSections.push({ index: i, level, heading, text: secText, lowerText: secText.toLowerCase(), hasTable: secText.includes("|") || secText.includes("[Table"), score: 0 });
   }
-  const stopWords = new Set(["what", "when", "where", "which", "who", "whom", "whose", "why", "how", "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by", "from", "up", "about", "into", "over", "after", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "can", "could", "should", "would", "may", "might", "this", "that", "these", "those", "page", "document", "tell", "show", "find"]);
-  const queryTokens = (promptText.toLowerCase().match(/[a-z0-9_-]{2,}/g) || []).filter(w => !stopWords.has(w));
   for (const sec of parsedSections) {
     let score = 0;
     for (const tok of queryTokens) {
@@ -1139,7 +1150,6 @@ function retrieveAdaptiveEvidence(rawBodyText, promptText, options) {
     sec.score = score;
   }
   const scoredSections = parsedSections.filter(s => s.score > 0).sort((a, b) => b.score - a.score);
-  const isBroad = /(?:summarize|overview|entire|all|table\s+of\s+contents|outline)/i.test(promptText);
   if (scoredSections.length === 0 && !isBroad) {
     return { retrievedContent: rawSections[0] || "", retainedRegionsCount: 1, totalSectionsCount: rawSections.length, isFullDocument: false, isTruncated: true, insufficientEvidence: true, selectedTextDeduplicated: false };
   }
@@ -2428,7 +2438,7 @@ CORE APPLICATION BEHAVIOR: STRICT FACTUAL GROUNDING POLICY
     }
     contextualPayload += `<<<END_ACTION_CONTEXT_${enclaveId}>>>\n\nUser command: ${promptText}`;
   } else {
-    windowResult = getEvidenceAwareWindow(state.pageContext.bodyText || "", promptText, {
+    windowResult = retrieveAdaptiveEvidence(state.pageContext.bodyText || "", promptText, {
       title: state.pageContext.title,
       author: state.pageContext.author,
       date: state.pageContext.date,
@@ -2443,8 +2453,9 @@ CORE APPLICATION BEHAVIOR: STRICT FACTUAL GROUNDING POLICY
       }
     }
 
-    if (state.tabEnabled && windowResult.windowedContent) {
-      contextualPayload += `<<<UNTRUSTED_CONTENT_${enclaveId} title="${escapeXml(state.pageContext.title)}" url="${escapeXml(state.pageContext.url)}">>>\n${windowResult.windowedContent}\n`;
+    const contentToInject = windowResult.retrievedContent || windowResult.windowedContent;
+    if (state.tabEnabled && contentToInject) {
+      contextualPayload += `<<<UNTRUSTED_CONTENT_${enclaveId} title="${escapeXml(state.pageContext.title)}" url="${escapeXml(state.pageContext.url)}">>>\n${contentToInject}\n`;
       if (elementsSummary) {
         contextualPayload += `${elementsSummary}\n`;
       }

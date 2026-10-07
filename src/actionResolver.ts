@@ -65,9 +65,11 @@ function computeSimilarity(label: string, term: string): number {
     return Math.max(0.65, Math.min(0.85, 0.65 + ratio * 0.2));
   }
 
-  // Token overlap Jaccard
-  const lTokens = new Set(l.split(/\s+/).filter((w) => w.length > 2));
-  const tTokens = new Set(t.split(/\s+/).filter((w) => w.length > 2));
+  // Token overlap Jaccard & full containment
+  const lClean = l.replace(/[^a-z0-9\s]/g, " ").trim();
+  const tClean = t.replace(/[^a-z0-9\s]/g, " ").trim();
+  const lTokens = new Set(lClean.split(/\s+/).filter((w) => w.length > 0));
+  const tTokens = new Set(tClean.split(/\s+/).filter((w) => w.length > 0));
   if (lTokens.size === 0 || tTokens.size === 0) return 0;
 
   let intersection = 0;
@@ -75,6 +77,12 @@ function computeSimilarity(label: string, term: string): number {
     if (lTokens.has(tok)) intersection++;
   }
   const union = new Set([...lTokens, ...tTokens]).size;
+
+  // If every token in the search term is present in the label (e.g. "buy now widget b" in "buy now - widget b ($29)")
+  if (intersection === tTokens.size && tTokens.size >= 2) {
+    return 0.92;
+  }
+
   return intersection / union;
 }
 
@@ -208,15 +216,44 @@ export function resolveActionTarget(
 }
 
 export function validateModelActionSelection(
-  selectedId: number,
+  target: number | { id?: number; x?: number; y?: number; element_description?: string; selector?: string },
   allowedCandidates: InteractiveElementCandidate[]
 ): { isValid: boolean; validatedTarget: InteractiveElementCandidate | null; error?: string } {
-  const match = allowedCandidates.find((c) => c.id === selectedId);
-  if (!match) {
+  if (!allowedCandidates || allowedCandidates.length === 0) {
     return {
       isValid: false,
       validatedTarget: null,
-      error: `Model selected element ID [#${selectedId}], which is not in the validated candidate set.`,
+      error: "No allowed candidates available for model action validation.",
+    };
+  }
+
+  let match: InteractiveElementCandidate | undefined;
+
+  if (typeof target === "number") {
+    match = allowedCandidates.find((c) => c.id === target);
+  } else if (target && typeof target === "object") {
+    if (target.id !== undefined) {
+      match = allowedCandidates.find((c) => c.id === target.id);
+    }
+    if (!match && target.selector) {
+      match = allowedCandidates.find((c) => c.selector === target.selector);
+    }
+    if (!match && target.x !== undefined && target.y !== undefined) {
+      // Coordinate proximity check: must match within bounding area (default 50px delta)
+      match = allowedCandidates.find((c) => Math.abs(c.x - (target.x ?? 0)) <= 50 && Math.abs(c.y - (target.y ?? 0)) <= 50);
+    }
+    if (!match && target.element_description) {
+      const descLower = target.element_description.toLowerCase().trim();
+      match = allowedCandidates.find((c) => (c.label || "").toLowerCase().includes(descLower) || descLower.includes((c.label || "").toLowerCase()));
+    }
+  }
+
+  if (!match) {
+    const targetDesc = typeof target === "number" ? `[#${target}]` : JSON.stringify(target);
+    return {
+      isValid: false,
+      validatedTarget: null,
+      error: `Model selected target ${targetDesc}, which does not match any validated candidate element or verified coordinates.`,
     };
   }
 
@@ -224,7 +261,7 @@ export function validateModelActionSelection(
     return {
       isValid: false,
       validatedTarget: null,
-      error: `Security violation: Model selected element [#${selectedId}] that intersects with payment widgets.`,
+      error: `Security violation: Model selected element [#${match.id}] that intersects with payment widgets.`,
     };
   }
 

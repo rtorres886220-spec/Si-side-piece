@@ -12,7 +12,7 @@ import {
   filterTargetedInteractiveElements
 } from './src/groundingEngine.ts';
 import { routeUserRequest } from './src/deterministicRouter.ts';
-import { resolveActionTarget } from './src/actionResolver.ts';
+import { resolveActionTarget, validateModelActionSelection } from './src/actionResolver.ts';
 import { retrieveAdaptiveEvidence } from './src/adaptiveEvidenceRetriever.ts';
 import { globalRateLimitScheduler } from './src/rateLimitScheduler.ts';
 import { globalTelemetry } from './src/instrumentation.ts';
@@ -93,6 +93,28 @@ async function startServer() {
 
       // Deterministic Intent Routing
       const intentResult = routeUserRequest(promptText);
+
+      // FAST PATH 0: Deterministic Conversational Greeting (Zero Gemini Call!)
+      if (intentResult.intent === 'conversational' && intentResult.hasGreeting && !intentResult.hasInformationQuery) {
+        const isWho = /who\s+are\s+you|what\s+are\s+you/i.test(promptText);
+        const greetingMsg = isWho
+          ? "I am Sidekick, your browser companion powered by Gemini Flash-Lite. I can inspect pages, find citations, extract tables, and click or fill controls on this active tab."
+          : "Hello! I am Sidekick, your browser companion. Ask me a question about this page, or ask me to click, search, or summarize.";
+        const tPayloadEnd = performance.now();
+        return res.json({
+          success: true,
+          text: greetingMsg,
+          functionCall: null,
+          usedModel: 'deterministic-conversational-router',
+          timings: {
+            payloadConstructionMs: Math.round((tPayloadEnd - tPayloadStart) * 10) / 10,
+            ttftMs: 0,
+            geminiApiMs: 0,
+            groundingValidationMs: 0,
+            totalServerMs: Math.round((performance.now() - tStart) * 10) / 10,
+          },
+        });
+      }
 
       // FAST PATH 1: Deterministic Pure Action Resolution (Zero Gemini Call!)
       const elementsList = currentPage?.interactiveElements || currentPage?.elements || [];
@@ -604,6 +626,22 @@ ${GROUNDING_SYSTEM_POLICY}`;
           groundingMetadata,
           serverValidated: true,
         };
+      } else if (functionCalls?.[0]?.name === 'click_element' || functionCalls?.[0]?.name === 'type_text') {
+        const actionArgs = functionCalls[0].args || {};
+        if (elementsList.length > 0) {
+          const actionValidation = validateModelActionSelection(actionArgs, elementsList);
+          if (actionValidation.isValid && actionValidation.validatedTarget) {
+            // Anti-hallucination coordinate snapping to verified DOM element
+            functionCalls[0].args = {
+              ...actionArgs,
+              x: actionValidation.validatedTarget.x,
+              y: actionValidation.validatedTarget.y,
+              element_description: actionValidation.validatedTarget.label,
+              selector: actionValidation.validatedTarget.selector,
+              serverValidated: true,
+            };
+          }
+        }
       }
       const tValidationEnd = performance.now();
       const groundingValidationMs = tValidationEnd - tValidationStart;
