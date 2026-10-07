@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@100;200;300;400&family=Geist+Mono:wght@200;300;400&display=swap');
 @import "tailwindcss";
 
 /* 1. Theme Configuration for Tailwind v4 */
@@ -5,9 +6,6 @@
   --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, monospace;
 }
-
-/* 2. Fallback Google Fonts for complete 100, 200, 300, 400 weights */
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@100;200;300;400&family=Geist+Mono:wght@200;300;400&display=swap');
 
 /* 3. Global Typography Discipline - Ultra-Light Geist Base with Airy Tracking */
 *, ::before, ::after {
