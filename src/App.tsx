@@ -651,7 +651,7 @@ export default function App() {
   }, []);
 
   // Simulated Page State
-  const [activePageId, setActivePageId] = useState<string>("ecommerce-demo");
+  const [activePageId, setActivePageId] = useState<string>("transformer-paper");
   const [highlightedText, setHighlightedText] = useState("");
   const [inPageHighlight, setInPageHighlight] = useState<string | null>(null);
   const [actionIndicator, setActionIndicator] = useState<{ x: number; y: number; label: string } | null>(null);
@@ -701,6 +701,61 @@ export default function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [activeFollowUps, setActiveFollowUps] = useState<string[]>([]);
   const [showEnclaveInspector, setShowEnclaveInspector] = useState(false);
+
+  // True-to-Action Real-time Turn State & Instrumentation
+  const [currentTurnAction, setCurrentTurnAction] = useState<{
+    action: string;
+    detail: string;
+    step: 1 | 2 | 3 | 4;
+    elapsedMs: number;
+  }>({
+    action: "",
+    detail: "",
+    step: 1,
+    elapsedMs: 0,
+  });
+  const turnTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const turnStartRef = useRef<number>(0);
+
+  const startTurnTimer = (initialAction: string, initialDetail: string = "", initialStep: 1 | 2 | 3 | 4 = 1) => {
+    if (turnTimerRef.current) clearInterval(turnTimerRef.current);
+    turnStartRef.current = performance.now();
+    setCurrentTurnAction({
+      action: initialAction,
+      detail: initialDetail,
+      step: initialStep,
+      elapsedMs: 0,
+    });
+    turnTimerRef.current = setInterval(() => {
+      const elapsed = Math.round(performance.now() - turnStartRef.current);
+      setCurrentTurnAction((prev) => ({
+        ...prev,
+        elapsedMs: elapsed,
+      }));
+    }, 100);
+  };
+
+  const updateTurnAction = (action: string, detail: string = "", step: 1 | 2 | 3 | 4 = 1) => {
+    setCurrentTurnAction((prev) => ({
+      ...prev,
+      action,
+      detail,
+      step,
+    }));
+  };
+
+  const stopTurnTimer = () => {
+    if (turnTimerRef.current) {
+      clearInterval(turnTimerRef.current);
+      turnTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (turnTimerRef.current) clearInterval(turnTimerRef.current);
+    };
+  }, []);
 
   // Dynamic Assistant Name State: "Super Intelligence" morphing to "Si", plus custom user naming
   const [customName, setCustomName] = useState<string>(() => {
@@ -1735,21 +1790,25 @@ export default function App() {
     if (textareaRef.current) textareaRef.current.style.height = "24px";
     setIsBusy(true);
 
-    // If server live engine mode is enabled, proxy through server-side /api/gemini
-    if (engineMode === "server-live") {
-      await executeLiveGeminiLoop(promptText, currentQuote);
-      setIsBusy(false);
-      return;
-    }
+    startTurnTimer("Reading active tab context...", "", 1);
 
-    // Otherwise, execute the simulated Option B CDP & Grounding demonstration
-    await executeSimulatedAgentLoop(promptLower, promptText);
-    setIsBusy(false);
+    try {
+      // If server live engine mode is enabled, proxy through server-side /api/gemini
+      if (engineMode === "server-live") {
+        await executeLiveGeminiLoop(promptText, currentQuote);
+      } else {
+        await executeSimulatedAgentLoop(promptLower, promptText);
+      }
+    } finally {
+      stopTurnTimer();
+      setIsBusy(false);
+    }
   };
 
   // Live Server-Side Gemini Function Calling Loop
   const executeLiveGeminiLoop = async (promptText: string, currentQuote: string) => {
     try {
+      updateTurnAction("Analyzing page context...", "", 2);
       const res = await fetch("/api/gemini", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1775,6 +1834,7 @@ export default function App() {
       if (call) {
         if (call.name === "click_element") {
           const { x, y, element_description } = call.args || {};
+          updateTurnAction(`Targeting "${element_description}"...`, `Coordinates (${x}, ${y})`, 3);
           const isHigh = element_description?.toLowerCase().includes("pay") || element_description?.toLowerCase().includes("submit");
           if (isHigh) {
             const approved = await askHITLApproval("click_element", `Click "${element_description}"`, null, 1);
@@ -1784,12 +1844,35 @@ export default function App() {
             }
           }
           await triggerSimulatedCDPAction(element_description, x, y);
+          updateTurnAction("Click dispatched...", "Hardware event settled", 4);
           setChatMessages((p) => [
             ...p,
             { role: "agent-badge", stepText: `Step 1: Clicked "${element_description}" at (${x}, ${y}) [CDP Trusted]`, isSuccess: true },
             { role: "assistant", text: `Completed click on "${element_description}" using native OS hardware event dispatch.` }
           ]);
+        } else if (call.name === "scroll_viewport") {
+          const { direction = "down", pixels = 500 } = call.args || {};
+          updateTurnAction(`Scrolling viewport ${direction}...`, `CDP delta: ${pixels}px`, 3);
+          await triggerSimulatedCDPAction(`Scroll ${direction} (${pixels}px)`, 200, 300);
+          updateTurnAction("Confirming viewport position...", "Scroll settled", 4);
+          setChatMessages((p) => [
+            ...p,
+            { role: "agent-badge", stepText: `Dispatched Input.dispatchMouseEvent mouseWheel (${direction} ${pixels}px) [CDP Trusted]`, isSuccess: true },
+            { role: "assistant", text: `Viewport smoothly scrolled ${direction}. Current view updated.` }
+          ]);
+        } else if (call.name === "type_text") {
+          const { text: txt = "", x = 180, y = 110 } = call.args || {};
+          updateTurnAction(`Typing "${txt}"...`, `CDP hardware keystrokes at (${x}, ${y})`, 3);
+          await triggerSimulatedCDPAction(`Type text: "${txt}"`, x, y);
+          setSearchInputValue(txt);
+          updateTurnAction("Input updated...", "Keystrokes dispatched", 4);
+          setChatMessages((p) => [
+            ...p,
+            { role: "agent-badge", stepText: `Typed "${txt}" at (${x}, ${y}) [CDP Trusted]`, isSuccess: true },
+            { role: "assistant", text: `Typed "${txt}" into active element.` }
+          ]);
         } else if (call.name === "finish_task") {
+          updateTurnAction("Validating source citations...", "Grounding pass against source DOM", 4);
           const finalArgs = {
             ...call.args,
             timings: data.timings,
@@ -1798,6 +1881,7 @@ export default function App() {
           if (call.args?.followUps) setActiveFollowUps(call.args.followUps.slice(0, 3));
         }
       } else if (data.text) {
+        updateTurnAction("Rendering formatted response...", "Output complete", 4);
         setChatMessages((p) => [...p, { role: "assistant", text: data.text }]);
       } else {
         await executeSimulatedAgentLoop(promptText.toLowerCase(), promptText);
@@ -1810,11 +1894,73 @@ export default function App() {
 
   // Simulated Agent Loop for Interactive Workbench Testing
   const executeSimulatedAgentLoop = async (promptLower: string, promptText: string) => {
-    await new Promise((r) => setTimeout(r, 450));
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Dynamic Element Click Matching: check if user commanded clicking an interactive control
+    if (promptLower.includes("click") || promptLower.includes("press") || promptLower.includes("tap") || promptLower.includes("open") || promptLower.includes("select")) {
+      const elMatch = currentPage.elements?.find((e) => {
+        const lbl = e.label.toLowerCase();
+        return promptLower.includes(lbl) || lbl.includes(promptLower.replace(/^(click|press|tap|open|select)\s+(on\s+)?(the\s+)?/i, "").trim());
+      });
+      if (elMatch) {
+        updateTurnAction(`Locating [#${elMatch.id}] "${elMatch.label}"...`, `Coordinates (${elMatch.x}, ${elMatch.y})`, 2);
+        await new Promise((r) => setTimeout(r, 220));
+
+        if (elMatch.isHighRisk || elMatch.label.toLowerCase().includes("pay") || elMatch.label.toLowerCase().includes("order") || elMatch.label.toLowerCase().includes("delete")) {
+          const approved = await askHITLApproval("click_element", `Click "${elMatch.label}"`, elMatch, 1);
+          if (!approved) {
+            updateTurnAction("Action cancelled by user...", "Safety gate enforced", 4);
+            setChatMessages((p) => [
+              ...p,
+              { role: "agent-badge", stepText: `Action Denied by User: Click "${elMatch.label}" [Aborted]`, isSuccess: false },
+              { role: "assistant", text: "Action halted by safety policy. No state changed." }
+            ]);
+            return;
+          }
+        }
+
+        updateTurnAction(`Dispatching native OS click to "${elMatch.label}"...`, `Coordinates (${elMatch.x}, ${elMatch.y})`, 3);
+        await triggerSimulatedCDPAction(elMatch.label, elMatch.x, elMatch.y);
+
+        if (elMatch.label.toLowerCase().includes("cart") || elMatch.label.toLowerCase().includes("bag")) {
+          setCartCount((c) => c + 1);
+        }
+
+        updateTurnAction("Hardware event settled...", "Detached JIT debugger", 4);
+        setChatMessages((p) => [
+          ...p,
+          { role: "agent-badge", stepText: `Step 1: Clicked "${elMatch.label}" at (${elMatch.x}, ${elMatch.y}) [CDP Trusted]`, isSuccess: true },
+          { role: "assistant", text: `Successfully clicked "${elMatch.label}". Dispatched trusted hardware click sequence via Chrome DevTools Protocol.` }
+        ]);
+        return;
+      }
+    }
+
+    // Scenario: Viewport Scroll interaction (e.g. "scroll thru the page", "scroll down", "scroll to top")
+    if (promptLower.includes("scroll")) {
+      updateTurnAction("Analyzing document viewport bounds...", "Reading DOM scroll height", 2);
+      await new Promise((r) => setTimeout(r, 260));
+      const dir = promptLower.includes("up") ? "up" : promptLower.includes("top") ? "top" : promptLower.includes("bottom") ? "bottom" : "down";
+      const deltaY = dir === "up" ? -400 : dir === "top" ? -800 : dir === "bottom" ? 800 : 500;
+      updateTurnAction(`Dispatching Input.dispatchMouseEvent scroll ${dir}...`, `CDP delta: ${Math.abs(deltaY)}px`, 3);
+      await triggerSimulatedCDPAction(`Scroll ${dir}`, 200, 300);
+      updateTurnAction("Viewport scroll confirmed...", "DOM position settled", 4);
+      await new Promise((r) => setTimeout(r, 180));
+
+      setChatMessages((prev) => [
+        ...prev,
+        { role: "agent-badge", stepText: `Dispatched Input.dispatchMouseEvent mouseWheel (deltaY: ${deltaY}) [CDP Trusted]`, isSuccess: true },
+        { role: "assistant", text: `Viewport smoothly scrolled ${dir} through page content via Chrome DevTools Protocol.` }
+      ]);
+      return;
+    }
 
     // High-Grade Scenario: Cryptographic security enclave audit
     if (promptLower.includes("audit") || promptLower.includes("enclave") || promptLower.includes("sanitization")) {
+      updateTurnAction("Auditing DOM TreeWalker & UUID boundaries...", "Checking PII redactions", 2);
       setShowEnclaveInspector(true);
+      await new Promise((r) => setTimeout(r, 260));
+      updateTurnAction("Enclave cryptographic hash verified...", "DOM scrubbed", 4);
       setChatMessages((prev) => [
         ...prev,
         {
@@ -1843,20 +1989,24 @@ export default function App() {
 
     // High-Grade Scenario: Multi-step CDP automation workflow
     if (promptLower.includes("dispatch") || promptLower.includes("automation") || promptLower.includes("workflow") || promptLower.includes("cdp")) {
+      updateTurnAction("Analyzing interactive DOM tree...", "Scanning 45 interactive controls", 2);
+      await new Promise((r) => setTimeout(r, 220));
       const searchBox = currentPage.elements?.find((e) => e.role.includes("input") || e.role.includes("link"));
       const actionBtn = currentPage.elements?.find((e) => e.role.includes("button") && !e.label.toLowerCase().includes("submit"));
 
       if (searchBox) {
+        updateTurnAction(`Focusing [#${searchBox.id}] "${searchBox.label}"...`, `Coordinates (${searchBox.x}, ${searchBox.y})`, 3);
         await triggerSimulatedCDPAction(`Focus target: ${searchBox.label}`, searchBox.x, searchBox.y);
         if (currentPage.id === "ecommerce-demo") setSearchInputValue("Wireless Studio Headphones");
         setChatMessages((prev) => [
           ...prev,
           { role: "agent-badge", stepText: `Step 1: Dispatched native mouse click to [#${searchBox.id}] "${searchBox.label}" [CDP Trusted]`, isSuccess: true }
         ]);
-        await new Promise((r) => setTimeout(r, 380));
+        await new Promise((r) => setTimeout(r, 340));
       }
 
       if (actionBtn) {
+        updateTurnAction(`Dispatching hardware click to "${actionBtn.label}"...`, `Coordinates (${actionBtn.x}, ${actionBtn.y})`, 3);
         await triggerSimulatedCDPAction(`Activate: ${actionBtn.label}`, actionBtn.x, actionBtn.y);
         if (currentPage.id === "ecommerce-demo") setCartCount((c) => c + 1);
         setChatMessages((prev) => [
@@ -1865,6 +2015,7 @@ export default function App() {
         ]);
       }
 
+      updateTurnAction("Ephemeral JIT detached...", "Workflow completed in 38ms", 4);
       setChatMessages((prev) => [
         ...prev,
         {
@@ -1887,6 +2038,8 @@ export default function App() {
 
     // Scenario A: High-risk submit / payment checkout command
     if (promptLower.includes("submit") || promptLower.includes("pay") || promptLower.includes("order") || promptLower.includes("buy")) {
+      updateTurnAction("Evaluating transaction threshold...", "Checking security policy", 2);
+      await new Promise((r) => setTimeout(r, 200));
       const orderBtn = currentPage.elements?.find((e) => e.label.toLowerCase().includes("submit") || e.label.toLowerCase().includes("pay"));
       const targetX = orderBtn ? orderBtn.x : 320;
       const targetY = orderBtn ? orderBtn.y : 320;
@@ -1900,6 +2053,7 @@ export default function App() {
       );
 
       if (!approved) {
+        updateTurnAction("Action aborted by user...", "Safety gate enforced", 4);
         setChatMessages((prev) => [
           ...prev,
           { role: "agent-badge", stepText: "Action Denied by User: Click 'Submit Order' [Aborted]", isSuccess: false },
@@ -1908,7 +2062,9 @@ export default function App() {
         return;
       }
 
+      updateTurnAction("Dispatching approved click via CDP...", `Coordinates (${targetX}, ${targetY})`, 3);
       await triggerSimulatedCDPAction("Submit Order Button", targetX, targetY);
+      updateTurnAction("Hardware event settled...", "Detached JIT debugger", 4);
 
       setChatMessages((prev) => [
         ...prev,
@@ -1933,20 +2089,24 @@ export default function App() {
 
     // Scenario B: Search / Type interaction
     if (promptLower.includes("search") || promptLower.includes("type") || promptLower.includes("find headphones")) {
+      updateTurnAction("Locating search input node...", "Scanning form controls", 2);
+      await new Promise((r) => setTimeout(r, 220));
       const searchBox = currentPage.elements?.find((e) => e.role.includes("input"));
       const searchBtn = currentPage.elements?.find((e) => e.label.toLowerCase() === "search");
 
       if (searchBox) {
+        updateTurnAction("Focusing input & typing text...", "Dispatched hardware key events", 3);
         await triggerSimulatedCDPAction("Focus Search Input", searchBox.x, searchBox.y);
         setSearchInputValue("Wireless Studio Headphones");
         setChatMessages((prev) => [
           ...prev,
           { role: "agent-badge", stepText: `Step 1: Typed "Wireless Studio Headphones" into input [#${searchBox.id}] [CDP Trusted]`, isSuccess: true }
         ]);
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((r) => setTimeout(r, 350));
       }
 
       if (searchBtn) {
+        updateTurnAction("Clicking search submit button...", `Coordinates (${searchBtn.x}, ${searchBtn.y})`, 3);
         await triggerSimulatedCDPAction("Click Search Button", searchBtn.x, searchBtn.y);
         setChatMessages((prev) => [
           ...prev,
@@ -1954,6 +2114,7 @@ export default function App() {
         ]);
       }
 
+      updateTurnAction("Results filtered...", "DOM view synchronized", 4);
       setChatMessages((prev) => [
         ...prev,
         {
@@ -1978,13 +2139,17 @@ export default function App() {
 
     // Scenario C: Add to Cart interaction
     if (promptLower.includes("add to cart") || promptLower.includes("add to bag")) {
+      updateTurnAction("Locating purchase control [#24]...", "Coordinates (140, 320)", 2);
+      await new Promise((r) => setTimeout(r, 220));
       const addBtn = currentPage.elements?.find((e) => e.label.toLowerCase().includes("add to cart"));
       const tx = addBtn ? addBtn.x : 140;
       const ty = addBtn ? addBtn.y : 320;
 
+      updateTurnAction("Dispatching trusted mouse click...", `At (${tx}, ${ty})`, 3);
       await triggerSimulatedCDPAction("Add to Cart Button", tx, ty);
       setCartCount((c) => c + 1);
 
+      updateTurnAction("Cart state updated...", "Item committed", 4);
       setChatMessages((prev) => [
         ...prev,
         { role: "agent-badge", stepText: `Step 1: Clicked "Add to Cart" at (${tx}, ${ty}) [CDP Trusted]`, isSuccess: true },
@@ -2007,80 +2172,147 @@ export default function App() {
       return;
     }
 
-    // Scenario D: Informational Query with Citations (Transformer Paper or General)
-    const rawPayload = {
-      paragraphs: [
-        {
-          text: "The page provides comprehensive architecture specifications. Key mechanisms rely strictly on self-attention, dispensing with recurrence and convolutions entirely.",
-          citations: [
-            {
-              quote: "We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely.",
-              label: "Core Architecture"
-            },
-            {
-              quote: "Multi-Head Self-Attention: Allows the model to jointly attend to information from different representation subspaces at different positions.",
-              label: "Attention Mechanism"
-            }
-          ]
-        },
-        {
-          text: "Computational benchmarks establish superior efficiency across translation tasks. On the WMT 2014 English-to-German task, the Transformer Big model achieves 28.4 BLEU. Separately, the authors report training on 8 P100 GPUs for 3.5 days for the English-to-French benchmark (300,000 steps), while the base model required 12 hours.",
-          citations: [
-            {
-              quote: "On the WMT 2014 English-to-German translation task, the big transformer model achieves 28.4 BLEU, outperforming the best existing models by over 2 BLEU.",
-              label: "English->German Benchmark"
-            },
-            {
-              quote: "Training took 3.5 days on 8 P100 GPUs for the English-to-French big model (300,000 steps).",
-              label: "English->French Hardware & Duration"
-            }
-          ]
-        }
-      ],
-      atomicClaims: [
-        {
-          id: "claim-1",
-          subject: "Transformer",
-          assertion: "Relies solely on attention, dispensing with recurrence and convolutions",
-          contextScope: "Overall architecture",
-          evidenceIds: ["ev-1"],
-          evidenceQuotes: ["We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely."],
-          supportType: "direct" as const,
-          isDirectlySupported: true,
-          status: "verified" as const
-        },
-        {
-          id: "claim-2",
-          subject: "Transformer Big",
-          assertion: "Achieves 28.4 BLEU on English-to-German",
-          contextScope: "WMT 2014 English-to-German task",
-          evidenceIds: ["ev-2"],
-          evidenceQuotes: ["On the WMT 2014 English-to-German translation task, the big transformer model achieves 28.4 BLEU"],
-          supportType: "direct" as const,
-          isDirectlySupported: true,
-          status: "verified" as const
-        },
-        {
-          id: "claim-3",
-          subject: "Transformer Big",
-          assertion: "Training took 3.5 days on 8 P100 GPUs (300,000 steps)",
-          contextScope: "WMT 2014 English-to-French task",
-          evidenceIds: ["ev-3"],
-          evidenceQuotes: ["Training took 3.5 days on 8 P100 GPUs for the English-to-French big model"],
-          supportType: "direct" as const,
-          isDirectlySupported: true,
-          status: "verified" as const
-        }
-      ],
-      contextSeparationNotes: [
-        "Language direction English->German isolated from English->French.",
-        "Refused compound sentence combining English-to-German 28.4 BLEU with English-to-French 3.5-day duration."
-      ],
-      followUps: [
-        "Explain positional encodings simply",
-        "What hardware was used for training?"
-      ]
-    };
+    // Scenario D: Grounded Informational Query with Citations (Dynamic per active page)
+    updateTurnAction("Analyzing page context...", "", 2);
+    await new Promise((r) => setTimeout(r, 320));
+
+    let rawPayload: any;
+
+    if (currentPage.id === "ecommerce-demo") {
+      rawPayload = {
+        paragraphs: [
+          {
+            text: "Studio Pro Wireless Noise-Cancelling Headphones are currently priced at $349.00 and in stock for immediate dispatch with express overnight shipping included.",
+            citations: [
+              { quote: "Product: Studio Pro Wireless Noise-Cancelling Headphones ($349.00)", label: "Pricing & Product" },
+              { quote: "Status: In Stock (Ready to dispatch)", label: "Inventory Status" }
+            ]
+          },
+          {
+            text: "The audio hardware features 40mm Beryllium driver units with 99.4% acoustic distortion reduction, active hybrid noise cancellation using 6 beamforming microphones, and 45-hour playback battery life.",
+            citations: [
+              { quote: "40mm Beryllium driver units with 99.4% acoustic distortion reduction.", label: "Acoustic Hardware" },
+              { quote: "45-hour playback battery life with USB-C quick charge (10 mins gives 5 hours).", label: "Battery Performance" }
+            ]
+          }
+        ],
+        followUps: ["Add to Cart", "Check checkout safety policy", "/actions"]
+      };
+    } else if (currentPage.id === "security-sandbox") {
+      rawPayload = {
+        paragraphs: [
+          {
+            text: "The security lab documents an automated defense-in-depth pipeline that strips invisible DOM elements, purges zero-width injection characters, and redacts sensitive credentials inside a cryptographic UUID enclave.",
+            citations: [
+              { quote: "Sidekick operates an automated defensive pipeline that strips dangerous invisible payloads", label: "Defense Overview" },
+              { quote: "Purged by content.js DOM TreeWalker.", label: "DOM Sanitization" }
+            ]
+          },
+          {
+            text: "Live PII masking replaces valid credit card numbers with [REDACTED_CREDIT_CARD], SSNs with [REDACTED_SSN], and Gemini API keys with [REDACTED_API_KEY] before sending data to the model.",
+            citations: [
+              { quote: "Credit Card (Luhn Valid): 4532-0150-1234-5678 -> Redacted to [REDACTED_CREDIT_CARD]", label: "Credit Card Redaction" },
+              { quote: "Gemini API Key: AIzaSyA1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6 -> Redacted to [REDACTED_API_KEY]", label: "API Key Masking" }
+            ]
+          }
+        ],
+        followUps: ["/audit", "Inspect sanitized DOM enclave", "View injection defense rules"]
+      };
+    } else if (currentPage.id === "adversarial-conflation-bench") {
+      rawPayload = {
+        paragraphs: [
+          {
+            text: "The adversarial grounding benchmark validates anti-conflation rules. On the WMT 2014 English-to-German task, Transformer Big achieves 28.4 BLEU. Separately, the English-to-French big model achieved 41.8 BLEU following 3.5 days of training on 8 P100 GPUs.",
+            citations: [
+              { quote: "WMT 2014 English-to-German task: Transformer Big achieves 28.4 BLEU.", label: "English-to-German" },
+              { quote: "WMT 2014 English-to-French task: Transformer Big achieves 41.8 BLEU after training for 3.5 days on 8 P100 GPUs.", label: "English-to-French" }
+            ]
+          }
+        ],
+        contextSeparationNotes: [
+          "Preserved language direction boundary: English-to-German benchmark isolated from English-to-French hardware metrics."
+        ],
+        followUps: ["Run Regression Audit", "/actions", "/summarize"]
+      };
+    } else {
+      // General or Transformer Paper
+      rawPayload = {
+        paragraphs: [
+          {
+            text: "The page provides comprehensive architecture specifications. Key mechanisms rely strictly on self-attention, dispensing with recurrence and convolutions entirely.",
+            citations: [
+              {
+                quote: "We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely.",
+                label: "Core Architecture"
+              },
+              {
+                quote: "Multi-Head Self-Attention: Allows the model to jointly attend to information from different representation subspaces at different positions.",
+                label: "Attention Mechanism"
+              }
+            ]
+          },
+          {
+            text: "Computational benchmarks establish superior efficiency across translation tasks. On the WMT 2014 English-to-German task, the Transformer Big model achieves 28.4 BLEU. Separately, the authors report training on 8 P100 GPUs for 3.5 days for the English-to-French benchmark (300,000 steps), while the base model required 12 hours.",
+            citations: [
+              {
+                quote: "On the WMT 2014 English-to-German translation task, the big transformer model achieves 28.4 BLEU, outperforming the best existing models by over 2 BLEU.",
+                label: "English->German Benchmark"
+              },
+              {
+                quote: "Training took 3.5 days on 8 P100 GPUs for the English-to-French big model (300,000 steps).",
+                label: "English->French Hardware & Duration"
+              }
+            ]
+          }
+        ],
+        atomicClaims: [
+          {
+            id: "claim-1",
+            subject: "Transformer",
+            assertion: "Relies solely on attention, dispensing with recurrence and convolutions",
+            contextScope: "Overall architecture",
+            evidenceIds: ["ev-1"],
+            evidenceQuotes: ["We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely."],
+            supportType: "direct" as const,
+            isDirectlySupported: true,
+            status: "verified" as const
+          },
+          {
+            id: "claim-2",
+            subject: "Transformer Big",
+            assertion: "Achieves 28.4 BLEU on English-to-German",
+            contextScope: "WMT 2014 English-to-German task",
+            evidenceIds: ["ev-2"],
+            evidenceQuotes: ["On the WMT 2014 English-to-German translation task, the big transformer model achieves 28.4 BLEU"],
+            supportType: "direct" as const,
+            isDirectlySupported: true,
+            status: "verified" as const
+          },
+          {
+            id: "claim-3",
+            subject: "Transformer Big",
+            assertion: "Training took 3.5 days on 8 P100 GPUs (300,000 steps)",
+            contextScope: "WMT 2014 English-to-French task",
+            evidenceIds: ["ev-3"],
+            evidenceQuotes: ["Training took 3.5 days on 8 P100 GPUs for the English-to-French big model"],
+            supportType: "direct" as const,
+            isDirectlySupported: true,
+            status: "verified" as const
+          }
+        ],
+        contextSeparationNotes: [
+          "Language direction English->German isolated from English->French.",
+          "Refused compound sentence combining English-to-German 28.4 BLEU with English-to-French 3.5-day duration."
+        ],
+        followUps: [
+          "Explain positional encodings simply",
+          "What hardware was used for training?"
+        ]
+      };
+    }
+
+    updateTurnAction("Cross-checking citations against DOM text...", "Strict factual grounding pass", 4);
+    await new Promise((r) => setTimeout(r, 220));
 
     const { sanitizedPayload, auditReport } = validateAndEnforceGrounding(
       rawPayload,
@@ -2097,11 +2329,12 @@ export default function App() {
         }
       }
     ]);
-    setActiveFollowUps(["Explain positional encodings simply", "What hardware was used for training?"]);
+    setActiveFollowUps(rawPayload.followUps || ["/actions", "/summarize", "/copy"]);
   };
 
   const handleStop = () => {
     if (abortControllerRef.current) abortControllerRef.current.abort();
+    stopTurnTimer();
     setIsBusy(false);
   };
 
@@ -2214,85 +2447,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
             <span className="font-extralight text-sm tracking-[0.06em] text-white font-['Geist']">
               {customName || (hasCollapsed ? "Si" : "Super Intelligence")}
             </span>
-            <span className="px-2 py-0.5 text-[10px] font-mono uppercase bg-blue-950/40 text-sky-400 border border-sky-500/20 rounded-full flex items-center gap-1">
-              <Zap className="w-2.5 h-2.5" />
-              Option B · JIT CDP
-            </span>
-            <span className="px-2 py-0.5 text-[10px] font-mono uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full flex items-center gap-1">
-              <ShieldCheck className="w-2.5 h-2.5" />
-              Defense-in-Depth
-            </span>
           </div>
-        </div>
-
-        {/* View Switcher Tabs */}
-        <div className="flex items-center gap-1 bg-white/[0.03] p-1 rounded-lg border border-white/5 text-xs font-mono">
-          <button
-            onClick={() => setActiveTab("simulator")}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-all ${
-              activeTab === "simulator"
-                ? "bg-white/10 text-white shadow-sm"
-                : "text-[#777c8a] hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <Monitor className="w-3.5 h-3.5" />
-            <span>Option B Simulator</span>
-          </button>
-          <button
-            onClick={() => setActiveTab("grounding")}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-all ${
-              activeTab === "grounding"
-                ? "bg-sky-500/20 text-sky-300 border border-sky-500/30 shadow-sm"
-                : "text-[#777c8a] hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <CheckCircle2 className="w-3.5 h-3.5 text-sky-400" />
-            <span>Factual Grounding (8 Tests)</span>
-          </button>
-          <button
-            onClick={() => setActiveTab("security")}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-all ${
-              activeTab === "security"
-                ? "bg-white/10 text-white shadow-sm"
-                : "text-[#777c8a] hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <Shield className="w-3.5 h-3.5 text-sky-400" />
-            <span>Security Architecture</span>
-          </button>
-          <button
-            onClick={() => setActiveTab("code")}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-all ${
-              activeTab === "code"
-                ? "bg-white/10 text-white shadow-sm"
-                : "text-[#777c8a] hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <Code2 className="w-3.5 h-3.5" />
-            <span>Source Code (6 Files)</span>
-          </button>
-          <button
-            onClick={() => setActiveTab("install")}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-all ${
-              activeTab === "install"
-                ? "bg-white/10 text-white shadow-sm"
-                : "text-[#777c8a] hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>Install in Chrome</span>
-          </button>
-          <button
-            onClick={() => setActiveTab("publish")}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md transition-all ${
-              activeTab === "publish"
-                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shadow-sm"
-                : "text-[#777c8a] hover:text-white hover:bg-white/5"
-            }`}
-          >
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Ship & Publish Kit</span>
-          </button>
         </div>
 
         {/* 1-Click ZIP Download */}
@@ -2347,7 +2502,9 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
               {/* Chrome Mock Tab Bar */}
               <div className="flex items-center justify-between px-3 pt-2 bg-[#07080b] border-b border-white/5 shrink-0">
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5">
-                  {DEMO_PAGES.map((page) => (
+                  {DEMO_PAGES.filter(
+                    (page) => page.id !== "adversarial-conflation-bench" && page.id !== "ecommerce-demo"
+                  ).map((page) => (
                     <button
                       key={page.id}
                       onClick={() => setActivePageId(page.id)}
@@ -2793,24 +2950,68 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
 
                 {/* Messages List */}
                 <div className="space-y-4 w-full">
-                  {chatMessages.map((msg, mIdx) => (
-                    <div
-                      key={mIdx}
-                      className={`flex flex-col w-full ${msg.role === "user" ? "items-end" : "items-start"}`}
-                    >
-                      {msg.role === "user" ? (
-                        <div className="font-mono text-[12.5px] text-[#777c8a] text-right max-w-[85%] leading-relaxed whitespace-pre-wrap">
-                          {msg.text}
-                        </div>
-                      ) : msg.role === "agent-badge" ? (
+                  {chatMessages.map((msg, mIdx) => {
+                    const isLastUserMsg = msg.role === "user" && (
+                      mIdx === chatMessages.length - 1 ||
+                      chatMessages.slice(mIdx + 1).every((m) => m.role !== "user")
+                    );
+
+                    return (
+                      <div
+                        key={mIdx}
+                        className={`flex flex-col w-full ${msg.role === "user" ? "items-end" : "items-start"}`}
+                      >
+                        {msg.role === "user" ? (
+                          <div className="flex flex-col items-end w-full group">
+                            <div className="font-mono text-[12.5px] text-[#777c8a] text-right max-w-[85%] leading-relaxed whitespace-pre-wrap">
+                              {msg.text}
+                            </div>
+                            {/* Truthful Progress Indicator: Borderless, blends into UI theme, no model name, no timer, thin horizontal completion line matching conic gradient */}
+                            {isLastUserMsg && isBusy && (() => {
+                              const progressPercent =
+                                currentTurnAction.step === 1 ? 25 :
+                                currentTurnAction.step === 2 ? 55 :
+                                currentTurnAction.step === 3 ? 80 : 98;
+
+                              return (
+                                <div className="mt-2.5 flex flex-col items-end animate-in fade-in duration-200">
+                                  <div className="flex items-center gap-2 text-[#777c8a]">
+                                    <span className="font-mono text-[11px] font-extralight tracking-wide text-[#9da3b4]">
+                                      {currentTurnAction.action || "Processing..."}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={handleStop}
+                                      title="Stop execution"
+                                      className="w-3.5 h-3.5 flex items-center justify-center text-[#777c8a]/60 hover:text-[#eceef4] transition-colors cursor-pointer"
+                                    >
+                                      <Square className="w-2 h-2 fill-current" />
+                                    </button>
+                                  </div>
+
+                                  {/* Thinner single horizontal line beneath the text showing completion amount, matching conic specular white */}
+                                  <div className="w-44 h-[1px] bg-white/[0.06] mt-1 relative overflow-hidden">
+                                    <div
+                                      className="h-[1px] transition-all duration-300 ease-out"
+                                      style={{
+                                        width: `${progressPercent}%`,
+                                        background: "linear-gradient(90deg, rgba(255, 255, 255, 0.25) 0%, rgba(255, 255, 255, 0.85) 75%, rgba(255, 255, 255, 0.35) 100%)",
+                                      }}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        ) : msg.role === "agent-badge" ? (
                         <div
-                          className={`font-mono text-[11px] px-3 py-1.5 rounded-lg flex items-center gap-2 border ${
+                          className={`font-mono text-[11px] px-2.5 py-1 rounded-md flex items-center gap-2 ${
                             msg.isSuccess
-                              ? "bg-blue-500/10 text-sky-400 border-blue-500/20 shadow-[0_0_12px_rgba(37,99,235,0.2)]"
-                              : "bg-red-500/10 text-red-400 border-red-500/20"
+                              ? "bg-white/[0.02] text-[#9da3b4]"
+                              : "bg-red-500/10 text-red-400"
                           }`}
                         >
-                          <Zap className="w-3 h-3" />
+                          <Zap className="w-3 h-3 text-[#777c8a]" />
                           <span>{msg.stepText}</span>
                         </div>
                       ) : msg.isFallback ? (
@@ -2887,25 +3088,25 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                             </div>
                           ))}
 
-                          {/* Grounding Context Separation Policy Pill */}
+                          {/* Grounding Context Separation Policy - Borderless & blends into UI theme */}
                           {msg.data.contextSeparationNotes && msg.data.contextSeparationNotes.length > 0 && (
-                            <div className="my-2.5 p-2 rounded-lg bg-sky-950/40 border border-sky-500/30 text-[11px] font-mono text-sky-300 flex items-start gap-1.5 animate-in fade-in duration-200">
-                              <ShieldCheck className="w-3.5 h-3.5 text-sky-400 shrink-0 mt-0.5" />
+                            <div className="my-1.5 p-2 rounded-md bg-white/[0.02] text-[11px] font-mono text-[#777c8a] flex items-start gap-2 animate-in fade-in duration-200">
+                              <ShieldCheck className="w-3.5 h-3.5 text-[#777c8a] shrink-0 mt-0.5" />
                               <div className="leading-tight">
-                                <span className="font-semibold text-sky-200">Context Separation Policy: </span>
-                                {msg.data.contextSeparationNotes.join(" • ")}
+                                <span className="text-[#9da3b4]">Context Separation Policy: </span>
+                                <span>{msg.data.contextSeparationNotes.join(" • ")}</span>
                               </div>
                             </div>
                           )}
 
-                          {/* Latency Pipeline Telemetry Pill */}
+                          {/* Latency Pipeline Telemetry - Borderless & blends into UI theme */}
                           {msg.data.timings && (
-                            <div className="my-2 px-2.5 py-1.5 rounded-lg bg-emerald-950/30 border border-emerald-500/25 text-[10.5px] font-mono text-emerald-300 flex items-center justify-between gap-2 animate-in fade-in duration-150">
+                            <div className="my-1 px-2 py-1.5 rounded-md bg-white/[0.02] text-[10.5px] font-mono text-[#777c8a] flex items-center justify-between gap-2 animate-in fade-in duration-150">
                               <div className="flex items-center gap-1.5">
-                                <Zap className="w-3 h-3 text-emerald-400" />
+                                <Zap className="w-3 h-3 text-[#777c8a]" />
                                 <span>Pipeline: {msg.data.timings.totalServerMs}ms</span>
                               </div>
-                              <div className="text-[10px] text-emerald-400/80">
+                              <div className="text-[10px] text-[#777c8a]/80">
                                 Gemini: {msg.data.timings.geminiApiMs}ms • Grounding: {msg.data.timings.groundingValidationMs}ms
                               </div>
                             </div>
@@ -2971,8 +3172,9 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                           </div>
                         </div>
                       )}
-                    </div>
-                  ))}
+                      </div>
+                    );
+                  })}
 
                   {/* Follow-up suggestions */}
                   {activeFollowUps.length > 0 && !isBusy && (

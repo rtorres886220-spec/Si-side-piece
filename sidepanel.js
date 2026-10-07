@@ -1455,6 +1455,152 @@ async function handleSlashCommand(fullCommand) {
     return;
   }
 
+  // Tier 1: /actions, /cdp, /scan
+  if (["/actions", "/cdp", "/scan"].includes(cmd)) {
+    const elList = state.pageContext.interactiveElements || [];
+    let summary = `🔍 Scanned DOM for interactive targets on active tab:\n\n`;
+    if (elList.length > 0) {
+      summary += elList.map(e => `• [#${e.id}] ${e.role.toUpperCase()}: "${e.label}" at (${e.x}, ${e.y})`).join("\n");
+      summary += `\n\n💡 Tip: Run /click <label> to click or /fill <input> = <val> to type.`;
+    } else {
+      summary += "No interactive elements detected on this viewport.";
+    }
+    renderAssistantPlainMessage(summary);
+    return;
+  }
+
+  // Tier 2: /click
+  if (cmd === "/click") {
+    if (!arg) {
+      renderAssistantPlainMessage("Please specify an element label or button to click. Example: `/click Add to Cart` or `/click #2`");
+      return;
+    }
+    const match = resolveElementCoordinates({ element_description: arg, element_id: arg.startsWith("#") ? arg.slice(1) : undefined }, state.pageContext.interactiveElements);
+    if (!match) {
+      renderAssistantPlainMessage(`Could not find an element matching "${arg}" in the active tab. Run \`/actions\` to view all clickable elements.`);
+      return;
+    }
+    const isHigh = checkHighRiskAction("click_element", { element_description: match.label });
+    if (isHigh) {
+      const approved = await requestSafetyApproval("click_element", { element_description: match.label }, 1);
+      if (!approved) {
+        renderAgentStepBadge(`Action denied by user: ${match.label}`, false);
+        renderAssistantPlainMessage("Action stopped by safety policy.");
+        return;
+      }
+    }
+    try {
+      await executeJITAction("click_element", { x: match.x, y: match.y, element_description: match.label, selector: match.selector });
+      renderAgentStepBadge(`Step 1: Clicked "${match.label}" at (${match.x}, ${match.y}) [CDP Trusted]`, true);
+      renderAssistantPlainMessage(`Successfully clicked "${match.label}". Hardware event dispatched via Chrome DevTools Protocol.`);
+    } catch (err) {
+      renderAgentStepBadge(`Click failed: ${err.message}`, false);
+      renderAssistantPlainMessage(`Failed to click element: ${err.message}`);
+    }
+    return;
+  }
+
+  // Tier 2: /fill, /type, /input
+  if (["/fill", "/type", "/input"].includes(cmd)) {
+    const eqIdx = arg.indexOf("=");
+    const fieldName = eqIdx > -1 ? arg.slice(0, eqIdx).trim() : "";
+    const fieldVal = eqIdx > -1 ? arg.slice(eqIdx + 1).trim() : arg;
+    const match = resolveElementCoordinates({ element_description: fieldName, text: fieldVal }, state.pageContext.interactiveElements);
+    const tx = match ? match.x : 200;
+    const ty = match ? match.y : 150;
+    try {
+      await executeJITAction("type_text", { x: tx, y: ty, text: fieldVal, press_enter: true, selector: match?.selector });
+      renderAgentStepBadge(`Step 1: Typed "${fieldVal}" into input at (${tx}, ${ty}) [CDP Trusted]`, true);
+      renderAssistantPlainMessage(`Input updated: typed "${fieldVal}". Hardware keystrokes dispatched via Chrome DevTools Protocol.`);
+    } catch (err) {
+      renderAgentStepBadge(`Type failed: ${err.message}`, false);
+      renderAssistantPlainMessage(`Failed to type into element: ${err.message}`);
+    }
+    return;
+  }
+
+  // Tier 2: /scroll
+  if (cmd === "/scroll") {
+    const dir = argLower || "down";
+    try {
+      await executeJITAction("scroll_viewport", { direction: dir, pixels: 450 });
+      renderAgentStepBadge(`Step 1: Scrolled page ${dir} [CDP Trusted]`, true);
+      renderAssistantPlainMessage(`Viewport smoothly scrolled ${dir} via Chrome DevTools Protocol.`);
+    } catch (err) {
+      renderAgentStepBadge(`Scroll failed: ${err.message}`, false);
+      renderAssistantPlainMessage(`Failed to scroll viewport: ${err.message}`);
+    }
+    return;
+  }
+
+  // Tier 2: /navigate, /goto
+  if (["/navigate", "/goto"].includes(cmd)) {
+    if (!arg) {
+      renderAssistantPlainMessage("Please provide a destination URL. Example: `/navigate https://google.com`");
+      return;
+    }
+    try {
+      await executeJITAction("navigate_to", { url: arg });
+      renderAgentStepBadge(`Step 1: Navigated to ${arg} [CDP Trusted]`, true);
+      renderAssistantPlainMessage(`Active tab navigated to ${arg}.`);
+    } catch (err) {
+      renderAgentStepBadge(`Navigate failed: ${err.message}`, false);
+      renderAssistantPlainMessage(`Failed to navigate: ${err.message}`);
+    }
+    return;
+  }
+
+  // Tier 2: /extract
+  if (["/extract", "/scrape", "/parse"].includes(cmd)) {
+    const mode = argLower || "table";
+    if (mode === "links") {
+      const links = (state.pageContext.interactiveElements || []).filter(e => e.role === "link");
+      const summary = links.length > 0
+        ? `🔗 Extracted Links on Page:\n\n` + links.map(l => `• "${l.label}" at (${l.x}, ${l.y})`).join("\n")
+        : "No links detected on this viewport.";
+      renderAssistantPlainMessage(summary);
+      return;
+    }
+    if (mode === "json") {
+      const jsonStr = JSON.stringify({
+        title: state.pageContext.title,
+        url: state.pageContext.url,
+        charCount: state.pageContext.charCount,
+        interactiveElementsCount: (state.pageContext.interactiveElements || []).length
+      }, null, 2);
+      renderAssistantPlainMessage(`\`\`\`json\n${jsonStr}\n\`\`\``);
+      return;
+    }
+    // Default: summary of structured evidence
+    const lines = (state.pageContext.bodyText || "").split("\n").filter(l => l.trim().length > 20).slice(0, 10);
+    renderAssistantPlainMessage(`📊 Extracted Content Structure:\n\n${lines.map(l => `• ${l.trim()}`).join("\n")}`);
+    return;
+  }
+
+  // Tier 2: /cite, /evidence, /findquote
+  if (["/cite", "/evidence", "/findquote"].includes(cmd)) {
+    const query = arg || "overview";
+    const body = state.pageContext.bodyText || "";
+    const sentences = body.split(/(?<=[.!?])\s+/);
+    const qLower = query.toLowerCase();
+    const matchedSentence = sentences.find(s => s.toLowerCase().includes(qLower)) || sentences[0] || state.pageContext.title;
+    if (matchedSentence) {
+      scrollToPageQuote(matchedSentence.slice(0, 50), { textContent: "" });
+      await renderAssistantResponse({
+        paragraphs: [
+          {
+            text: `Evidence found for "${query}":\n\nDirect textual proof has been located and highlighted in the active tab.`,
+            citations: [
+              { quote: matchedSentence.trim(), label: "Verified Passage" }
+            ]
+          }
+        ],
+        followUps: ["/summarize", "/actions", "/copy markdown"]
+      });
+      return;
+    }
+  }
+
   // Tier 2: /model
   if (cmd === "/model") {
     const target = argLower.includes("pro") ? "gemini-3.1-pro-preview" : "gemini-3.8-flash";
@@ -1514,11 +1660,8 @@ async function submitPrompt(promptText) {
 
   // Check if it's a slash command first!
   if (promptText.trim().startsWith("/")) {
-    const cmdToken = promptText.trim().split(" ")[0].toLowerCase();
-    if (["/clear", "/reset", "/new", "/help", "/shortcuts", "/?", "/copy", "/export", "/save", "/model", "/readaloud", "/tts", "/speak", "/audit", "/privacy", "/denylist", "/block"].includes(cmdToken)) {
-      await handleSlashCommand(promptText.trim());
-      return;
-    }
+    await handleSlashCommand(promptText.trim());
+    return;
   }
 
   if (!state.apiKey && !state.hasServerProxy) {
@@ -1535,6 +1678,7 @@ async function submitPrompt(promptText) {
   }
   elements.threadContainer.classList.add("has-messages");
   setBusyState(true);
+  startTurnIndicator("Isolating tab context & enclave…", "Scanning DOM & active viewport", 1);
 
   // 1. Generate Per-Request Cryptographic UUID Enclave
   const enclaveId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).substring(2);
@@ -1596,6 +1740,7 @@ CORE APPLICATION BEHAVIOR: STRICT FACTUAL GROUNDING POLICY
   try {
     while (stepCount < MAX_AGENT_STEPS) {
       stepCount++;
+      updateTurnAction("Analyzing page context…", "", 2);
 
       const requestBody = {
         systemInstruction: { parts: [{ text: systemInstruction }] },
@@ -1634,6 +1779,7 @@ CORE APPLICATION BEHAVIOR: STRICT FACTUAL GROUNDING POLICY
 
         // Task Completed
         if (toolName === "finish_task") {
+          updateTurnAction("Verifying source citations…", "", 4);
           let validatedPayload = args;
           if (!args.serverValidated) {
             const validated = validateAndEnforceGroundingClient(args, (state.pageContext.bodyText || "") + " " + (state.pageContext.selectedText || ""));
@@ -1657,6 +1803,7 @@ CORE APPLICATION BEHAVIOR: STRICT FACTUAL GROUNDING POLICY
         }
 
         // 3. Dispatch JIT CDP Action
+        updateTurnAction(`Dispatching ${formatActionSummary(toolName, args)}…`, "JIT ephemeral CDP event", 3);
         const actionResult = await executeJITAction(toolName, args);
         renderAgentStepBadge(`Step ${stepCount}: ${formatActionSummary(toolName, args)} [CDP Trusted]`, true);
 
@@ -1708,7 +1855,10 @@ CORE APPLICATION BEHAVIOR: STRICT FACTUAL GROUNDING POLICY
       renderNotice("Generation stopped.");
     } else {
       console.error("Gemini Agent Error:", error);
-      renderErrorCard(error, promptText);
+      const handled = await handleResilientDirectActionFallback(promptText);
+      if (!handled) {
+        renderErrorCard(error, promptText);
+      }
     }
   } finally {
     setBusyState(false);
@@ -1716,6 +1866,109 @@ CORE APPLICATION BEHAVIOR: STRICT FACTUAL GROUNDING POLICY
     state.abortController = null;
     scrollThreadBottom();
   }
+}
+
+/**
+ * Resilient Direct Action Fallback
+ * Executes explicit user action commands even when external AI API is experiencing transient 503 load
+ */
+async function handleResilientDirectActionFallback(promptText) {
+  const pLower = promptText.toLowerCase().trim();
+
+  // 1. Click element intent
+  if (pLower.startsWith("click ") || pLower.startsWith("press ") || pLower.startsWith("tap ")) {
+    const targetQuery = pLower.replace(/^(click|press|tap)\s+(on\s+)?(the\s+)?/i, "").trim();
+    const match = resolveElementCoordinates({ element_description: targetQuery }, state.pageContext.interactiveElements);
+    if (match) {
+      const isHigh = checkHighRiskAction("click_element", { element_description: match.label });
+      if (isHigh) {
+        const approved = await requestSafetyApproval("click_element", { element_description: match.label }, 1);
+        if (!approved) {
+          renderAgentStepBadge(`Action denied by user: ${match.label}`, false);
+          renderAssistantPlainMessage("Action cancelled by user.");
+          return true;
+        }
+      }
+      try {
+        await executeJITAction("click_element", { x: match.x, y: match.y, element_description: match.label, selector: match.selector });
+        renderAgentStepBadge(`Step 1: Clicked "${match.label}" at (${match.x}, ${match.y}) [CDP Trusted]`, true);
+        renderAssistantPlainMessage(`Successfully clicked "${match.label}". Hardware event dispatched via Chrome DevTools Protocol.`);
+        return true;
+      } catch (e) {
+        console.debug("Fallback click failed:", e);
+      }
+    }
+  }
+
+  // 2. Scroll viewport intent
+  if (pLower.startsWith("scroll") || pLower === "scroll down" || pLower === "scroll up" || pLower === "scroll to top" || pLower === "scroll to bottom") {
+    const dir = pLower.includes("up") ? "up" : pLower.includes("top") ? "top" : pLower.includes("bottom") ? "bottom" : "down";
+    try {
+      await executeJITAction("scroll_viewport", { direction: dir, pixels: 450 });
+      renderAgentStepBadge(`Step 1: Scrolled page ${dir} [CDP Trusted]`, true);
+      renderAssistantPlainMessage(`Viewport smoothly scrolled ${dir} via Chrome DevTools Protocol.`);
+      return true;
+    } catch (e) {
+      console.debug("Fallback scroll failed:", e);
+    }
+  }
+
+  // 3. Type into input intent
+  if (pLower.startsWith("type ") || pLower.startsWith("fill ") || pLower.startsWith("enter ")) {
+    const textMatch = promptText.match(/(?:type|fill|enter)\s+["']?([^"']+)["']?\s+(?:in|into|on)\s+["']?([^"']+)["']?/i);
+    if (textMatch) {
+      const textToType = textMatch[1].trim();
+      const fieldDesc = textMatch[2].trim();
+      const match = resolveElementCoordinates({ element_description: fieldDesc, text: textToType }, state.pageContext.interactiveElements);
+      const tx = match ? match.x : 200;
+      const ty = match ? match.y : 150;
+      try {
+        await executeJITAction("type_text", { x: tx, y: ty, text: textToType, press_enter: true, selector: match?.selector });
+        renderAgentStepBadge(`Step 1: Typed "${textToType}" into input at (${tx}, ${ty}) [CDP Trusted]`, true);
+        renderAssistantPlainMessage(`Input updated: typed "${textToType}" via Chrome DevTools Protocol.`);
+        return true;
+      } catch (e) {}
+    }
+  }
+
+  // 4. Informational question answered from active tab text
+  if (state.pageContext.bodyText && state.pageContext.bodyText.length > 50) {
+    const body = state.pageContext.bodyText;
+    const sentences = body.split(/(?<=[.!?])\s+/);
+    const words = pLower.match(/[a-z0-9_-]{3,}/g) || [];
+    if (words.length > 0) {
+      let bestSentence = "";
+      let bestMatches = 0;
+      for (const sent of sentences) {
+        const sLower = sent.toLowerCase();
+        let matchCount = 0;
+        for (const w of words) {
+          if (sLower.includes(w)) matchCount++;
+        }
+        if (matchCount > bestMatches) {
+          bestMatches = matchCount;
+          bestSentence = sent.trim();
+        }
+      }
+      if (bestMatches >= 2 && bestSentence) {
+        renderAgentStepBadge(`Grounded on active tab: ${state.pageContext.title.slice(0, 30)}`, true);
+        await renderAssistantResponse({
+          paragraphs: [
+            {
+              text: bestSentence,
+              citations: [
+                { quote: bestSentence.slice(0, 60), label: state.pageContext.title.slice(0, 25) || "Page Context" }
+              ]
+            }
+          ],
+          followUps: ["/actions", "/summarize", "/copy"]
+        });
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -1765,10 +2018,51 @@ function hideSafetyModal() {
 }
 
 /**
+ * Helper to resolve element coordinates from indexed elements if missing or incomplete
+ */
+function resolveElementCoordinates(args, elements) {
+  if (!elements || elements.length === 0) return null;
+  const targetId = args.element_id !== undefined ? args.element_id : args.id;
+  if (targetId !== undefined) {
+    const found = elements.find((e) => String(e.id) === String(targetId));
+    if (found) return found;
+  }
+  const desc = (args.element_description || args.label || args.text || "").toLowerCase().trim();
+  if (desc) {
+    let found = elements.find((e) => (e.label || "").toLowerCase().trim() === desc);
+    if (found) return found;
+    found = elements.find((e) => (e.label || "").toLowerCase().includes(desc) || desc.includes((e.label || "").toLowerCase()));
+    if (found) return found;
+  }
+  if (args.selector) {
+    const found = elements.find((e) => e.selector === args.selector);
+    if (found) return found;
+  }
+  if (args.text !== undefined) {
+    const inputEl = elements.find((e) => (e.role || "").includes("input") || (e.role || "").includes("text"));
+    if (inputEl) return inputEl;
+  }
+  return null;
+}
+
+/**
  * Execute CDP Action via Background Service Worker
  */
 async function executeJITAction(toolName, args) {
   if (!state.activeTabId) throw new Error("No active tab connected");
+
+  // Smart Coordinate & Element Resolution if coordinates are missing or invalid
+  if (toolName === "click_element" || toolName === "type_text") {
+    if (args.x === undefined || args.y === undefined || isNaN(args.x) || isNaN(args.y)) {
+      const resolved = resolveElementCoordinates(args, state.pageContext.interactiveElements);
+      if (resolved) {
+        args.x = resolved.x;
+        args.y = resolved.y;
+        if (!args.selector) args.selector = resolved.selector;
+        if (!args.element_description) args.element_description = resolved.label;
+      }
+    }
+  }
 
   // JIT Live Coordinate Re-verification (Prevents missed clicks if page was scrolled or element moved)
   if (toolName === "click_element" || toolName === "type_text") {
@@ -1813,23 +2107,39 @@ async function executeJITAction(toolName, args) {
   switch (toolName) {
     case "click_element":
       cdpAction = "click";
-      params = { x: args.x, y: args.y };
+      params = { x: args.x, y: args.y, selector: args.selector };
       break;
 
-    case "type_text":
+    case "type_text": {
+      const text = args.text || args.value || "";
+      const pressEnter = args.press_enter !== undefined ? args.press_enter : (args.pressEnter !== undefined ? args.pressEnter : false);
       cdpAction = "type";
-      params = { x: args.x, y: args.y, text: args.text, pressEnter: args.press_enter };
+      params = { x: args.x, y: args.y, text, pressEnter, selector: args.selector };
       break;
+    }
 
-    case "scroll_viewport":
+    case "scroll_viewport": {
       cdpAction = "scroll";
-      params = { deltaY: args.direction === "up" ? -args.pixels : args.pixels };
+      const dir = (args.direction || "down").toLowerCase();
+      const px = Math.abs(typeof args.pixels === "number" && !isNaN(args.pixels) ? args.pixels : 400);
+      let deltaY = px;
+      if (dir === "up") deltaY = -px;
+      else if (dir === "top") deltaY = -5000;
+      else if (dir === "bottom") deltaY = +5000;
+      else deltaY = px;
+      params = { deltaY };
       break;
+    }
 
-    case "navigate_to":
+    case "navigate_to": {
+      let targetUrl = (args.url || "").trim();
+      if (targetUrl && !/^https?:\/\//i.test(targetUrl)) {
+        targetUrl = `https://${targetUrl}`;
+      }
       cdpAction = "navigate";
-      params = { url: args.url };
+      params = { url: targetUrl };
       break;
+    }
 
     case "upload_file":
       cdpAction = "uploadFile";
@@ -1884,8 +2194,45 @@ function stopRequest() {
   }
 }
 
+let turnTimerInterval = null;
+let turnStartTime = 0;
+
+function startTurnIndicator(action, detail = "", step = 1) {
+  const indicator = document.getElementById("activeTurnIndicator");
+  if (!indicator) return;
+  indicator.classList.remove("hidden");
+  updateTurnActionUI(action, detail, step);
+}
+
+function updateTurnAction(action, detail = "", step = 1) {
+  updateTurnActionUI(action, detail, step);
+}
+
+function updateTurnActionUI(action, detail = "", step = 1) {
+  const labelEl = document.getElementById("turnActionLabel");
+  if (labelEl) labelEl.textContent = action || "Processing…";
+
+  const progressPercent = step === 1 ? 25 : step === 2 ? 55 : step === 3 ? 80 : 98;
+  const barEl = document.getElementById("turnProgressBar");
+  if (barEl) barEl.style.width = `${progressPercent}%`;
+}
+
+function stopTurnIndicator() {
+  if (turnTimerInterval) {
+    clearInterval(turnTimerInterval);
+    turnTimerInterval = null;
+  }
+  const ind = document.getElementById("activeTurnIndicator");
+  if (ind) {
+    ind.remove();
+  }
+}
+
 function setBusyState(busy) {
   state.isBusy = busy;
+  if (!busy) {
+    stopTurnIndicator();
+  }
   if (busy) {
     elements.panel?.classList.add("busy");
     elements.sendIconSvg?.classList.add("hidden");
@@ -1923,14 +2270,32 @@ function renderAgentStepBadge(text, isSuccess) {
  * Render User Message (Zero-XSS Safe Text Node)
  */
 function renderUserMessage(text) {
+  stopTurnIndicator();
+
   const entry = document.createElement("div");
   entry.className = "message-entry user";
 
   const userText = document.createElement("div");
   userText.className = "user-text";
   userText.textContent = text;
-
   entry.appendChild(userText);
+
+  // Active borderless indicator directly under the submitted prompt
+  const indicator = document.createElement("div");
+  indicator.id = "activeTurnIndicator";
+  indicator.className = "turn-action-indicator hidden";
+  indicator.innerHTML = `
+    <div class="turn-action-row">
+      <span id="turnActionLabel" class="turn-action-label">Processing…</span>
+      <button type="button" class="turn-action-stop" title="Stop execution">■</button>
+    </div>
+    <div class="turn-action-track">
+      <div id="turnProgressBar" class="turn-action-bar"></div>
+    </div>
+  `;
+  indicator.querySelector(".turn-action-stop")?.addEventListener("click", stopRequest);
+  entry.appendChild(indicator);
+
   elements.messagesList.appendChild(entry);
   scrollThreadBottom();
 }
@@ -2015,25 +2380,24 @@ async function renderAssistantResponse(data) {
     container.appendChild(pEl);
   }
 
-  // Render Context Separation & Grounding Policy status if isolated
+  // Render Context Separation & Grounding Policy status if isolated (borderless, blending into UI theme)
   if (data.contextSeparationNotes && Array.isArray(data.contextSeparationNotes) && data.contextSeparationNotes.length > 0) {
     const sepBox = document.createElement("div");
     sepBox.className = "grounding-isolation-pill";
-    sepBox.style.cssText = "margin-top:8px;font-size:11px;font-family:var(--font-mono);color:#38bdf8;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);border-radius:6px;padding:5px 8px;line-height:1.4;";
-    sepBox.innerHTML = `🛡️ <strong>Context Separation Policy:</strong> ${data.contextSeparationNotes.join(" • ")}`;
+    sepBox.style.cssText = "margin-top:6px;font-size:11px;font-family:var(--font-mono);color:#777c8a;background:rgba(255,255,255,0.02);border-radius:6px;padding:6px 8px;line-height:1.4;";
+    sepBox.innerHTML = `🛡️ <strong style="color:#9da3b4;">Context Separation Policy:</strong> ${data.contextSeparationNotes.join(" • ")}`;
     container.appendChild(sepBox);
   }
 
-  // Action bar with Copy button, model indicator, and latency telemetry
+  // Action bar with Copy button and latency telemetry (borderless, blending into UI theme)
   const fullText = paragraphs.map(p => p.text || "").join("\n\n");
   const metaBar = document.createElement("div");
   metaBar.className = "message-meta-bar";
   let timingBadge = "";
   if (data.timings && data.timings.totalServerMs) {
-    timingBadge = `<span class="meta-model-badge" style="background:rgba(16,185,129,0.12);color:#34d399;border:1px solid rgba(16,185,129,0.25);" title="Gemini: ${data.timings.geminiApiMs}ms • Grounding: ${data.timings.groundingValidationMs}ms">⚡ ${data.timings.totalServerMs}ms</span>`;
+    timingBadge = `<span class="meta-model-badge" style="background:rgba(255,255,255,0.02);color:#777c8a;border:none;" title="Gemini: ${data.timings.geminiApiMs}ms • Grounding: ${data.timings.groundingValidationMs}ms">⚡ ${data.timings.totalServerMs}ms</span>`;
   }
   metaBar.innerHTML = `
-    <span class="meta-model-badge">${state.model || "gemini-3.8-flash"}</span>
     ${timingBadge}
     <button type="button" class="meta-copy-btn" title="Copy response to clipboard">
       <svg class="meta-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>

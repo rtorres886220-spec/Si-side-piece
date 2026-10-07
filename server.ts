@@ -177,6 +177,59 @@ ${GROUNDING_SYSTEM_POLICY}`;
         },
       };
 
+      const scrollViewportTool: FunctionDeclaration = {
+        name: 'scroll_viewport',
+        description: 'Scroll the active browser webpage viewport smoothly.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            direction: { type: Type.STRING, description: 'Direction: "down", "up", "top", or "bottom"' },
+            pixels: { type: Type.NUMBER, description: 'Pixel distance to scroll (e.g., 400)' },
+          },
+          required: ['direction'],
+        },
+      };
+
+      const typeTextTool: FunctionDeclaration = {
+        name: 'type_text',
+        description: 'Type text into an input field using native trusted hardware keystrokes.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            text: { type: Type.STRING, description: 'The text to type' },
+            x: { type: Type.NUMBER, description: 'X coordinate in pixels' },
+            y: { type: Type.NUMBER, description: 'Y coordinate in pixels' },
+            press_enter: { type: Type.BOOLEAN, description: 'Whether to press enter after typing' },
+          },
+          required: ['text'],
+        },
+      };
+
+      const navigateToTool: FunctionDeclaration = {
+        name: 'navigate_to',
+        description: 'Navigate the active browser tab to a new URL.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            url: { type: Type.STRING, description: 'Destination URL starting with http:// or https://' },
+          },
+          required: ['url'],
+        },
+      };
+
+      const uploadFileTool: FunctionDeclaration = {
+        name: 'upload_file',
+        description: 'Programmatically attach files to a file input element.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            element_selector: { type: Type.STRING, description: 'CSS selector for the input[type=file]' },
+            file_path: { type: Type.STRING, description: 'Local file path to attach' },
+          },
+          required: ['element_selector', 'file_path'],
+        },
+      };
+
       const finishTaskTool: FunctionDeclaration = {
         name: 'finish_task',
         description: 'Final source-grounded factual summary with atomic claims, context isolation, and verbatim citations.',
@@ -242,7 +295,7 @@ ${GROUNDING_SYSTEM_POLICY}`;
         systemInstruction,
         tools: [
           {
-            functionDeclarations: [clickElementTool, finishTaskTool],
+            functionDeclarations: [clickElementTool, scrollViewportTool, typeTextTool, navigateToTool, uploadFileTool, finishTaskTool],
           },
         ],
       };
@@ -341,8 +394,21 @@ ${GROUNDING_SYSTEM_POLICY}`;
 
       const candidate = response?.candidates?.[0];
       const groundingMetadata = candidate?.groundingMetadata;
-      const functionCalls = candidate?.content?.parts?.filter((p: any) => p.functionCall).map((p: any) => p.functionCall);
+      let functionCalls = candidate?.content?.parts?.filter((p: any) => p.functionCall).map((p: any) => p.functionCall) || [];
       const textParts = candidate?.content?.parts?.filter((p: any) => p.text).map((p: any) => p.text).join('\n');
+
+      // If model returned JSON in text format instead of explicit function call, parse into finish_task
+      if (functionCalls.length === 0 && textParts) {
+        const trimmed = textParts.trim().replace(/^```json\s*/i, '').replace(/^```\s*/, '').replace(/\s*```$/, '');
+        if (trimmed.startsWith('{') && (trimmed.includes('"paragraphs"') || trimmed.includes('"atomicClaims"'))) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed && (Array.isArray(parsed.paragraphs) || Array.isArray(parsed.atomicClaims))) {
+              functionCalls = [{ name: 'finish_task', args: parsed }];
+            }
+          } catch {}
+        }
+      }
 
       const sourceContext = `${currentPage?.title || ''}\n${currentPage?.content || currentPage?.bodyText || ''}\n${currentQuote || ''}`;
 

@@ -1826,6 +1826,90 @@ body {
   border-color: rgba(56, 189, 248, 0.45);
 }
 
+/* True-to-Action Real-Time Indicator under Submitted Prompt */
+@keyframes opticalPulseRing {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(0.85);
+    opacity: 0.9;
+  }
+}
+
+.turn-action-indicator {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-top: 7px;
+  animation: turnFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes turnFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.turn-action-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+.turn-action-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 200;
+  color: #9da3b4;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.turn-action-stop {
+  background: transparent;
+  border: none;
+  font-size: 8px;
+  color: rgba(119, 124, 138, 0.6);
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 2px;
+  line-height: 1;
+}
+
+.turn-action-stop:hover {
+  color: #eceef4;
+}
+
+.turn-action-track {
+  width: 176px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  margin-top: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+.turn-action-bar {
+  height: 1px;
+  width: 25%;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.25) 0%, rgba(255, 255, 255, 0.85) 75%, rgba(255, 255, 255, 0.35) 100%);
+  transition: width 0.3s ease-out;
+}
+
 
 
 

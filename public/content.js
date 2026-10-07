@@ -44,6 +44,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     return false;
   }
+
+  if (message.action === "executeDOMAction") {
+    try {
+      const result = executeDOMFallback(message.cdpAction, message.params);
+      sendResponse({ success: true, result });
+    } catch (e) {
+      sendResponse({ success: false, error: e.message });
+    }
+    return false;
+  }
 });
 
 // Cache & Mutation Tracking for Zero-Staleness Instant Extraction
@@ -751,4 +761,83 @@ function getLiveCoordinates(selector, fallbackX, fallbackY) {
     } catch {}
   }
   return { x: fallbackX, y: fallbackY, verified: false };
+}
+
+/**
+ * Direct DOM Fallback Dispatcher
+ * Triggered when Chrome DevTools (F12) is attached or CDP connection is blocked
+ */
+function executeDOMFallback(cdpAction, params) {
+  params = params || {};
+  let targetEl = null;
+  if (params.selector) {
+    try {
+      targetEl = document.querySelector(params.selector);
+    } catch {}
+  }
+  if (!targetEl && params.x !== undefined && params.y !== undefined && !isNaN(params.x) && !isNaN(params.y)) {
+    targetEl = document.elementFromPoint(params.x, params.y);
+  }
+
+  if (cdpAction === "click") {
+    if (targetEl) {
+      targetEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (typeof targetEl.focus === "function") targetEl.focus();
+      const clickEvt = new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        clientX: params.x || 0,
+        clientY: params.y || 0
+      });
+      targetEl.dispatchEvent(clickEvt);
+      if (typeof targetEl.click === "function") {
+        targetEl.click();
+      }
+      showActionIndicator(params.x || 100, params.y || 100, params.selector || targetEl.innerText || "clicked");
+      return { clicked: true, domFallback: true };
+    }
+    throw new Error("Target element not found for DOM click fallback");
+  }
+
+  if (cdpAction === "type") {
+    if (targetEl) {
+      targetEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (typeof targetEl.focus === "function") targetEl.focus();
+      const txt = params.text || "";
+      if ("value" in targetEl) {
+        targetEl.value = txt;
+      } else {
+        targetEl.innerText = txt;
+      }
+      targetEl.dispatchEvent(new Event("input", { bubbles: true }));
+      targetEl.dispatchEvent(new Event("change", { bubbles: true }));
+      if (params.pressEnter) {
+        targetEl.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+        targetEl.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+        if (targetEl.form && typeof targetEl.form.dispatchEvent === "function") {
+          targetEl.form.dispatchEvent(new Event("submit", { bubbles: true }));
+        }
+      }
+      showActionIndicator(params.x || 100, params.y || 100, `Typed: ${txt.slice(0, 20)}`);
+      return { typed: true, textLength: txt.length, domFallback: true };
+    }
+    throw new Error("Target element not found for DOM type fallback");
+  }
+
+  if (cdpAction === "scroll") {
+    const deltaY = params.deltaY || 300;
+    window.scrollBy({ top: deltaY, behavior: "smooth" });
+    return { scrolled: true, deltaY, domFallback: true };
+  }
+
+  if (cdpAction === "navigate") {
+    if (params.url) {
+      window.location.href = params.url;
+      return { navigated: true, url: params.url, domFallback: true };
+    }
+    throw new Error("Missing URL for navigation fallback");
+  }
+
+  throw new Error(`Unsupported fallback action: ${cdpAction}`);
 }

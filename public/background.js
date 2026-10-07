@@ -84,13 +84,16 @@ async function handleCDPAction({ tabId, action, params }) {
   }
 
   const debugTarget = { tabId };
+  let isDebuggerAttached = false;
 
   // 2. Just-In-Time (JIT) Attach
   try {
     await chrome.debugger.attach(debugTarget, "1.3");
+    isDebuggerAttached = true;
   } catch (attachErr) {
     if (attachErr.message && attachErr.message.includes("Another debugger is already attached")) {
-      throw new Error("Chrome DevTools (F12) is already open on this tab. Please close DevTools to allow Sidekick CDP automation.");
+      console.warn("DevTools (F12) is open. Gracefully dispatching via content script DOM action...");
+      return await dispatchDOMFallback(tabId, action, params);
     }
     console.debug("JIT Attach notice:", attachErr.message);
   }
@@ -99,7 +102,10 @@ async function handleCDPAction({ tabId, action, params }) {
     switch (action) {
       case "click": {
         // True OS-level trusted mouse click sequence
-        const { x, y } = params;
+        let { x, y } = params;
+        if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) {
+          return await dispatchDOMFallback(tabId, action, params);
+        }
         await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
           type: "mouseMoved",
           x,
@@ -126,7 +132,9 @@ async function handleCDPAction({ tabId, action, params }) {
       case "type": {
         // Focus coordinates first, then dispatch trusted keyboard events
         const { x, y, text, pressEnter } = params;
-        if (x !== undefined && y !== undefined) {
+        if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) {
+          return await dispatchDOMFallback(tabId, action, params);
+        }
           await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
             type: "mousePressed",
             x,
@@ -142,7 +150,6 @@ async function handleCDPAction({ tabId, action, params }) {
             button: "left",
             clickCount: 1
           });
-        }
 
         // Fast native CDP text insertion
         if (text) {
@@ -243,12 +250,32 @@ async function handleCDPAction({ tabId, action, params }) {
     }
   } finally {
     // 3. Ephemeral JIT Detach immediately to hide the yellow banner
-    try {
-      await chrome.debugger.detach(debugTarget);
-    } catch (detachErr) {
-      console.debug("JIT Detach notice:", detachErr.message);
+    if (isDebuggerAttached) {
+      try {
+        await chrome.debugger.detach(debugTarget);
+      } catch (detachErr) {
+        console.debug("JIT Detach notice:", detachErr.message);
+      }
     }
   }
+}
+
+/**
+ * Dispatch DOM Fallback directly to content script
+ */
+async function dispatchDOMFallback(tabId, action, params) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, { action: "executeDOMAction", cdpAction: action, params }, (res) => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        reject(new Error(err.message));
+      } else if (!res || !res.success) {
+        reject(new Error(res?.error || "DOM action execution failed"));
+      } else {
+        resolve(res.result);
+      }
+    });
+  });
 }
 
 /**
