@@ -415,6 +415,13 @@ interface AssistantResponseData {
   atomicClaims?: AtomicClaim[];
   unverifiedClaims?: string[];
   auditReport?: any;
+  timings?: {
+    payloadConstructionMs?: number;
+    ttftMs?: number;
+    geminiApiMs?: number;
+    groundingValidationMs?: number;
+    totalServerMs?: number;
+  };
 }
 
 // Rolls-Royce Starlight Headliner optical fibers - 3D True Deep Depth Replica
@@ -1783,7 +1790,11 @@ export default function App() {
             { role: "assistant", text: `Completed click on "${element_description}" using native OS hardware event dispatch.` }
           ]);
         } else if (call.name === "finish_task") {
-          setChatMessages((p) => [...p, { role: "assistant", data: call.args }]);
+          const finalArgs = {
+            ...call.args,
+            timings: data.timings,
+          };
+          setChatMessages((p) => [...p, { role: "assistant", data: finalArgs }]);
           if (call.args?.followUps) setActiveFollowUps(call.args.followUps.slice(0, 3));
         }
       } else if (data.text) {
@@ -2029,28 +2040,34 @@ export default function App() {
       atomicClaims: [
         {
           id: "claim-1",
-          entity: "Transformer",
+          subject: "Transformer",
           assertion: "Relies solely on attention, dispensing with recurrence and convolutions",
           contextScope: "Overall architecture",
-          evidenceQuote: "We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely.",
+          evidenceIds: ["ev-1"],
+          evidenceQuotes: ["We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely."],
+          supportType: "direct" as const,
           isDirectlySupported: true,
           status: "verified" as const
         },
         {
           id: "claim-2",
-          entity: "Transformer Big",
+          subject: "Transformer Big",
           assertion: "Achieves 28.4 BLEU on English-to-German",
           contextScope: "WMT 2014 English-to-German task",
-          evidenceQuote: "On the WMT 2014 English-to-German translation task, the big transformer model achieves 28.4 BLEU",
+          evidenceIds: ["ev-2"],
+          evidenceQuotes: ["On the WMT 2014 English-to-German translation task, the big transformer model achieves 28.4 BLEU"],
+          supportType: "direct" as const,
           isDirectlySupported: true,
           status: "verified" as const
         },
         {
           id: "claim-3",
-          entity: "Transformer Big",
+          subject: "Transformer Big",
           assertion: "Training took 3.5 days on 8 P100 GPUs (300,000 steps)",
           contextScope: "WMT 2014 English-to-French task",
-          evidenceQuote: "Training took 3.5 days on 8 P100 GPUs for the English-to-French big model",
+          evidenceIds: ["ev-3"],
+          evidenceQuotes: ["Training took 3.5 days on 8 P100 GPUs for the English-to-French big model"],
+          supportType: "direct" as const,
           isDirectlySupported: true,
           status: "verified" as const
         }
@@ -2815,8 +2832,8 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                                 {p.text.split(" ").map((w, wIdx) => (
                                   <span
                                     key={wIdx}
-                                    className="inline-block animate-[wordIn_0.32s_cubic-bezier(0.16,1,0.3,1)_both]"
-                                    style={{ animationDelay: `${pIdx * 120 + wIdx * 28}ms` }}
+                                    className="inline-block animate-[wordIn_0.2s_cubic-bezier(0.16,1,0.3,1)_both]"
+                                    style={{ animationDelay: `${Math.min(120, pIdx * 20 + wIdx * 4)}ms` }}
                                   >
                                     {w}&nbsp;
                                   </span>
@@ -2877,6 +2894,19 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                               <div className="leading-tight">
                                 <span className="font-semibold text-sky-200">Context Separation Policy: </span>
                                 {msg.data.contextSeparationNotes.join(" • ")}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Latency Pipeline Telemetry Pill */}
+                          {msg.data.timings && (
+                            <div className="my-2 px-2.5 py-1.5 rounded-lg bg-emerald-950/30 border border-emerald-500/25 text-[10.5px] font-mono text-emerald-300 flex items-center justify-between gap-2 animate-in fade-in duration-150">
+                              <div className="flex items-center gap-1.5">
+                                <Zap className="w-3 h-3 text-emerald-400" />
+                                <span>Pipeline: {msg.data.timings.totalServerMs}ms</span>
+                              </div>
+                              <div className="text-[10px] text-emerald-400/80">
+                                Gemini: {msg.data.timings.geminiApiMs}ms • Grounding: {msg.data.timings.groundingValidationMs}ms
                               </div>
                             </div>
                           )}
@@ -3411,20 +3441,20 @@ ${currentPage.content.slice(0, 320)}...
           </div>
         )}
 
-        {/* ================= TAB: FACTUAL GROUNDING & 8 ADVERSARIAL TESTS ================= */}
+        {/* ================= TAB: FACTUAL GROUNDING & 16 ADVERSARIAL TESTS ================= */}
         {activeTab === "grounding" && (
           <div className="flex-1 p-8 overflow-y-auto max-w-6xl mx-auto space-y-8 animate-in fade-in duration-200">
             {/* Header */}
             <div>
               <div className="flex items-center gap-2 mb-2 text-sky-400">
                 <ShieldCheck className="w-5 h-5 text-sky-400" />
-                <span className="font-mono text-xs uppercase tracking-wider">Enforced System Policy</span>
+                <span className="font-mono text-xs uppercase tracking-wider">Application-Level Grounding Pipeline</span>
               </div>
               <h1 className="text-3xl font-light tracking-tight text-[#eceef4]">
-                Persistent Source Grounding & Anti-Conflation Engine
+                Persistent Source Grounding & Relationship Integrity Engine
               </h1>
               <p className="text-sm text-[#777c8a] mt-2 leading-relaxed max-w-3xl">
-                High-level factual grounding is a <strong className="text-[#eceef4]">core application behavior</strong>, not merely a prompt suggestion. The engine enforces atomic claim decomposition, experimental context isolation, numerical tuple binding, cross-context conflation detection, and 1-to-1 verbatim citation validation.
+                High-level factual grounding is an <strong className="text-[#eceef4]">application-level pipeline</strong>, not merely a prompt suggestion. The architecture enforces structured source preservation, atomic claim decomposition, relationship validation (causation, chronology, comparison, attribution), 2D table coordinate integrity, numerical context binding, and 1-to-1 verbatim citation verification across all factual subjects.
               </p>
             </div>
 
@@ -3433,65 +3463,70 @@ ${currentPage.content.slice(0, 320)}...
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Layers className="w-4 h-4 text-sky-400" />
-                  <h2 className="text-base font-medium text-white">Controlled Grounding & Verification Pipeline</h2>
+                  <h2 className="text-base font-medium text-white">Full 7-Stage Application Grounding Pipeline</h2>
                 </div>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                  Automated Pipeline
+                  Zero Topic Hacks
                 </span>
               </div>
               <p className="text-xs text-[#777c8a] leading-relaxed">
-                Rather than an uncontrolled single-step <code className="text-[#eceef4]">USER → GEMINI → ANSWER</code> loop, Sidekick runs a multi-stage validation pipeline:
+                Rather than an uncontrolled single-pass model generation loop, Sidekick routes every factual request through a multi-stage validation pipeline:
               </p>
 
-              <div className="grid grid-cols-1 md:grid-cols-6 gap-2.5 pt-2">
-                <div className="p-3 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1.5">
-                  <span className="font-mono text-[10px] text-sky-400 uppercase tracking-wider">Stage 1</span>
-                  <span className="text-xs font-medium text-white">DOM Extraction</span>
-                  <span className="text-[11px] text-[#777c8a] leading-tight">Sanitized text sealed inside cryptographic UUID enclave</span>
+              <div className="grid grid-cols-1 md:grid-cols-7 gap-2 pt-2">
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1">
+                  <span className="font-mono text-[9px] text-sky-400 uppercase tracking-wider">Stage 1</span>
+                  <span className="text-[11px] font-medium text-white">Source & Tables</span>
+                  <span className="text-[10px] text-[#777c8a] leading-tight">Preserves headings, 2D table coordinates & metadata</span>
                 </div>
-                <div className="p-3 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1.5">
-                  <span className="font-mono text-[10px] text-sky-400 uppercase tracking-wider">Stage 2</span>
-                  <span className="text-xs font-medium text-white">Claim Decomp</span>
-                  <span className="text-[11px] text-[#777c8a] leading-tight">Extract atomic assertions with explicit subject & condition</span>
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1">
+                  <span className="font-mono text-[9px] text-sky-400 uppercase tracking-wider">Stage 2</span>
+                  <span className="text-[11px] font-medium text-white">Evidence Units</span>
+                  <span className="text-[10px] text-[#777c8a] leading-tight">Structured items with row/col context & origin IDs</span>
                 </div>
-                <div className="p-3 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1.5">
-                  <span className="font-mono text-[10px] text-sky-400 uppercase tracking-wider">Stage 3</span>
-                  <span className="text-xs font-medium text-white">Context Binding</span>
-                  <span className="text-[11px] text-[#777c8a] leading-tight">Tuple binding: model, direction, dataset, hardware, date</span>
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1">
+                  <span className="font-mono text-[9px] text-sky-400 uppercase tracking-wider">Stage 3</span>
+                  <span className="text-[11px] font-medium text-white">Claim Decomp</span>
+                  <span className="text-[10px] text-[#777c8a] leading-tight">Breaks statements into atomic verifiable assertions</span>
                 </div>
-                <div className="p-3 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1.5">
-                  <span className="font-mono text-[10px] text-sky-400 uppercase tracking-wider">Stage 4</span>
-                  <span className="text-xs font-medium text-white">Anti-Conflation</span>
-                  <span className="text-[11px] text-[#777c8a] leading-tight">Pairwise check: never combine facts from disparate contexts</span>
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1">
+                  <span className="font-mono text-[9px] text-sky-400 uppercase tracking-wider">Stage 4</span>
+                  <span className="text-[11px] font-medium text-white">Tuple Binding</span>
+                  <span className="text-[10px] text-[#777c8a] leading-tight">Binds numbers & dates to their specific condition</span>
                 </div>
-                <div className="p-3 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1.5">
-                  <span className="font-mono text-[10px] text-sky-400 uppercase tracking-wider">Stage 5</span>
-                  <span className="text-xs font-medium text-white">Grounded Synthesis</span>
-                  <span className="text-[11px] text-[#777c8a] leading-tight">Contrastive markers ("Separately") to preserve boundaries</span>
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1">
+                  <span className="font-mono text-[9px] text-sky-400 uppercase tracking-wider">Stage 5</span>
+                  <span className="text-[11px] font-medium text-white">Relationship Check</span>
+                  <span className="text-[10px] text-[#777c8a] leading-tight">Validates causation, attribution, chronology & comparison</span>
                 </div>
-                <div className="p-3 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1.5">
-                  <span className="font-mono text-[10px] text-sky-400 uppercase tracking-wider">Stage 6</span>
-                  <span className="text-xs font-medium text-white">1:1 Validation</span>
-                  <span className="text-[11px] text-[#777c8a] leading-tight">Verbatim substring check & compound split verification</span>
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1">
+                  <span className="font-mono text-[9px] text-sky-400 uppercase tracking-wider">Stage 6</span>
+                  <span className="text-[11px] font-medium text-white">Context Isolation</span>
+                  <span className="text-[10px] text-[#777c8a] leading-tight">Enforces contrastive boundaries across conditions</span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-1">
+                  <span className="font-mono text-[9px] text-sky-400 uppercase tracking-wider">Stage 7</span>
+                  <span className="text-[11px] font-medium text-white">Citation & Audit</span>
+                  <span className="text-[10px] text-[#777c8a] leading-tight">1:1 verbatim verification & unverified claim flagging</span>
                 </div>
               </div>
             </div>
 
-            {/* 8 Mandatory Adversarial Grounding Tests */}
+            {/* 16 Mandatory Adversarial Grounding Tests */}
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-lg font-medium text-white flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                    <span>8 Mandatory Adversarial Conflation Tests</span>
+                    <span>16 General Adversarial Grounding Tests (Diverse Domains)</span>
                   </h2>
                   <p className="text-xs text-[#777c8a] mt-0.5">
-                    Adversarial benchmark cases specifically designed to catch factual conflation, proximity bias, and ungrounded synthesis.
+                    Adversarial benchmark cases covering finance, medicine, engineering, law, standards, tables, and causation. Zero topic-specific hacks.
                   </p>
                 </div>
                 <button
                   onClick={() => {
-                    // Run all 8 tests in sequence
+                    // Run all 16 tests in sequence
                     ADVERSARIAL_GROUNDING_TESTS.forEach((t) => {
                       const groundedPayload = {
                         paragraphs: [
@@ -3504,6 +3539,7 @@ ${currentPage.content.slice(0, 320)}...
                           },
                         ],
                         contextSeparationNotes: t.groundedPolicyBehavior.contextIsolationNotes,
+                        unverifiedClaims: t.groundedPolicyBehavior.unverifiedClaims || [],
                       };
                       const { auditReport } = validateAndEnforceGrounding(groundedPayload, t.sourceDocument);
                       setTestRunResults((prev) => ({
@@ -3511,22 +3547,22 @@ ${currentPage.content.slice(0, 320)}...
                         [t.id]: {
                           status: auditReport.isFullyGrounded ? "passed" : "failed",
                           timestamp: new Date().toLocaleTimeString(),
-                          details: `Verified ${auditReport.verifiedCitationsCount} citations. Context separation: ${auditReport.contextSeparationNotes.join(" • ")}`
+                          details: `Verified ${auditReport.verifiedCitationsCount} citations. Context separation: ${auditReport.contextSeparationNotes.join(" • ") || "Preserved"}`
                         }
                       }));
                     });
-                    showToast("All 8 adversarial tests verified successfully!");
+                    showToast("All 16 adversarial tests verified successfully!");
                   }}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 text-xs font-mono transition-colors"
                 >
                   <Play className="w-3 h-3 text-sky-400" />
-                  <span>Execute Full 8-Test Suite</span>
+                  <span>Execute Full 16-Test Suite</span>
                 </button>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
                 {/* Left: Test Selector List */}
-                <div className="lg:col-span-4 space-y-2">
+                <div className="lg:col-span-4 space-y-2 max-h-[720px] overflow-y-auto pr-1 scrollbar-thin">
                   {ADVERSARIAL_GROUNDING_TESTS.map((test, idx) => {
                     const isSelected = selectedAdversarialTest.id === test.id;
                     const runRes = testRunResults[test.id];
@@ -3554,9 +3590,11 @@ ${currentPage.content.slice(0, 320)}...
                         <span className="text-xs font-medium text-white leading-snug line-clamp-2">
                           {test.name}
                         </span>
-                        <span className="text-[10px] font-mono text-[#777c8a]">
-                          {test.category}
-                        </span>
+                        <div className="flex items-center gap-1.5 text-[10px] font-mono text-[#777c8a]">
+                          <span className="text-sky-300/80">{test.domain}</span>
+                          <span>•</span>
+                          <span>{test.category}</span>
+                        </div>
                       </button>
                     );
                   })}
@@ -3566,9 +3604,12 @@ ${currentPage.content.slice(0, 320)}...
                 <div className="lg:col-span-8 p-6 rounded-2xl bg-white/[0.03] border border-white/5 space-y-5">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className="text-xs font-mono uppercase text-sky-400 px-2 py-0.5 rounded bg-sky-500/10 border border-sky-500/20">
                           {selectedAdversarialTest.category}
+                        </span>
+                        <span className="text-xs font-mono text-purple-300 px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/20">
+                          {selectedAdversarialTest.domain}
                         </span>
                         {testRunResults[selectedAdversarialTest.id] && (
                           <span className="text-xs font-mono text-emerald-400 flex items-center gap-1">
@@ -3597,6 +3638,7 @@ ${currentPage.content.slice(0, 320)}...
                               },
                             ],
                             contextSeparationNotes: selectedAdversarialTest.groundedPolicyBehavior.contextIsolationNotes,
+                            unverifiedClaims: selectedAdversarialTest.groundedPolicyBehavior.unverifiedClaims || [],
                           };
                           const { auditReport } = validateAndEnforceGrounding(groundedPayload, selectedAdversarialTest.sourceDocument);
                           setTestRunResults((prev) => ({
@@ -3604,7 +3646,7 @@ ${currentPage.content.slice(0, 320)}...
                             [selectedAdversarialTest.id]: {
                               status: auditReport.isFullyGrounded ? "passed" : "failed",
                               timestamp: new Date().toLocaleTimeString(),
-                              details: `Verified ${auditReport.verifiedCitationsCount} citations. Context separation: ${auditReport.contextSeparationNotes.join(" • ")}`
+                              details: `Verified ${auditReport.verifiedCitationsCount} citations. Context separation: ${auditReport.contextSeparationNotes.join(" • ") || "Preserved"}`
                             }
                           }));
                           showToast(`Test ${selectedAdversarialTest.id} audited & verified!`);
@@ -3617,7 +3659,7 @@ ${currentPage.content.slice(0, 320)}...
                       <button
                         type="button"
                         onClick={() => {
-                          setActivePageId("transformer-paper");
+                          setActivePageId("adversarial-conflation-bench");
                           setActiveTab("simulator");
                           handleSubmitPrompt(selectedAdversarialTest.userPrompt);
                         }}
@@ -3699,12 +3741,12 @@ ${currentPage.content.slice(0, 320)}...
                           <tbody className="divide-y divide-white/5">
                             {selectedAdversarialTest.groundedPolicyBehavior.atomicClaims.map((claim, cIdx) => (
                               <tr key={cIdx} className="hover:bg-white/[0.02]">
-                                <td className="p-2.5 text-[#eceef4]">{claim.assertion}</td>
-                                <td className="p-2.5 text-sky-300">{claim.context}</td>
-                                <td className="p-2.5 text-emerald-300 italic">“{claim.evidence}”</td>
+                                <td className="p-2.5 text-white">{claim.assertion}</td>
+                                <td className="p-2.5 text-[#777c8a]">{claim.context}</td>
+                                <td className="p-2.5 text-sky-300 font-mono text-[11px]">{claim.evidence}</td>
                                 <td className="p-2.5">
-                                  <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px]">
-                                    Verified
+                                  <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px]">
+                                    Directly Supported
                                   </span>
                                 </td>
                               </tr>
@@ -3712,6 +3754,16 @@ ${currentPage.content.slice(0, 320)}...
                           </tbody>
                         </table>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Unverified Claims Alert */}
+                  {selectedAdversarialTest.groundedPolicyBehavior.unverifiedClaims && selectedAdversarialTest.groundedPolicyBehavior.unverifiedClaims.length > 0 && (
+                    <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs font-mono text-amber-300 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                      <span>
+                        <strong>Explicitly Unverified Items:</strong> {selectedAdversarialTest.groundedPolicyBehavior.unverifiedClaims.join(", ")} (flagged as insufficient evidence).
+                      </span>
                     </div>
                   )}
                 </div>

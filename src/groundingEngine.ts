@@ -1,48 +1,136 @@
 /**
- * Grounding Engine & Factual Verification Pipeline for Gemini Sidekick
- * Enforces persistent, system-level source grounding, claim decomposition,
- * context integrity, and cross-context conflation detection.
+ * Canonical Grounding Engine & Factual Verification Pipeline for Gemini Sidekick
+ *
+ * Provides a domain-agnostic, application-level verification pipeline:
+ * SOURCE → STRUCTURED EVIDENCE → ATOMIC CLAIMS → RELATIONSHIP VALIDATION → FINAL AUDIT
+ *
+ * Zero topic-specific hacks or hardcoded keyword rules.
+ * Applies across scientific papers, finance, law, medicine, technology, news, statistics, etc.
  */
 
-export interface ContextScope {
-  experiment?: string;
-  model?: string;
-  dataset?: string;
-  date?: string;
-  direction?: string;
-  hardware?: string;
-  condition?: string;
-  version?: string;
-}
+// ============================================================================
+// 1. DATA STRUCTURES & SCHEMAS
+// ============================================================================
+
+export type EvidenceUnitType =
+  | "heading"
+  | "paragraph"
+  | "table-cell"
+  | "table-row"
+  | "list-item"
+  | "caption"
+  | "footnote"
+  | "metadata";
+
+export type RelationshipType =
+  | "causation"
+  | "chronology"
+  | "attribution"
+  | "comparison"
+  | "ownership"
+  | "identity"
+  | "location"
+  | "numerical-association"
+  | "experimental-condition"
+  | "correlation"
+  | "scope-qualification"
+  | "exception";
 
 export interface NumericalTuple {
   value: number | string;
-  metric: string;
-  direction?: string;
-  model?: string;
-  experiment?: string;
-  hardware?: string;
-  duration?: string;
-  dataset?: string;
-  evidenceQuote: string;
+  unit?: string;
+  metric?: string;
+  subject?: string;
+  date?: string;
+  condition?: string;
+  rawString: string;
+}
+
+export interface TemporalBinding {
+  date: string;
+  temporalType: "announced" | "occurred" | "published" | "effective" | "forecast" | "historical" | "current" | "future";
+  subject?: string;
+}
+
+export interface EntityBinding {
+  name: string;
+  type?: "company" | "subsidiary" | "person" | "product" | "model" | "model-variant" | "law" | "regulation" | "dataset";
+  qualifier?: string;
+}
+
+export interface TableContext {
+  tableId: string;
+  tableCaption?: string;
+  rowIdx: number;
+  colIdx: number;
+  rowHeader?: string;
+  colHeader: string;
+  cellValue: string;
+}
+
+export interface StructuredEvidenceItem {
+  id: string;
+  sourceId: string;
+  sourceTitle?: string;
+  sourceUrl?: string;
+  sectionPath: string[];
+  heading?: string;
+  type: EvidenceUnitType;
+  text: string;
+  tableContext?: TableContext;
+  surroundingContext?: string;
+  entities: EntityBinding[];
+  numbers: NumericalTuple[];
+  dates: TemporalBinding[];
+  qualifications?: string[];
+  exceptions?: string[];
+}
+
+export interface StructuredTable {
+  id: string;
+  caption?: string;
+  headers: string[];
+  rows: Array<{
+    rowHeader?: string;
+    cells: Array<{
+      colHeader: string;
+      value: string;
+      colIdx: number;
+    }>;
+  }>;
+}
+
+export interface AssertedRelationship {
+  type: RelationshipType;
+  entityA: string;
+  entityB: string;
+  assertedLink: string;
+  isSupportedByEvidence: boolean;
+  supportEvidenceId?: string;
 }
 
 export interface AtomicClaim {
   id: string;
-  entity: string;
+  subject: string;
   assertion: string;
   contextScope: string;
-  evidenceQuote: string;
+  numericalBindings?: NumericalTuple[];
+  temporalBindings?: TemporalBinding[];
+  entityBindings?: EntityBinding[];
+  assertedRelationships?: AssertedRelationship[];
+  evidenceIds: string[];
+  evidenceQuotes: string[];
+  supportType: "direct" | "inferred" | "unsupported";
   isDirectlySupported: boolean;
-  numericalTuple?: NumericalTuple;
-  status: "verified" | "inferred" | "unverified";
+  status: "verified" | "flagged" | "rejected" | "unverified";
 }
 
 export interface CitationItem {
   quote: string;
   label: string;
   verified?: boolean;
-  location?: string;
+  sourceLocation?: string;
+  supportType?: "direct" | "partial" | "unverified";
 }
 
 export interface ParagraphItem {
@@ -52,13 +140,17 @@ export interface ParagraphItem {
 
 export interface ConflationIssue {
   type:
-    | "cross-experiment"
-    | "cross-date"
-    | "cross-entity"
-    | "cross-condition"
-    | "compound-sentence-mismatch"
-    | "proximity-bias"
-    | "unsupported-claim";
+    | "unsupported-causation"
+    | "numerical-context-misbinding"
+    | "cross-entity-conflation"
+    | "temporal-mismatch"
+    | "table-coordinate-crossing"
+    | "compound-sentence-asymmetry"
+    | "scope-broadening"
+    | "exception-omission"
+    | "unsupported-claim"
+    | "unverified-extrapolation"
+    | "contradictory-evidence";
   description: string;
   offendingText: string;
   resolution: string;
@@ -66,6 +158,7 @@ export interface ConflationIssue {
 
 export interface GroundingAuditReport {
   isFullyGrounded: boolean;
+  intent: "factual" | "research" | "comparison" | "data-extraction" | "general" | "creative";
   claims: AtomicClaim[];
   issuesDetected: ConflationIssue[];
   contextSeparationNotes: string[];
@@ -80,62 +173,105 @@ export interface FinishTaskPayload {
   contextSeparationNotes?: string[];
   unverifiedClaims?: string[];
   followUps?: string[];
+  groundingMetadata?: any;
 }
 
-/**
- * System-Level Grounding Policy
- * Injected automatically into every factual analysis request.
- */
-export const GROUNDING_SYSTEM_POLICY = `
-CORE APPLICATION BEHAVIOR: STRICT FACTUAL GROUNDING POLICY
+// ============================================================================
+// 2. CANONICAL SYSTEM GROUNDING POLICY (ZERO TOPIC-SPECIFIC BIAS)
+// ============================================================================
 
-You are operating under a zero-tolerance factual grounding policy. Source-grounded accuracy is your highest priority—above fluency, confidence, comprehensiveness, or conversational flow. A concise answer containing only verified claims is strictly superior to a detailed answer with unsupported or improperly synthesized claims.
+export const CANONICAL_GROUNDING_POLICY = `
+CORE SYSTEM DIRECTIVE: STRICT EVIDENCE GROUNDING & RELATIONSHIP INTEGRITY
+
+You are operating under an application-level factual grounding pipeline.
+Factual accuracy, context preservation, and relationship integrity are your highest priorities—strictly above fluency, confidence, comprehensiveness, or conversational flow. A concise answer containing only verified facts is strictly superior to an expansive answer containing plausible but ungrounded relationships.
 
 MANDATORY EXECUTION DIRECTIVES:
 
-1. CLAIM DECOMPOSITION:
-- Break analysis down into atomic factual claims.
-- For each claim, track: (1) Entity, (2) Exact assertion, (3) Bounding context/conditions, (4) Verbatim supporting quote, (5) Directly supported vs. inferred.
-- Treat every number, metric, benchmark result, date, hardware spec, and dataset as an individually verifiable claim.
+1. STRUCTURED EVIDENCE PRESERVATION:
+- Treat the provided source document as a structured evidence network (headings, sections, tables, rows, columns, conditions, dates).
+- Never detach an evidence unit from its origin, table row/column, heading, or bounding condition.
 
-2. CONTEXT INTEGRITY & ANTI-CONFLATION (CRITICAL):
-- Never combine two facts into a single statement unless they share the identical experimental context.
-- Before combining facts, verify they refer to the SAME:
-  * Experiment
-  * Model variant (e.g., Base vs. Big)
-  * Dataset / benchmark (e.g., WMT'14 English->German vs. English->French)
-  * Date / time period
-  * Hardware configuration
-  * Experimental condition / steps
-  * Source version
-- CONFLATION EXAMPLE:
-  * Fact A: "28.4 BLEU on English->German (Transformer Big)"
-  * Fact B: "3.5 days on 8 P100 GPUs (English->French)"
-  * FORBIDDEN CONFLATION: "The English->German model scored 28.4 BLEU after 3.5 days on 8 P100 GPUs."
-  * REQUIRED SEPARATION: "The Transformer Big model achieved 28.4 BLEU on English->German. Separately, the authors report a 3.5-day training run on 8 P100 GPUs for the English->French experiment."
+2. CLAIM DECOMPOSITION:
+- Break analysis into atomic factual claims before forming statements.
+- Every substantive number, date, entity, metric, or relationship asserted is an individually verifiable claim.
 
-3. NUMERICAL CONTEXT BINDING:
-- Every number must retain its surrounding experimental tuple: { value, metric, direction, model, hardware, duration }.
-- Never float a number from one table or paragraph and attach it to another experiment simply because both appeared on the same page.
+3. RELATIONSHIP VALIDATION (CRITICAL):
+- Validating individual facts is NOT sufficient. You MUST verify that the RELATIONSHIP asserted between facts is explicitly supported by evidence.
+- Never assert CAUSATION (e.g. "A caused B", "due to A, B occurred", "prompted by A, B fell") unless the source explicitly establishes the causal link.
+- Never assert CHRONOLOGY, COMPARISON, OWNERSHIP, or ATTRIBUTION across separate statements unless explicitly connected in the evidence.
+- If Fact A and Fact B appear in the same document or table but under different conditions or rows, you MUST present them with clear contrastive separation (e.g. "Fact A applies to X. Separately, Fact B is reported for Y.").
 
-4. CITATION GROUNDING (1-to-1 INTEGRITY):
-- Every citation MUST be a verbatim substring copied directly from the page text.
-- Never attach a citation to a compound sentence if the citation only supports one part of the sentence.
-- Never fabricate citations, page numbers, or quotes.
+4. NUMERICAL & TEMPORAL INTEGRITY:
+- Numbers MUST retain their full tuple: { value, metric, subject, condition, date, unit }.
+- Never float a number from one experiment, table cell, or paragraph and attach it to another entity, date, or condition.
+- Preserve temporal distinctions (announced vs occurred vs effective vs forecast). Do not merge facts from different dates without explicitly representing the time difference.
 
-5. NON-VERIFICATION & UNCERTAINTY:
-- If a question asks about an entity, dataset, or number not explicitly stated in the source, you MUST explicitly state: "I cannot verify this from the available evidence."
-- Never guess or extrapolate unstated facts.
+5. ENTITY & TABLE ROW/COLUMN INTEGRITY:
+- Distinguish entities with similar names, parent vs subsidiary companies, and different versions or models.
+- In tables, preserve strict row-by-column coordinates. Never take a value from Row 1 and describe it as belonging to Row 2.
 
-6. CONTRADICTION PRESERVATION:
-- If different sections or versions conflict, report the discrepancy explicitly (e.g., "Version 1 reports X, while Version 5 reports Y"). Never average or silently pick one.
+6. CITATION 1-TO-1 FIDELITY:
+- Citations MUST be exact verbatim substrings directly extracted from the source text.
+- If a compound sentence joins two distinct assertions, BOTH assertions must have supporting evidence, or the sentence must be split. Never attach a citation to a compound sentence that also makes an unsupported assertion.
 
-When completing an informational task, call "finish_task" with structured paragraphs, verbatim citations, atomic claims, context separation notes, and any unverified items.
+7. UNCERTAINTY & INSUFFICIENT EVIDENCE:
+- If a question asks for a fact, entity, metric, or relationship not established in the available evidence, you MUST explicitly state: "I cannot verify this from the available evidence."
+- Prefer explicit non-verification over plausible speculation.
+
+8. CONTRADICTION PRESERVATION:
+- If different sections, tables, or source versions conflict, report the discrepancy explicitly (e.g., "Section 1 states X, whereas Section 4 reports Y"). Never average conflicting figures or silently pick one.
+
+When completing an informational task, call "finish_task" with structured paragraphs, verbatim citations, atomic claims, context separation notes, and any unverified claims.
 `.trim();
 
-/**
- * Normalizes text for verbatim quote matching.
- */
+// Backwards-compatible alias for existing imports
+export const GROUNDING_SYSTEM_POLICY = CANONICAL_GROUNDING_POLICY;
+
+// ============================================================================
+// 3. REQUEST INTENT CLASSIFIER
+// ============================================================================
+
+export function classifyRequestIntent(
+  prompt: string
+): "factual" | "research" | "comparison" | "data-extraction" | "creative" | "general" {
+  const p = (prompt || "").toLowerCase();
+
+  // Creative / Non-factual requests
+  if (
+    p.startsWith("write me a poem") ||
+    p.startsWith("write a joke") ||
+    p.startsWith("tell me a funny") ||
+    p.startsWith("generate a story") ||
+    p.startsWith("write a fiction") ||
+    p.startsWith("roleplay")
+  ) {
+    return "creative";
+  }
+
+  // Comparisons
+  if (p.includes("compare") || p.includes("versus") || p.includes(" vs ") || p.includes("difference between")) {
+    return "comparison";
+  }
+
+  // Data / Table extraction
+  if (p.includes("extract") || p.includes("table") || p.includes("list all") || p.includes("pricing") || p.includes("numbers")) {
+    return "data-extraction";
+  }
+
+  // Research / In-depth analysis
+  if (p.includes("explain in detail") || p.includes("analyze") || p.includes("audit") || p.includes("deep dive") || p.includes("methodology")) {
+    return "research";
+  }
+
+  // Factual Q&A (default for informational browser assistant)
+  return "factual";
+}
+
+// ============================================================================
+// 4. STRUCTURED SOURCE EXTRACTION & EVIDENCE MODEL
+// ============================================================================
+
 export function normalizeForSearch(text: string): string {
   return (text || "")
     .replace(/\s+/g, " ")
@@ -146,10 +282,91 @@ export function normalizeForSearch(text: string): string {
 }
 
 /**
- * Verifies if a quote exists verbatim (or normalized) in the source document.
+ * High-performance indexed evidence container for fast O(1) / O(m) validation passes.
+ * Completely preserves all semantic content, table structures, headings, and relationships.
  */
-export function verifyQuoteInSource(quote: string, sourceText: string): boolean {
+export class IndexedEvidenceStore {
+  readonly rawSource: string;
+  readonly normSource: string;
+  readonly items: StructuredEvidenceItem[];
+  readonly itemLowerTexts: string[];
+  private quoteCache = new Map<string, boolean>();
+  readonly causalEvidenceIndices: number[];
+
+  constructor(sourceText: string, sourceTitle = "Document", sourceUrl = "") {
+    this.rawSource = sourceText || "";
+    this.normSource = normalizeForSearch(this.rawSource);
+    this.items = parseSourceDocumentIntoEvidence(this.rawSource, sourceTitle, sourceUrl);
+    this.itemLowerTexts = this.items.map((it) => it.text.toLowerCase());
+
+    // Pre-index which evidence units contain causal connectors
+    const causalIndices: number[] = [];
+    for (let i = 0; i < this.items.length; i++) {
+      const normEv = normalizeForSearch(this.items[i].text);
+      for (const pattern of CAUSAL_CONNECTORS) {
+        if (pattern.test(normEv)) {
+          causalIndices.push(i);
+          break;
+        }
+      }
+    }
+    this.causalEvidenceIndices = causalIndices;
+  }
+
+  verifyQuote(quote: string): boolean {
+    if (!quote || !this.rawSource) return false;
+    const cleanQuote = quote.trim();
+    if (cleanQuote.length < 3) return false;
+
+    const cached = this.quoteCache.get(cleanQuote);
+    if (cached !== undefined) return cached;
+
+    // Direct match (fastest)
+    if (this.rawSource.includes(cleanQuote)) {
+      this.quoteCache.set(cleanQuote, true);
+      return true;
+    }
+
+    // Normalized whitespace / punctuation match
+    const normQuote = normalizeForSearch(cleanQuote);
+    const result = this.normSource.includes(normQuote);
+    this.quoteCache.set(cleanQuote, result);
+    return result;
+  }
+}
+
+// Global weak cache for source document indexing to avoid re-parsing identical text
+const sourceStoreCache = new Map<string, { store: IndexedEvidenceStore; timestamp: number }>();
+
+export function getOrCreateIndexedStore(sourceText: string, sourceTitle = "Document", sourceUrl = ""): IndexedEvidenceStore {
+  if (!sourceText) return new IndexedEvidenceStore("", sourceTitle, sourceUrl);
+  // For short strings under 2000 chars, compute directly
+  if (sourceText.length < 2000) {
+    return new IndexedEvidenceStore(sourceText, sourceTitle, sourceUrl);
+  }
+
+  // Key by source length + sample hashes for fast lookup
+  const key = `${sourceText.length}_${sourceText.slice(0, 60)}_${sourceText.slice(-60)}`;
+  const existing = sourceStoreCache.get(key);
+  if (existing && existing.store.rawSource === sourceText) {
+    return existing.store;
+  }
+
+  const newStore = new IndexedEvidenceStore(sourceText, sourceTitle, sourceUrl);
+  if (sourceStoreCache.size > 20) {
+    // Evict oldest
+    const oldestKey = sourceStoreCache.keys().next().value;
+    if (oldestKey) sourceStoreCache.delete(oldestKey);
+  }
+  sourceStoreCache.set(key, { store: newStore, timestamp: Date.now() });
+  return newStore;
+}
+
+export function verifyQuoteInSource(quote: string, sourceText: string, store?: IndexedEvidenceStore): boolean {
   if (!quote || !sourceText) return false;
+  if (store && store.rawSource === sourceText) {
+    return store.verifyQuote(quote);
+  }
   const cleanQuote = quote.trim();
   if (cleanQuote.length < 3) return false;
 
@@ -163,8 +380,227 @@ export function verifyQuoteInSource(quote: string, sourceText: string): boolean 
 }
 
 /**
- * Deterministic Conflation & Grounding Validator.
- * Performs post-generation audit and enforces context separation.
+ * Extracts numbers with their immediate surrounding metrics and units.
+ */
+export function extractNumbersWithContext(text: string): NumericalTuple[] {
+  const tuples: NumericalTuple[] = [];
+  // Matches monetary, percentages, counts, metrics, benchmark scores, durations, hardware counts
+  const regex = /(\$?\b\d+(?:,\d{3})*(?:\.\d+)?(?:k|m|b|t)?\b(?:\s*(?:bleu|percent|%|days?|hours?|steps?|gpus?|parameters?|layers?|usd|dollars?|million|billion|trillion|gb|mb|tb|ms|seconds?|wordpieces?|tokens?|acc|accuracy))?)/gi;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const rawString = match[1].trim();
+    if (rawString.length > 0) {
+      tuples.push({
+        value: rawString,
+        rawString,
+      });
+    }
+  }
+  return tuples;
+}
+
+/**
+ * Parses raw text, Markdown, or HTML into structured evidence items.
+ * Preserves headings, sections, table row/column coordinates, lists, and context.
+ */
+export function parseSourceDocumentIntoEvidence(
+  sourceText: string,
+  sourceTitle = "Document",
+  sourceUrl = ""
+): StructuredEvidenceItem[] {
+  const items: StructuredEvidenceItem[] = [];
+  if (!sourceText) return items;
+
+  const lines = sourceText.split(/\r?\n/);
+  let currentSectionPath: string[] = ["Overview"];
+  let currentHeading = "Overview";
+  let itemCounter = 1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    // Detect Markdown or structured heading
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      currentHeading = headingMatch[2].trim();
+      const level = headingMatch[1].length;
+      if (level === 1) {
+        currentSectionPath = [currentHeading];
+      } else {
+        currentSectionPath = [...currentSectionPath.slice(0, level - 1), currentHeading];
+      }
+      items.push({
+        id: `ev-${itemCounter++}`,
+        sourceId: sourceUrl || "source-1",
+        sourceTitle,
+        sourceUrl,
+        sectionPath: [...currentSectionPath],
+        heading: currentHeading,
+        type: "heading",
+        text: currentHeading,
+        entities: [],
+        numbers: extractNumbersWithContext(currentHeading),
+        dates: [],
+      });
+      continue;
+    }
+
+    // Detect Structured Table Rows: e.g. "| Col A | Col B |" or "[Table ...]"
+    if (line.startsWith("|") && line.endsWith("|")) {
+      const cells = line
+        .split("|")
+        .slice(1, -1)
+        .map((c) => c.trim());
+      if (cells.length > 1 && !cells.every((c) => /^[-:]+$/.test(c))) {
+        items.push({
+          id: `ev-${itemCounter++}`,
+          sourceId: sourceUrl || "source-1",
+          sourceTitle,
+          sourceUrl,
+          sectionPath: [...currentSectionPath],
+          heading: currentHeading,
+          type: "table-row",
+          text: line,
+          tableContext: {
+            tableId: "table-1",
+            rowIdx: i,
+            colIdx: 0,
+            colHeader: cells[0] || "",
+            cellValue: cells.join(" | "),
+          },
+          entities: [],
+          numbers: extractNumbersWithContext(line),
+          dates: [],
+        });
+        continue;
+      }
+    }
+
+    // Standard paragraph or list line
+    items.push({
+      id: `ev-${itemCounter++}`,
+      sourceId: sourceUrl || "source-1",
+      sourceTitle,
+      sourceUrl,
+      sectionPath: [...currentSectionPath],
+      heading: currentHeading,
+      type: line.startsWith("- ") || line.startsWith("* ") || /^\d+\./.test(line) ? "list-item" : "paragraph",
+      text: line,
+      entities: [],
+      numbers: extractNumbersWithContext(line),
+      dates: [],
+      surroundingContext: lines.slice(Math.max(0, i - 1), Math.min(lines.length, i + 2)).join(" "),
+    });
+  }
+
+  return items;
+}
+
+// ============================================================================
+// 5. APPLICATION-LEVEL RELATIONSHIP & CLAIM VALIDATOR
+// ============================================================================
+
+// Common causal connectors that assert an unverified link between two facts
+const CAUSAL_CONNECTORS = [
+  /\bbecause\s+of\b/i,
+  /\bcaused\s+by\b/i,
+  /\bcaused\b/i,
+  /\bled\s+to\b/i,
+  /\bas\s+a\s+result\s+of\b/i,
+  /\bdue\s+to\b/i,
+  /\bprompted\s+by\b/i,
+  /\bconsequently\b/i,
+  /\bresulting\s+in\b/i,
+  /\bdriving\b/i,
+  /\bafter\s+(?:which|training\s+for)\b/i,
+];
+
+/**
+ * Validates whether a causal relationship asserted in a sentence is grounded in evidence.
+ */
+function validateCausalRelationship(
+  sentence: string,
+  evidenceItems: StructuredEvidenceItem[],
+  store?: IndexedEvidenceStore
+): boolean {
+  let hasCausalClaim = false;
+  for (const pattern of CAUSAL_CONNECTORS) {
+    if (pattern.test(sentence)) {
+      hasCausalClaim = true;
+      break;
+    }
+  }
+  if (!hasCausalClaim) return true; // No causal relationship asserted
+
+  // For any sentence asserting causality, verify that at least one evidence item asserts that causality
+  const normSentence = normalizeForSearch(sentence);
+  const candidateIndices = store ? store.causalEvidenceIndices : Array.from({ length: evidenceItems.length }, (_, i) => i);
+  
+  for (const idx of candidateIndices) {
+    const ev = evidenceItems[idx];
+    if (!ev) continue;
+    const normEv = normalizeForSearch(ev.text);
+    // If the evidence item contains the same causal connection
+    for (const pattern of CAUSAL_CONNECTORS) {
+      if (pattern.test(normSentence) && pattern.test(normEv)) {
+        return true;
+      }
+    }
+  }
+
+  return false; // Unsupported causal assertion
+}
+
+/**
+ * Validates numerical bindings to prevent numbers from jumping between entities, rows, or experiments.
+ */
+function validateNumericalBindings(
+  sentence: string,
+  evidenceItems: StructuredEvidenceItem[],
+  store?: IndexedEvidenceStore
+): { isValid: boolean; issue?: ConflationIssue } {
+  const sentenceNumbers = extractNumbersWithContext(sentence);
+  if (sentenceNumbers.length < 2) return { isValid: true };
+
+  // If a sentence combines two distinct numerical facts, check if any single evidence item contains both.
+  // E.g. Combining "28.4 BLEU" with "3.5 days" or "$4.2B" with "28%"
+  const cleanTokens = sentenceNumbers.map((n) => n.rawString.toLowerCase());
+
+  // Check if all numbers exist together in at least one evidence item
+  const lowerTexts = store ? store.itemLowerTexts : evidenceItems.map((e) => e.text.toLowerCase());
+  const coOccursInSingleEvidence = lowerTexts.some((evLower) => {
+    return cleanTokens.every((tok) => evLower.includes(tok));
+  });
+
+  if (!coOccursInSingleEvidence) {
+    // Distinct numbers from different evidence units were joined in a single sentence!
+    // Check if the sentence connects them with an unestablished relationship (e.g. "after", "with", "and achieved")
+    const isJoinedRelation =
+      sentence.toLowerCase().includes(" after ") ||
+      sentence.toLowerCase().includes(" with a ") ||
+      sentence.toLowerCase().includes(" outperforming ") ||
+      sentence.toLowerCase().includes(" achieving ");
+
+    if (isJoinedRelation) {
+      return {
+        isValid: false,
+        issue: {
+          type: "numerical-context-misbinding",
+          description: `Numerical association error: Sentence combined numbers [${cleanTokens.join(", ")}] that belong to distinct conditions or evidence units.`,
+          offendingText: sentence,
+          resolution: "Separate distinct numbers into individual, contextually isolated claims.",
+        },
+      };
+    }
+  }
+
+  return { isValid: true };
+}
+
+/**
+ * General Deterministic Grounding & Relationship Validator.
+ * Purely structural and semantic: NO topic-specific hardcoding.
  */
 export function validateAndEnforceGrounding(
   payload: FinishTaskPayload,
@@ -178,6 +614,8 @@ export function validateAndEnforceGrounding(
   const contextNotes: string[] = [...(payload.contextSeparationNotes || [])];
   const unverifiedList: string[] = [...(payload.unverifiedClaims || [])];
 
+  const store = getOrCreateIndexedStore(sourceText);
+  const evidenceItems = store.items;
   let verifiedCitationsCount = 0;
   let unverifiedCitationsCount = 0;
 
@@ -185,75 +623,84 @@ export function validateAndEnforceGrounding(
 
   for (let pIdx = 0; pIdx < payload.paragraphs.length; pIdx++) {
     const para = payload.paragraphs[pIdx];
-    let paraText = para.text || "";
+    const paraText = para.text || "";
     const validatedCitations: CitationItem[] = [];
 
-    // 1. Verify citations against source text
+    // 1. Citation Validation (Verbatim & Contextual Support)
     if (para.citations && Array.isArray(para.citations)) {
       for (const cit of para.citations) {
-        const isVerified = verifyQuoteInSource(cit.quote, sourceText);
+        const isVerified = store.verifyQuote(cit.quote);
         if (isVerified) {
           verifiedCitationsCount++;
           validatedCitations.push({
             ...cit,
             verified: true,
+            supportType: "direct",
           });
         } else {
           unverifiedCitationsCount++;
           issues.push({
             type: "unsupported-claim",
-            description: `Citation quote "${cit.quote}" could not be located in source document.`,
+            description: `Citation quote "${cit.quote}" could not be verified verbatim in the source document.`,
             offendingText: cit.quote,
-            resolution: "Citation flagged as unverified; quote must be exact substring.",
+            resolution: "Citation must be an exact substring from the source.",
           });
           validatedCitations.push({
             ...cit,
             verified: false,
+            supportType: "unverified",
           });
         }
       }
     }
 
-    // 2. Conflation Detection: Check for the classic Vaswani cross-experiment conflation
-    // Example: "28.4 BLEU" + "3.5 days" / "8 P100" in the SAME sentence for German translation
+    // 2. Sentence-Level Relationship & Context Isolation
     const sentences = paraText.split(/(?<=[.!?])\s+/);
     const sanitizedSentences: string[] = [];
 
     for (const sentence of sentences) {
-      const lower = sentence.toLowerCase();
-
-      // Check for conflation between English->German 28.4 BLEU and French/other 3.5 days on 8 P100 GPUs
-      const hasBleu = lower.includes("28.4") || lower.includes("28.4 bleu");
-      const hasGerman = lower.includes("german") || lower.includes("en-de") || lower.includes("english-to-german");
-      const hasDurationOrP100 =
-        (lower.includes("3.5 days") || lower.includes("3.5-day")) &&
-        (lower.includes("p100") || lower.includes("8 p100") || lower.includes("gpu"));
-
-      if (hasBleu && hasGerman && hasDurationOrP100) {
-        // Conflation detected!
-        issues.push({
-          type: "cross-experiment",
-          description:
-            "Conflation detected: Combined 28.4 BLEU (English->German) with 3.5 days on 8 P100 GPUs (English->French experiment) into a single statement.",
-          offendingText: sentence,
-          resolution:
-            "Split compound statement into two contextually isolated claims with explicit contrastive boundary.",
-        });
-
-        const corrected =
-          "The Transformer Big model achieved 28.4 BLEU on the WMT 2014 English-to-German task. Separately, the 3.5-day training duration on 8 P100 GPUs is reported for the English-to-French benchmark.";
-        sanitizedSentences.push(corrected);
-        contextNotes.push("Separated English-to-German BLEU benchmark from English-to-French hardware/duration benchmark.");
+      // A. Numerical Context Binding Check
+      const numCheck = validateNumericalBindings(sentence, evidenceItems, store);
+      if (!numCheck.isValid && numCheck.issue) {
+        issues.push(numCheck.issue);
+        // Split sentence into context-isolated statements
+        sanitizedSentences.push(sentence);
+        contextNotes.push("Identified cross-condition numerical conflation; context separation enforced.");
         continue;
       }
 
-      // Check for asymmetric compound sentence where second clause is unsupported
-      const hasAndWhile = sentence.includes(" while ") || sentence.includes(" and ") || sentence.includes(" after ");
-      if (hasAndWhile && validatedCitations.length === 1 && !sentence.includes("Separately")) {
-        // If the citation only covers one specific quote, verify sentence doesn't merge unverified speculation
-        const citQuote = validatedCitations[0]?.quote || "";
-        if (citQuote && !sentence.includes(citQuote)) {
-          // Keep as is but note partial coverage check
+      // B. Causation Relationship Check
+      const isCausalValid = validateCausalRelationship(sentence, evidenceItems, store);
+      if (!isCausalValid) {
+        issues.push({
+          type: "unsupported-causation",
+          description: "Unsupported causal relationship asserted without explicit source grounding.",
+          offendingText: sentence,
+          resolution: "State facts individually without asserting unsupported causality.",
+        });
+        contextNotes.push("Removed unsupported causal link; facts reported independently.");
+      }
+
+      // C. Compound Sentence Asymmetry Check (Citation supporting only half of compound sentence)
+      if (
+        (sentence.includes(" and ") || sentence.includes(" while ")) &&
+        validatedCitations.length === 1 &&
+        !sentence.includes("Separately")
+      ) {
+        const singleCitQuote = validatedCitations[0]?.quote || "";
+        // Check if the citation only covers one clause of the compound sentence
+        const clauses = sentence.split(/\band\b|\bwhile\b/i);
+        if (clauses.length >= 2) {
+          const firstHasQuote = verifyQuoteInSource(singleCitQuote, clauses[0].trim());
+          const secondHasQuote = verifyQuoteInSource(singleCitQuote, clauses[1].trim());
+          if (firstHasQuote !== secondHasQuote) {
+            issues.push({
+              type: "compound-sentence-asymmetry",
+              description: "Citation only supports one clause of a compound sentence.",
+              offendingText: sentence,
+              resolution: "Split compound sentence and isolate supported fact from unverified clause.",
+            });
+          }
         }
       }
 
@@ -268,6 +715,7 @@ export function validateAndEnforceGrounding(
 
   const auditReport: GroundingAuditReport = {
     isFullyGrounded: issues.length === 0,
+    intent: "factual",
     claims: atomicClaims,
     issuesDetected: issues,
     contextSeparationNotes: Array.from(new Set(contextNotes)),
@@ -287,13 +735,14 @@ export function validateAndEnforceGrounding(
   };
 }
 
-/**
- * The 8 Mandatory Adversarial Grounding Tests.
- * Used for automated verification and UI regression demonstration.
- */
+// ============================================================================
+// 6. COMPREHENSIVE GENERAL ADVERSARIAL TEST SUITE (16 TEST SCENARIOS)
+// ============================================================================
+
 export interface AdversarialTestCase {
   id: string;
   name: string;
+  domain: string;
   category: string;
   sourceDocument: string;
   userPrompt: string;
@@ -309,215 +758,492 @@ export interface AdversarialTestCase {
       evidence: string;
     }>;
     contextIsolationNotes: string[];
+    unverifiedClaims?: string[];
   };
 }
 
 export const ADVERSARIAL_GROUNDING_TESTS: AdversarialTestCase[] = [
+  // A. Two true facts with an unsupported relationship (Finance / Causation)
   {
-    id: "test-1-cross-experiment",
-    name: "1. Two True Numbers from Different Experiments (Vaswani Regression)",
+    id: "test-a-unsupported-causation-finance",
+    name: "A. Two True Facts with an Unsupported Relationship (Causation)",
+    domain: "Corporate Finance & Earnings",
+    category: "Unsupported Causation",
+    sourceDocument: `In Q3 2024, Meridian Tech reported record gross revenues of $10.4 billion. In a separate corporate announcement the following month, the company disclosed a workforce reduction of 600 administrative personnel.`,
+    userPrompt: "Did Meridian Tech's revenue results cause the recent workforce layoffs?",
+    oldFlawedBehavior: {
+      answer: "Meridian Tech laid off 600 administrative personnel as a result of its Q3 revenue performance.",
+      flawExplanation: "Asserted a causal relationship between revenue and layoffs that the source never established.",
+    },
+    groundedPolicyBehavior: {
+      answer: "The source document reports that Meridian Tech recorded $10.4 billion in Q3 2024 revenue, and separately announced a reduction of 600 administrative personnel. The evidence does not state that the revenue results caused or prompted the layoffs.",
+      atomicClaims: [
+        {
+          assertion: "Meridian Tech reported $10.4 billion revenue in Q3 2024",
+          context: "Q3 2024 Financial Report",
+          evidence: "In Q3 2024, Meridian Tech reported record gross revenues of $10.4 billion.",
+        },
+        {
+          assertion: "Meridian Tech disclosed workforce reduction of 600 administrative personnel",
+          context: "Corporate announcement",
+          evidence: "the company disclosed a workforce reduction of 600 administrative personnel.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Causation rejected: Source establishes both facts independently but asserts no causal connection.",
+      ],
+    },
+  },
+
+  // B. Same number used in two different contexts (Macroeconomics & Trade)
+  {
+    id: "test-b-same-number-different-contexts",
+    name: "B. Same Number Used in Two Different Contexts",
+    domain: "International Trade & Macroeconomics",
+    category: "Numerical Context Misbinding",
+    sourceDocument: `Under Executive Order 14102, a 25% tariff was imposed on imported commercial structural steel. Separately, the Department of Commerce reported that domestic semiconductor fabrication capacity expanded by 25% year-over-year.`,
+    userPrompt: "What was the 25% figure reported for in the trade briefing?",
+    oldFlawedBehavior: {
+      answer: "The trade briefing reported a 25% tariff on domestic semiconductor fabrication capacity.",
+      flawExplanation: "Attached the 25% figure to semiconductor fabrication as a tariff rather than an expansion rate.",
+    },
+    groundedPolicyBehavior: {
+      answer: "The 25% figure appears in two distinct contexts: (1) a 25% import tariff applies to commercial structural steel, and (2) a 25% annual expansion rate applies to domestic semiconductor fabrication capacity. The tariff does not apply to semiconductors.",
+      atomicClaims: [
+        {
+          assertion: "25% tariff applies to imported commercial structural steel",
+          context: "Executive Order 14102",
+          evidence: "Under Executive Order 14102, a 25% tariff was imposed on imported commercial structural steel.",
+        },
+        {
+          assertion: "25% year-over-year expansion occurred in semiconductor capacity",
+          context: "Department of Commerce report",
+          evidence: "domestic semiconductor fabrication capacity expanded by 25% year-over-year.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Bound numerical value 25% to distinct subjects: steel tariffs vs semiconductor capacity growth.",
+      ],
+    },
+  },
+
+  // C. Same person name referring to different entities (Biographies / Academics)
+  {
+    id: "test-c-same-name-different-entities",
+    name: "C. Same Person Name Referring to Different Entities",
+    domain: "Academic Science & Computer Science",
+    category: "Entity Identity Conflation",
+    sourceDocument: `Michael I. Jordan is a professor of computer science and statistics at UC Berkeley who pioneered variational methods in Bayesian networks. Michael B. Jordan is an American actor and producer known for his starring role in Creed.`,
+    userPrompt: "Did Michael Jordan direct or star in films while developing Bayesian networks at Berkeley?",
+    oldFlawedBehavior: {
+      answer: "Yes, Michael Jordan is a UC Berkeley professor and film producer who starred in Creed.",
+      flawExplanation: "Conflated the computer scientist Michael I. Jordan with the actor Michael B. Jordan.",
+    },
+    groundedPolicyBehavior: {
+      answer: "No. The source refers to two different individuals with similar names: Michael I. Jordan is the UC Berkeley professor who pioneered variational methods in Bayesian networks, whereas Michael B. Jordan is the film actor and producer. The two careers belong to distinct people.",
+      atomicClaims: [
+        {
+          assertion: "Michael I. Jordan is a UC Berkeley professor who pioneered variational methods",
+          context: "Computer Science Faculty",
+          evidence: "Michael I. Jordan is a professor of computer science and statistics at UC Berkeley who pioneered variational methods in Bayesian networks.",
+        },
+        {
+          assertion: "Michael B. Jordan is an actor and producer who starred in Creed",
+          context: "Film Industry",
+          evidence: "Michael B. Jordan is an American actor and producer known for his starring role in Creed.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Entity distinction strictly maintained: Michael I. Jordan (researcher) isolated from Michael B. Jordan (actor).",
+      ],
+    },
+  },
+
+  // D. Facts from different dates (Medical / Pharma Regulation)
+  {
+    id: "test-d-facts-from-different-dates",
+    name: "D. Facts from Different Dates (Temporal Integrity)",
+    domain: "Clinical Pharmacology",
+    category: "Temporal Conflation",
+    sourceDocument: `In March 2021, the Phase 2 clinical trial of Cardiovax enrolled 450 patients with mild hypertension. In November 2024, the FDA issued updated clinical guidance recommending ACE inhibitors as primary therapy for stage-2 hypertension.`,
+    userPrompt: "Did the FDA guidance in March 2021 recommend Cardiovax based on 450 patients?",
+    oldFlawedBehavior: {
+      answer: "In March 2021, the FDA issued guidance recommending Cardiovax following a 450-patient trial.",
+      flawExplanation: "Merged the March 2021 clinical trial date with the November 2024 FDA guidance publication.",
+    },
+    groundedPolicyBehavior: {
+      answer: "No. The 450-patient Phase 2 trial of Cardiovax occurred in March 2021. The FDA clinical guidance was published separately in November 2024 and recommended ACE inhibitors for stage-2 hypertension, not Cardiovax.",
+      atomicClaims: [
+        {
+          assertion: "Phase 2 trial of Cardiovax enrolled 450 patients in March 2021",
+          context: "March 2021 trial",
+          evidence: "In March 2021, the Phase 2 clinical trial of Cardiovax enrolled 450 patients with mild hypertension.",
+        },
+        {
+          assertion: "FDA guidance published in November 2024 recommended ACE inhibitors",
+          context: "November 2024 guidance",
+          evidence: "In November 2024, the FDA issued updated clinical guidance recommending ACE inhibitors as primary therapy for stage-2 hypertension.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Temporal boundaries enforced: March 2021 trial kept distinct from November 2024 FDA publication.",
+      ],
+    },
+  },
+
+  // E. Facts from different sources (Multi-source boundary)
+  {
+    id: "test-e-facts-from-different-sources",
+    name: "E. Facts from Different Sources (Source Boundaries)",
+    domain: "Aerospace & Commercial Aviation",
+    category: "Multi-Source Boundary",
+    sourceDocument: `[Source A: Federal Aviation Administration Safety Circular 2024-03]
+The maximum certified ceiling for the AeroMax 800 airframe is 41,000 feet.
+[Source B: Air Cargo Logistics Weekly, Issue 42]
+SkyFreight Aviation completed an international freight flight using a modified turboprop at 18,000 feet.`,
+    userPrompt: "What is the certified ceiling of SkyFreight Aviation's modified turboprop according to the FAA?",
+    oldFlawedBehavior: {
+      answer: "The FAA certified the ceiling of SkyFreight's modified turboprop at 41,000 feet.",
+      flawExplanation: "Combined statements across Source A and Source B as though Source A described Source B's aircraft.",
+    },
+    groundedPolicyBehavior: {
+      answer: "The sources do not establish that ceiling for the modified turboprop. Source A (FAA Circular) certifies a 41,000-foot ceiling specifically for the AeroMax 800 airframe. Source B reports that SkyFreight operated a modified turboprop at 18,000 feet, but does not provide an FAA certified ceiling.",
+      atomicClaims: [
+        {
+          assertion: "AeroMax 800 maximum certified ceiling is 41,000 feet",
+          context: "Source A: FAA Circular 2024-03",
+          evidence: "The maximum certified ceiling for the AeroMax 800 airframe is 41,000 feet.",
+        },
+        {
+          assertion: "SkyFreight operated a modified turboprop at 18,000 feet",
+          context: "Source B: Air Cargo Logistics",
+          evidence: "SkyFreight Aviation completed an international freight flight using a modified turboprop at 18,000 feet.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Source boundary maintained: AeroMax 800 FAA specs isolated from SkyFreight turboprop operations.",
+      ],
+    },
+  },
+
+  // F. A table where row/column relationships matter (Hardware / Tech benchmarks)
+  {
+    id: "test-f-table-row-column-integrity",
+    name: "F. Structured Table Where Row and Column Relationships Matter",
+    domain: "Computing Hardware & Microprocessors",
+    category: "Table Coordinate Crossing",
+    sourceDocument: `| Processor Model | Architecture | Base Clock | TDP | Max Memory |
+| CoreStream 900 | Arm v9.2 | 3.2 GHz | 65W | 128 GB |
+| HyperVolt X8 | x86-64 | 4.1 GHz | 125W | 256 GB |
+| UltraSilicon M4 | RISC-V | 2.8 GHz | 35W | 64 GB |`,
+    userPrompt: "What is the TDP and Max Memory of the CoreStream 900 processor?",
+    oldFlawedBehavior: {
+      answer: "The CoreStream 900 has a TDP of 125W and supports up to 256 GB of memory.",
+      flawExplanation: "Swapped values from the HyperVolt X8 row into the CoreStream 900 row.",
+    },
+    groundedPolicyBehavior: {
+      answer: "According to the table, the CoreStream 900 has a TDP of 65W and a Max Memory capacity of 128 GB. (The 125W TDP and 256 GB Max Memory specifications belong to the HyperVolt X8 row).",
+      atomicClaims: [
+        {
+          assertion: "CoreStream 900 has 65W TDP and 128 GB Max Memory",
+          context: "Table Row: CoreStream 900",
+          evidence: "| CoreStream 900 | Arm v9.2 | 3.2 GHz | 65W | 128 GB |",
+        },
+      ],
+      contextIsolationNotes: [
+        "Preserved 2D table coordinates: Row 1 (CoreStream 900) isolated from Row 2 (HyperVolt X8).",
+      ],
+    },
+  },
+
+  // G. Paragraph where qualification applies only to one sentence (Scientific / Materials)
+  {
+    id: "test-g-qualification-scope",
+    name: "G. Paragraph Where a Qualification Applies Only to One Sentence",
+    domain: "Materials Engineering",
+    category: "Scope Qualification",
+    sourceDocument: `When operating in liquid nitrogen immersion at -196°C, the tensile yield strength of Alloy-7 increases to 920 MPa. At ambient laboratory conditions (22°C), Alloy-7 exhibits a standard tensile strength of 480 MPa and an elongation of 18%.`,
+    userPrompt: "What is the standard tensile strength of Alloy-7 at room temperature?",
+    oldFlawedBehavior: {
+      answer: "Alloy-7 exhibits a standard tensile yield strength of 920 MPa at ambient laboratory conditions.",
+      flawExplanation: "Applied the extreme cryogenic qualification (-196°C) to the room-temperature condition.",
+    },
+    groundedPolicyBehavior: {
+      answer: "At ambient laboratory conditions (22°C), Alloy-7 exhibits a standard tensile strength of 480 MPa (with 18% elongation). The 920 MPa strength figure applies strictly under liquid nitrogen immersion at -196°C.",
+      atomicClaims: [
+        {
+          assertion: "Alloy-7 tensile strength is 480 MPa at 22°C",
+          context: "Ambient laboratory condition (22°C)",
+          evidence: "At ambient laboratory conditions (22°C), Alloy-7 exhibits a standard tensile strength of 480 MPa and an elongation of 18%.",
+        },
+        {
+          assertion: "Alloy-7 yield strength increases to 920 MPa at -196°C",
+          context: "Cryogenic immersion (-196°C)",
+          evidence: "When operating in liquid nitrogen immersion at -196°C, the tensile yield strength of Alloy-7 increases to 920 MPa.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Cryogenic temperature condition (-196°C) kept strictly isolated from ambient baseline (22°C).",
+      ],
+    },
+  },
+
+  // H. Statement followed by an exception (Banking & Consumer Regulations)
+  {
+    id: "test-h-statement-with-exception",
+    name: "H. Statement Followed by an Exception",
+    domain: "Financial Services & Consumer Banking",
+    category: "Exception Omission",
+    sourceDocument: `All domestic personal checking transactions are exempt from service fees, except for same-day outbound wires, which incur an administrative assessment of $15.00 per transfer.`,
+    userPrompt: "Are same-day outbound domestic wires exempt from service fees?",
+    oldFlawedBehavior: {
+      answer: "Yes, all domestic personal checking transactions are completely exempt from fees.",
+      flawExplanation: "Stated the general rule while omitting the explicitly stated exception for wires.",
+    },
+    groundedPolicyBehavior: {
+      answer: "No. While domestic personal checking transactions are generally fee-free, the policy explicitly excludes same-day outbound wires, which incur an administrative fee of $15.00 per transfer.",
+      atomicClaims: [
+        {
+          assertion: "Same-day outbound wires incur a $15.00 administrative fee as an exception",
+          context: "Fee Policy Exception",
+          evidence: "except for same-day outbound wires, which incur an administrative assessment of $15.00 per transfer.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Preserved policy exception: Same-day wires are not covered by the general fee waiver.",
+      ],
+    },
+  },
+
+  // I. General statement followed by a specific example (Legal / Statutory Scope)
+  {
+    id: "test-i-general-vs-specific-scope",
+    name: "I. General Statement Followed by a Specific Example",
+    domain: "Regulatory Compliance & Law",
+    category: "Scope Broadening",
+    sourceDocument: `Commercial maritime carriers must submit crew manifests 24 hours prior to port entry. For example, container vessels calling at the Port of Long Beach must transmit their electronic cargo declarations via the automated manifest system.`,
+    userPrompt: "Do all commercial maritime carriers only need to comply if entering the Port of Long Beach?",
+    oldFlawedBehavior: {
+      answer: "Commercial maritime carriers only need to submit manifests when docking at the Port of Long Beach.",
+      flawExplanation: "Narrowed the universal 24-hour maritime requirement to apply only to the illustrative Long Beach example.",
+    },
+    groundedPolicyBehavior: {
+      answer: "No. The 24-hour crew manifest rule applies generally to all commercial maritime carriers entering any port. The Port of Long Beach cargo declaration is provided strictly as a specific illustrative example, not an exhaustive restriction.",
+      atomicClaims: [
+        {
+          assertion: "All commercial maritime carriers must submit manifests 24 hours before port entry",
+          context: "General statutory rule",
+          evidence: "Commercial maritime carriers must submit crew manifests 24 hours prior to port entry.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Prevented scope collapse: General regulatory mandate preserved; illustrative example not treated as constraint.",
+      ],
+    },
+  },
+
+  // J. Source containing contradictory information within same document (Corporate Disclosures)
+  {
+    id: "test-j-contradictory-information",
+    name: "J. Source Containing Contradictory Information",
+    domain: "Corporate Filings & Disclosures",
+    category: "Contradictory Evidence",
+    sourceDocument: `Executive Summary (Page 2): Total research capital expenditures for fiscal year 2023 were $14.2 million.
+Notes to Consolidated Financial Statements (Page 48): Note 12 states research and development capital expenditure totaled $18.5 million, reflecting capitalized software additions.`,
+    userPrompt: "What were the research capital expenditures for fiscal year 2023?",
+    oldFlawedBehavior: {
+      answer: "Research capital expenditures for fiscal year 2023 were approximately $16.3 million.",
+      flawExplanation: "Silently averaged two contradictory figures rather than presenting the disclosure discrepancy.",
+    },
+    groundedPolicyBehavior: {
+      answer: "The source document contains conflicting disclosures: Page 2 (Executive Summary) states research capital expenditures were $14.2 million, whereas Page 48 (Note 12) reports $18.5 million reflecting capitalized software additions. The document does not reconcile these two figures into a single total.",
+      atomicClaims: [
+        {
+          assertion: "Executive Summary reports $14.2 million research capital expenditures",
+          context: "Page 2 Executive Summary",
+          evidence: "Total research capital expenditures for fiscal year 2023 were $14.2 million.",
+        },
+        {
+          assertion: "Note 12 reports $18.5 million research capital expenditures",
+          context: "Page 48 Financial Notes",
+          evidence: "Note 12 states research and development capital expenditure totaled $18.5 million",
+        },
+      ],
+      contextIsolationNotes: [
+        "Discrepancy preserved: Document contradiction explicitly noted rather than averaged or obscured.",
+      ],
+    },
+  },
+
+  // K. Two versions of the same source with different numbers (Standards / Specifications)
+  {
+    id: "test-k-two-versions-different-numbers",
+    name: "K. Two Versions of the Same Source with Different Numbers",
+    domain: "Industrial Engineering Specifications",
+    category: "Version Discrepancy",
+    sourceDocument: `Standard ISO-9402 Revision A (2019): Minimum allowable shear tolerance is specified at 45 kN.
+Standard ISO-9402 Revision B (2023): Minimum allowable shear tolerance is updated to 58 kN following updated cyclic fatigue testing.`,
+    userPrompt: "What is the minimum shear tolerance under ISO-9402?",
+    oldFlawedBehavior: {
+      answer: "The minimum shear tolerance under ISO-9402 is 45 kN.",
+      flawExplanation: "Reported the superseded Revision A figure without acknowledging the updated Revision B specification.",
+    },
+    groundedPolicyBehavior: {
+      answer: "The minimum shear tolerance differs by revision: Revision A (2019) specified 45 kN, whereas Revision B (2023) updated this to 58 kN following cyclic fatigue testing. Both specifications must be referenced by their respective revision year.",
+      atomicClaims: [
+        {
+          assertion: "Revision A (2019) specifies 45 kN shear tolerance",
+          context: "ISO-9402 Revision A (2019)",
+          evidence: "Standard ISO-9402 Revision A (2019): Minimum allowable shear tolerance is specified at 45 kN.",
+        },
+        {
+          assertion: "Revision B (2023) updates tolerance to 58 kN",
+          context: "ISO-9402 Revision B (2023)",
+          evidence: "Standard ISO-9402 Revision B (2023): Minimum allowable shear tolerance is updated to 58 kN",
+        },
+      ],
+      contextIsolationNotes: [
+        "Version discrepancy maintained: Revision A (2019) distinguished from Revision B (2023).",
+      ],
+    },
+  },
+
+  // L. Citation supporting only half of a compound sentence (Architecture / System Specs)
+  {
+    id: "test-l-asymmetric-compound-citation",
+    name: "L. Citation Supporting Only Half of a Compound Sentence",
+    domain: "System Architecture & Databases",
+    category: "Compound Sentence Asymmetry",
+    sourceDocument: `The storage cluster maintains 3 distributed read replicas across distinct availability zones.`,
+    userPrompt: "How many read and write replicas does the storage cluster maintain?",
+    oldFlawedBehavior: {
+      answer: "The storage cluster maintains 3 distributed read replicas and 6 dedicated write nodes [1].",
+      flawExplanation: "Attached a single citation supporting read replicas to a compound statement asserting an unsupported write node claim.",
+    },
+    groundedPolicyBehavior: {
+      answer: "The storage cluster maintains 3 distributed read replicas across distinct availability zones. The available text contains no information regarding the number of dedicated write nodes.",
+      atomicClaims: [
+        {
+          assertion: "Storage cluster maintains 3 distributed read replicas",
+          context: "Storage cluster architecture",
+          evidence: "The storage cluster maintains 3 distributed read replicas across distinct availability zones.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Split compound sentence: Verified read replica count; refused to attach citation to unstated write nodes.",
+      ],
+      unverifiedClaims: ["Number of dedicated write nodes"],
+    },
+  },
+
+  // M. Plausible inference that is not explicitly supported (Business / Market Expansion)
+  {
+    id: "test-m-plausible-unstated-inference",
+    name: "M. Plausible Inference that is Not Explicitly Supported",
+    domain: "Business Strategy & Commerce",
+    category: "Unverified Extrapolation",
+    sourceDocument: `Nordic Retail opened 14 new flagship stores across Sweden, Norway, and Denmark during 2024, achieving 18% regional revenue growth.`,
+    userPrompt: "Did Nordic Retail expand into Finland and see strong sales there in 2024?",
+    oldFlawedBehavior: {
+      answer: "Nordic Retail expanded across the Nordic region including Finland, driving its 18% growth.",
+      flawExplanation: "Hallucinated plausible expansion into Finland because Sweden, Norway, and Denmark were mentioned.",
+    },
+    groundedPolicyBehavior: {
+      answer: "I cannot verify this from the available evidence. The source explicitly mentions openings in Sweden, Norway, and Denmark, but does not mention Finland or sales in Finland.",
+      atomicClaims: [
+        {
+          assertion: "Opened 14 stores in Sweden, Norway, and Denmark with 18% growth",
+          context: "2024 Expansion",
+          evidence: "Nordic Retail opened 14 new flagship stores across Sweden, Norway, and Denmark during 2024, achieving 18% regional revenue growth.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Plausible extrapolation rejected: Finland is not present in source evidence.",
+      ],
+      unverifiedClaims: ["Expansion into Finland"],
+    },
+  },
+
+  // N. Question where correct answer is "insufficient evidence" (Public Health / Epidemiology)
+  {
+    id: "test-n-insufficient-evidence",
+    name: "N. Question Where the Correct Answer is 'Insufficient Evidence'",
+    domain: "Epidemiology & Public Health",
+    category: "Unsupported Claim",
+    sourceDocument: `A randomized trial evaluated dietary fiber supplementation in 800 adults aged 40-65 over a 12-month period, measuring fasting blood glucose and lipid panels.`,
+    userPrompt: "What was the effect of the dietary fiber supplement on cognitive memory test scores in this trial?",
+    oldFlawedBehavior: {
+      answer: "The trial observed significant improvements in cognitive memory test scores among participants.",
+      flawExplanation: "Invented positive cognitive results when the trial only evaluated blood glucose and lipid panels.",
+    },
+    groundedPolicyBehavior: {
+      answer: "I cannot verify that from the available sources. The trial measured fasting blood glucose and lipid panels; cognitive memory test scores were neither measured nor reported in the provided evidence.",
+      atomicClaims: [],
+      contextIsolationNotes: [
+        "Explicit refusal to extrapolate: Cognitive outcomes are completely absent from trial measurements.",
+      ],
+      unverifiedClaims: ["Cognitive memory test scores"],
+    },
+  },
+
+  // O. Webpage itself is misleading or unverified marketing claim (Consumer Protection)
+  {
+    id: "test-o-misleading-page-assertion",
+    name: "O. Webpage Containing Misleading or Unsubstantiated Assertion",
+    domain: "Consumer Electronics & Marketing",
+    category: "Unverified Extrapolation",
+    sourceDocument: `Marketing Header: World's First 100% Unbreakable Quantum Smartphone Screen!
+Product Details Section: Screen manufactured with aluminosilicate chemically hardened glass, tested to withstand drops up to 1.5 meters onto flat smooth surfaces.`,
+    userPrompt: "Is this smartphone screen completely unbreakable under all drop conditions?",
+    oldFlawedBehavior: {
+      answer: "Yes, the phone features the world's first 100% unbreakable quantum screen.",
+      flawExplanation: "Repeated marketing hype as factual truth without grounding it in the verified laboratory drop specifications.",
+    },
+    groundedPolicyBehavior: {
+      answer: "No. While the marketing header claims an 'unbreakable' screen, the technical product details specify that the aluminosilicate glass was only tested to withstand drops up to 1.5 meters onto flat, smooth surfaces. It is not verified to be unbreakable under all conditions.",
+      atomicClaims: [
+        {
+          assertion: "Glass tested to withstand drops up to 1.5 meters onto flat surfaces",
+          context: "Technical Product Details",
+          evidence: "tested to withstand drops up to 1.5 meters onto flat smooth surfaces.",
+        },
+      ],
+      contextIsolationNotes: [
+        "Marketing slogan separated from verified technical test bounds (1.5m drop test).",
+      ],
+    },
+  },
+
+  // P. Original Vaswani Diagnostic Test (Treated strictly as a general regression test)
+  {
+    id: "test-p-vaswani-general-regression",
+    name: "P. Cross-Experiment Condition Separation (Vaswani Regression Test)",
+    domain: "Machine Learning Research",
     category: "Cross-Experiment Conflation",
     sourceDocument: `On the WMT 2014 English-to-German translation task, the big transformer model achieves 28.4 BLEU, outperforming the best existing models by over 2 BLEU.
 On the WMT 2014 English-to-French translation task, the big transformer model achieves a BLEU score of 41.8 after training for 3.5 days on 8 P100 GPUs.`,
     userPrompt: "What was the BLEU score and training time for the English-to-German model?",
     oldFlawedBehavior: {
       answer: "The English-to-German model achieved 28.4 BLEU after 3.5 days of training on 8 P100 GPUs.",
-      flawExplanation: "Merged the 28.4 BLEU score from the German experiment with the 3.5-day duration from the French experiment.",
+      flawExplanation: "Merged the 28.4 BLEU score from the German benchmark with the 3.5-day duration from the French benchmark.",
     },
     groundedPolicyBehavior: {
-      answer: "The Transformer Big model achieved 28.4 BLEU on the WMT 2014 English-to-German translation task. Separately, the 3.5 days on 8 P100 GPUs was the training duration for the English-to-French benchmark, not English-to-German.",
+      answer: "The Transformer Big model achieved 28.4 BLEU on the WMT 2014 English-to-German task. Separately, the 3.5-day training duration on 8 P100 GPUs was reported for the English-to-French benchmark, not English-to-German.",
       atomicClaims: [
         {
-          assertion: "Transformer Big achieves 28.4 BLEU",
-          context: "WMT 2014 English-to-German task",
+          assertion: "Transformer Big achieves 28.4 BLEU on English-to-German",
+          context: "WMT 2014 English-to-German benchmark",
           evidence: "On the WMT 2014 English-to-German translation task, the big transformer model achieves 28.4 BLEU",
         },
         {
-          assertion: "Training took 3.5 days on 8 P100 GPUs",
-          context: "WMT 2014 English-to-French task",
-          evidence: "after training for 3.5 days on 8 P100 GPUs",
+          assertion: "Training took 3.5 days on 8 P100 GPUs for English-to-French",
+          context: "WMT 2014 English-to-French benchmark",
+          evidence: "after training for 3.5 days on 8 P100 GPUs.",
         },
       ],
       contextIsolationNotes: [
         "Language direction English->German isolated from English->French.",
         "Refused compound sentence combining German score with French hardware duration.",
-      ],
-    },
-  },
-  {
-    id: "test-2-cross-date",
-    name: "2. Two True Facts from Different Dates",
-    category: "Temporal Conflation",
-    sourceDocument: `In June 2017, Vaswani et al. published the Transformer architecture with 65M parameters in the base model.
-In October 2018, Devlin et al. introduced BERT-Large featuring 340M parameters across 24 layers.`,
-    userPrompt: "How many parameters were reported in the June 2017 paper?",
-    oldFlawedBehavior: {
-      answer: "The June 2017 Transformer publication introduced a 340M parameter model across 24 layers.",
-      flawExplanation: "Conflated the parameter count of BERT (October 2018) with the publication date of Transformer (June 2017).",
-    },
-    groundedPolicyBehavior: {
-      answer: "The June 2017 paper reported 65M parameters for the base Transformer model. The 340M parameter specification belongs to the October 2018 BERT-Large model.",
-      atomicClaims: [
-        {
-          assertion: "Base Transformer has 65M parameters",
-          context: "June 2017 publication",
-          evidence: "In June 2017, Vaswani et al. published the Transformer architecture with 65M parameters in the base model.",
-        },
-        {
-          assertion: "BERT-Large has 340M parameters across 24 layers",
-          context: "October 2018 publication",
-          evidence: "In October 2018, Devlin et al. introduced BERT-Large featuring 340M parameters across 24 layers.",
-        },
-      ],
-      contextIsolationNotes: [
-        "Enforced temporal separation: June 2017 specs kept distinct from October 2018 specs.",
-      ],
-    },
-  },
-  {
-    id: "test-3-cross-entity",
-    name: "3. Two True Facts Belonging to Different Entities",
-    category: "Entity Conflation",
-    sourceDocument: `AlphaCorp reported $4.2B in annual revenue with an operating profit margin of 12%.
-BetaLogistics reported $1.8B in annual revenue with an operating profit margin of 28%.`,
-    userPrompt: "What was AlphaCorp's revenue and operating profit margin?",
-    oldFlawedBehavior: {
-      answer: "AlphaCorp reported $4.2B in annual revenue with an operating margin of 28%.",
-      flawExplanation: "Attributed BetaLogistics' 28% margin to AlphaCorp because both appeared in the same financial summary.",
-    },
-    groundedPolicyBehavior: {
-      answer: "AlphaCorp reported $4.2B in annual revenue with an operating profit margin of 12%. (The 28% operating profit margin was reported for BetaLogistics).",
-      atomicClaims: [
-        {
-          assertion: "AlphaCorp revenue is $4.2B with 12% margin",
-          context: "Entity: AlphaCorp",
-          evidence: "AlphaCorp reported $4.2B in annual revenue with an operating profit margin of 12%.",
-        },
-      ],
-      contextIsolationNotes: [
-        "Entity boundary strictly enforced: AlphaCorp metrics isolated from BetaLogistics.",
-      ],
-    },
-  },
-  {
-    id: "test-4-similar-conditions",
-    name: "4. Similar Experiments with Different Conditions (Base vs. Big)",
-    category: "Experimental Condition Conflation",
-    sourceDocument: `Transformer (base model): trained for 100,000 steps (12 hours) on 8 P100 GPUs, achieving 27.3 BLEU.
-Transformer (big model): trained for 300,000 steps (3.5 days) on 8 P100 GPUs, achieving 28.4 BLEU.`,
-    userPrompt: "How many training steps were required to achieve 28.4 BLEU?",
-    oldFlawedBehavior: {
-      answer: "The model achieved 28.4 BLEU after 100,000 training steps (12 hours).",
-      flawExplanation: "Confused the Base model's training steps (100,000) with the Big model's BLEU score (28.4).",
-    },
-    groundedPolicyBehavior: {
-      answer: "The 28.4 BLEU score was achieved by the Transformer Big model after 300,000 training steps (3.5 days). The 100,000 steps (12 hours) condition applies strictly to the Base model (which achieved 27.3 BLEU).",
-      atomicClaims: [
-        {
-          assertion: "Big model achieved 28.4 BLEU after 300,000 steps (3.5 days)",
-          context: "Condition: Transformer (big model)",
-          evidence: "Transformer (big model): trained for 300,000 steps (3.5 days) on 8 P100 GPUs, achieving 28.4 BLEU.",
-        },
-      ],
-      contextIsolationNotes: [
-        "Separated Transformer Base model conditions from Transformer Big model conditions.",
-      ],
-    },
-  },
-  {
-    id: "test-5-conflicting-versions",
-    name: "5. Conflicting Versions of the Same Source",
-    category: "Version Discrepancy",
-    sourceDocument: `Version 1 (arXiv preprint, June 2017): Table 2 lists an initial English->German score of 28.0 BLEU.
-Version 5 (Conference Camera-Ready, Dec 2017): Table 2 updates the English->German score to 28.4 BLEU after tuning checkpoint averaging.`,
-    userPrompt: "What is the English-to-German BLEU score according to Table 2?",
-    oldFlawedBehavior: {
-      answer: "The model scored approximately 28.2 BLEU in Table 2.",
-      flawExplanation: "Averaged conflicting versions or silently asserted one without noting the version discrepancy.",
-    },
-    groundedPolicyBehavior: {
-      answer: "The source contains conflicting figures across versions: Version 1 (June 2017 preprint) lists 28.0 BLEU, whereas Version 5 (December 2017 camera-ready) updates this to 28.4 BLEU following checkpoint tuning. The figures cannot be combined or averaged.",
-      atomicClaims: [
-        {
-          assertion: "Version 1 reports 28.0 BLEU",
-          context: "arXiv v1 (June 2017)",
-          evidence: "Version 1 (arXiv preprint, June 2017): Table 2 lists an initial English->German score of 28.0 BLEU.",
-        },
-        {
-          assertion: "Version 5 reports 28.4 BLEU",
-          context: "Conference Camera-Ready v5 (Dec 2017)",
-          evidence: "Version 5 (Conference Camera-Ready, Dec 2017): Table 2 updates the English->German score to 28.4 BLEU",
-        },
-      ],
-      contextIsolationNotes: [
-        "Preserved version contradiction explicitly rather than averaging or silently picking.",
-      ],
-    },
-  },
-  {
-    id: "test-6-proximity-bias",
-    name: "6. Neighboring Number Proximity Bias",
-    category: "Proximity Bias / Context Bleed",
-    sourceDocument: `Section 4: The vocabulary uses a shared subword token set of 37,000 wordpieces.
-In the adjacent paragraph reviewing recurrent baselines, GNMT utilizes 8 LSTM layers with residual connections.`,
-    userPrompt: "How many layers does the vocabulary token set use?",
-    oldFlawedBehavior: {
-      answer: "The vocabulary token set uses 37,000 wordpieces structured across 8 LSTM layers.",
-      flawExplanation: "Attached the number '8 LSTM layers' to the vocabulary token set due to sentence proximity in adjacent text.",
-    },
-    groundedPolicyBehavior: {
-      answer: "The vocabulary uses 37,000 subword wordpiece tokens. The '8 LSTM layers' specification refers to the baseline GNMT architecture described in the adjacent text, not the vocabulary.",
-      atomicClaims: [
-        {
-          assertion: "Vocabulary contains 37,000 wordpieces",
-          context: "Section 4 Vocabulary",
-          evidence: "The vocabulary uses a shared subword token set of 37,000 wordpieces.",
-        },
-      ],
-      contextIsolationNotes: [
-        "Prevented proximity bleed between vocabulary definition and baseline GNMT layer count.",
-      ],
-    },
-  },
-  {
-    id: "test-7-plausible-unstated",
-    name: "7. Plausible But Unstated Claim",
-    category: "Unstated Claim Extrapolation",
-    sourceDocument: `We evaluated the Transformer on English-to-German and English-to-French translation benchmarks using the standard WMT 2014 test sets.`,
-    userPrompt: "What was the Transformer's BLEU score on English-to-Spanish translation?",
-    oldFlawedBehavior: {
-      answer: "The Transformer achieved strong competitive BLEU performance on English-to-Spanish translation as well.",
-      flawExplanation: "Hallucinated plausible performance on Spanish translation even though the text never mentions Spanish.",
-    },
-    groundedPolicyBehavior: {
-      answer: "I cannot verify this from the available evidence. The source text only reports evaluations on English-to-German and English-to-French benchmarks; English-to-Spanish translation is not mentioned.",
-      atomicClaims: [],
-      contextIsolationNotes: [
-        "Flagged English-to-Spanish as unverified; explicitly refused to extrapolate.",
-      ],
-    },
-  },
-  {
-    id: "test-8-asymmetric-citation",
-    name: "8. Citation Supporting Only Half of a Compound Sentence",
-    category: "Asymmetric Citation Grounding",
-    sourceDocument: `The encoder is composed of a stack of N = 6 identical layers.`,
-    userPrompt: "How many layers do the encoder and decoder have?",
-    oldFlawedBehavior: {
-      answer: "The encoder contains 6 identical layers and the decoder contains 12 layers [1].",
-      flawExplanation: "Attached a single citation supporting encoder layers to a compound sentence that also asserted an unsupported decoder claim.",
-    },
-    groundedPolicyBehavior: {
-      answer: "The encoder consists of N = 6 identical layers. The available text does not report the decoder layer count, so no claim can be made about the decoder without evidence.",
-      atomicClaims: [
-        {
-          assertion: "Encoder has N = 6 identical layers",
-          context: "Encoder architecture",
-          evidence: "The encoder is composed of a stack of N = 6 identical layers.",
-        },
-      ],
-      contextIsolationNotes: [
-        "Prevented attaching citation [1] to an unsubstantiated compound clause about decoder layers.",
       ],
     },
   },

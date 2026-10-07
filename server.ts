@@ -4,9 +4,21 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type, FunctionDeclaration, GenerateContentConfig } from '@google/genai';
-import { GROUNDING_SYSTEM_POLICY, validateAndEnforceGrounding } from './src/groundingEngine.js';
+import { setGlobalDispatcher, Agent } from 'undici';
+import { GROUNDING_SYSTEM_POLICY, validateAndEnforceGrounding } from './src/groundingEngine.ts';
 
 dotenv.config();
+
+// Configure undici dispatcher with 5-minute headers and body timeouts to prevent HeadersTimeoutError
+setGlobalDispatcher(
+  new Agent({
+    headersTimeout: 300000,
+    bodyTimeout: 300000,
+    connectTimeout: 60000,
+    keepAliveTimeout: 30000,
+    keepAliveMaxTimeout: 60000,
+  })
+);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,8 +44,9 @@ async function startServer() {
     res.sendFile(path.resolve(__dirname, isProd ? 'dist/privacy.html' : 'public/privacy.html'));
   });
 
-  // Server-side Gemini API proxy route
+  // Server-side Gemini API proxy route with streaming and timing instrumentation
   app.post('/api/gemini', async (req, res) => {
+    const tStart = performance.now();
     const rawKey = req.body?.apiKey || process.env.GEMINI_API_KEY;
     const apiKey = rawKey ? String(rawKey).replace(/['"\s]/g, '').trim() : undefined;
     if (!apiKey) {
@@ -49,15 +62,18 @@ async function startServer() {
         currentQuote,
         currentPage,
         model = 'gemini-3.8-flash',
+        stream = false,
       } = req.body;
 
       if (!promptText) {
         return res.status(400).json({ error: 'Missing promptText' });
       }
 
+      const tPayloadStart = performance.now();
       const ai = new GoogleGenAI({
         apiKey,
         httpOptions: {
+          timeout: 300000, // 5-minute timeout deadline per attempt
           headers: {
             'User-Agent': 'aistudio-build',
           },
@@ -75,18 +91,77 @@ Strictly avoid payment card inputs.
 
 ${GROUNDING_SYSTEM_POLICY}`;
 
-      const visibleElements = (currentPage?.elements || [])
+      const elementsList = currentPage?.interactiveElements || currentPage?.elements || [];
+      const visibleElements = elementsList
+        .slice(0, 45)
         .map((e: any) => `[#${e.id}] ${e.role} "${e.label}" at (${e.x}, ${e.y})`)
         .join('\n');
 
+      // Structure-preserving compact tables format
+      let formattedTables = '';
+      if (currentPage?.tables && currentPage.tables.length > 0) {
+        formattedTables = 'STRUCTURED EVIDENCE TABLES:\n';
+        for (const tbl of currentPage.tables) {
+          formattedTables += `[Table: ${tbl.caption || tbl.id || 'Table'}]\n`;
+          if (tbl.headers && tbl.headers.length > 0) {
+            formattedTables += `| ${tbl.headers.join(' | ')} |\n`;
+          }
+          if (tbl.rows && tbl.rows.length > 0) {
+            for (const row of tbl.rows) {
+              const cellValues = (row.cells || []).map((c: any) => c.value ?? '');
+              formattedTables += `| ${cellValues.join(' | ')} |\n`;
+            }
+          }
+          formattedTables += `[End Table: ${tbl.id || ''}]\n\n`;
+        }
+      }
+
+      // Structure-preserving context preparation
+      const rawBody = currentPage?.content || currentPage?.bodyText || '';
+      let pageContentToSend = rawBody;
+
+      // For large pages (> 20k chars), window preserving section headers and surrounding context
+      if (rawBody.length > 20000) {
+        const pLower = promptText.toLowerCase();
+        const isBroad = pLower.includes('summarize') || pLower.includes('overview') || pLower.includes('entire page') || pLower.includes('all');
+        if (!isBroad) {
+          const sections = rawBody.split(/(?=^#{1,4}\s+)/gm);
+          if (sections.length > 2) {
+            const queryWords = pLower.match(/[a-z0-9_-]{3,}/g) || [];
+            const selectedIdxs = new Set<number>([0]); // Always keep document intro
+            sections.forEach((sec: string, idx: number) => {
+              const secLower = sec.toLowerCase();
+              const matches = queryWords.filter((w: string) => secLower.includes(w)).length;
+              if (matches > 0) {
+                selectedIdxs.add(idx);
+                if (idx > 0) selectedIdxs.add(idx - 1); // Preserves parent section / condition
+                if (idx < sections.length - 1) selectedIdxs.add(idx + 1); // Preserves following context
+              }
+            });
+            const ordered = Array.from(selectedIdxs).sort((a, b) => a - b);
+            const assembled = ordered.map((i) => sections[i]).join('\n\n');
+            if (assembled.length >= 3000) {
+              pageContentToSend = assembled;
+            }
+          }
+        }
+      }
+
       let payload = '';
       if (currentPage) {
-        payload += `<<<UNTRUSTED_CONTENT_${enclaveId} title="${currentPage.title || ''}" url="${currentPage.url || ''}">>>\n${currentPage.content || ''}\nINTERACTIVE ELEMENTS:\n${visibleElements}\n<<<END_UNTRUSTED_CONTENT_${enclaveId}>>>\n\n`;
+        payload += `<<<UNTRUSTED_CONTENT_${enclaveId} title="${currentPage.title || ''}" url="${currentPage.url || ''}" author="${currentPage.author || ''}" date="${currentPage.date || ''}">>>\n`;
+        if (formattedTables) {
+          payload += `${formattedTables}\n`;
+        }
+        payload += `${pageContentToSend}\nINTERACTIVE ELEMENTS:\n${visibleElements}\n<<<END_UNTRUSTED_CONTENT_${enclaveId}>>>\n\n`;
       }
       if (currentQuote) {
         payload += `Selection: "${currentQuote}"\n\n`;
       }
       payload += `User command: ${promptText}`;
+
+      const tPayloadEnd = performance.now();
+      const payloadConstructionMs = tPayloadEnd - tPayloadStart;
 
       const clickElementTool: FunctionDeclaration = {
         name: 'click_element',
@@ -172,7 +247,6 @@ ${GROUNDING_SYSTEM_POLICY}`;
         ],
       };
 
-      let response;
       // Sanitize model input: never use gemini-3.1-flash-lite; default to gemini-3.8-flash
       let targetModel = model || 'gemini-3.8-flash';
       if (targetModel === 'gemini-3.1-flash-lite') {
@@ -185,18 +259,60 @@ ${GROUNDING_SYSTEM_POLICY}`;
         'gemini-flash-latest',
       ].filter((m, i, a) => a.indexOf(m) === i);
 
+      let response: any = null;
       let lastError: any = null;
+      let usedModel = targetModel;
+      let ttftMs = 0;
+      const tInferenceStart = performance.now();
+
       for (const currentModel of cascade) {
         try {
-          response = await ai.models.generateContent({
-            model: currentModel,
-            contents: payload,
-            config: generateConfig,
-          });
+          usedModel = currentModel;
+          if (stream) {
+            const streamResult = await ai.models.generateContentStream({
+              model: currentModel,
+              contents: payload,
+              config: generateConfig,
+            });
+
+            const candidateParts: any[] = [];
+            let firstChunk = true;
+            for await (const chunk of streamResult) {
+              if (firstChunk) {
+                ttftMs = performance.now() - tInferenceStart;
+                firstChunk = false;
+              }
+              const chunkParts = chunk.candidates?.[0]?.content?.parts || [];
+              candidateParts.push(...chunkParts);
+            }
+            response = {
+              candidates: [
+                {
+                  content: { parts: candidateParts },
+                },
+              ],
+            };
+          } else {
+            response = await ai.models.generateContent({
+              model: currentModel,
+              contents: payload,
+              config: generateConfig,
+            });
+            ttftMs = performance.now() - tInferenceStart;
+          }
           if (response) break;
         } catch (err: any) {
           lastError = err;
           const errMsg = (err?.message || '').toLowerCase();
+          const errCause = (err?.cause?.message || err?.cause?.name || '').toLowerCase();
+          const isTimeoutOrNetwork =
+            errMsg.includes('timeout') ||
+            errMsg.includes('fetch failed') ||
+            errCause.includes('timeout') ||
+            err?.code === 'UND_ERR_HEADERS_TIMEOUT' ||
+            err?.name === 'TimeoutError' ||
+            err?.name === 'AbortError';
+
           const isHighDemand =
             err?.status === 503 ||
             err?.status === 429 ||
@@ -205,10 +321,11 @@ ${GROUNDING_SYSTEM_POLICY}`;
             errMsg.includes('overloaded') ||
             errMsg.includes('capacity') ||
             errMsg.includes('resource_exhausted') ||
-            errMsg.includes('503');
+            errMsg.includes('503') ||
+            isTimeoutOrNetwork;
 
           if (isHighDemand) {
-            console.warn(`[server] ${currentModel} experiencing high demand, cascading to next model...`);
+            console.warn(`[server] ${currentModel} encountered transient network/demand issue (${err?.message || 'timeout'}), cascading to next model...`);
             continue;
           }
           throw err;
@@ -219,26 +336,51 @@ ${GROUNDING_SYSTEM_POLICY}`;
         throw lastError;
       }
 
+      const tInferenceEnd = performance.now();
+      const geminiApiMs = tInferenceEnd - tInferenceStart;
+
       const candidate = response?.candidates?.[0];
+      const groundingMetadata = candidate?.groundingMetadata;
       const functionCalls = candidate?.content?.parts?.filter((p: any) => p.functionCall).map((p: any) => p.functionCall);
       const textParts = candidate?.content?.parts?.filter((p: any) => p.text).map((p: any) => p.text).join('\n');
 
-      const sourceContext = `${currentPage?.title || ''}\n${currentPage?.content || ''}\n${currentQuote || ''}`;
+      const sourceContext = `${currentPage?.title || ''}\n${currentPage?.content || currentPage?.bodyText || ''}\n${currentQuote || ''}`;
 
       // Enforce Factual Grounding & Anti-Conflation Validation Pass
+      const tValidationStart = performance.now();
+      let auditReport: any = null;
       if (functionCalls?.[0]?.name === 'finish_task') {
         const rawArgs = functionCalls[0].args || { paragraphs: [] };
-        const { sanitizedPayload, auditReport } = validateAndEnforceGrounding(rawArgs, sourceContext);
+        if (groundingMetadata) {
+          rawArgs.groundingMetadata = groundingMetadata;
+        }
+        const validated = validateAndEnforceGrounding(rawArgs, sourceContext);
+        auditReport = validated.auditReport;
         functionCalls[0].args = {
-          ...sanitizedPayload,
+          ...validated.sanitizedPayload,
           auditReport,
+          groundingMetadata,
+          serverValidated: true,
         };
       }
+      const tValidationEnd = performance.now();
+      const groundingValidationMs = tValidationEnd - tValidationStart;
+
+      const totalServerMs = performance.now() - tStart;
 
       return res.json({
         success: true,
         text: textParts || null,
         functionCall: functionCalls?.[0] || null,
+        groundingMetadata: groundingMetadata || null,
+        usedModel,
+        timings: {
+          payloadConstructionMs: Math.round(payloadConstructionMs * 10) / 10,
+          ttftMs: Math.round(ttftMs * 10) / 10,
+          geminiApiMs: Math.round(geminiApiMs * 10) / 10,
+          groundingValidationMs: Math.round(groundingValidationMs * 10) / 10,
+          totalServerMs: Math.round(totalServerMs * 10) / 10,
+        },
       });
     } catch (err: any) {
       console.error('Gemini API Error:', err);

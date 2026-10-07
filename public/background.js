@@ -112,7 +112,7 @@ async function handleCDPAction({ tabId, action, params }) {
           button: "left",
           clickCount: 1
         });
-        await delay(40);
+        await delay(10);
         await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
           type: "mouseReleased",
           x,
@@ -134,7 +134,7 @@ async function handleCDPAction({ tabId, action, params }) {
             button: "left",
             clickCount: 1
           });
-          await delay(30);
+          await delay(10);
           await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
             type: "mouseReleased",
             x,
@@ -144,22 +144,27 @@ async function handleCDPAction({ tabId, action, params }) {
           });
         }
 
-        // Dispatch key characters
-        for (const char of text) {
-          await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
-            type: "keyDown",
-            text: char,
-            unmodifiedText: char
-          });
-          await delay(15);
-          await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
-            type: "keyUp"
-          });
-          await delay(10);
+        // Fast native CDP text insertion
+        if (text) {
+          try {
+            await sendCommand(debugTarget, "Input.insertText", { text });
+          } catch {
+            // Fallback to key events with low-latency dispatch
+            for (const char of text) {
+              await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
+                type: "keyDown",
+                text: char,
+                unmodifiedText: char
+              });
+              await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
+                type: "keyUp"
+              });
+            }
+          }
         }
 
         if (pressEnter) {
-          await delay(50);
+          await delay(15);
           await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
             type: "keyDown",
             code: "Enter",
@@ -167,7 +172,7 @@ async function handleCDPAction({ tabId, action, params }) {
             windowsVirtualKeyCode: 13,
             nativeVirtualKeyCode: 13
           });
-          await delay(20);
+          await delay(10);
           await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
             type: "keyUp",
             code: "Enter",

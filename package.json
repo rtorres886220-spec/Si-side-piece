@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
-    "start": "tsx server.ts",
+    "start": "node server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test:grounding": "tsx scripts/test-grounding.ts"
+    "test:grounding": "tsx scripts/test-grounding.ts",
+    "test:benchmark": "tsx scripts/comprehensive-benchmark.ts",
+    "test": "npm run test:grounding && npm run test:benchmark"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -24,6 +26,7 @@
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "tsx": "^4.21.0",
+    "undici": "^8.11.2",
     "vite": "^8.3.0"
   },
   "devDependencies": {

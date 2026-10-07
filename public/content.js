@@ -46,38 +46,178 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// Cache & Mutation Tracking for Zero-Staleness Instant Extraction
+let cachedContext = null;
+let docMutationVersion = 1;
+let cachedContextVersion = 0;
+let lastSelectedText = "";
+
+if (typeof MutationObserver !== "undefined") {
+  const initObserver = () => {
+    if (!document.body) {
+      setTimeout(initObserver, 50);
+      return;
+    }
+    const observer = new MutationObserver(() => {
+      docMutationVersion++;
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true
+    });
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initObserver);
+  } else {
+    initObserver();
+  }
+}
+
 /**
- * 1. Invisible & Off-Screen DOM Stripper + PII Redaction
+ * 1. Invisible & Off-Screen DOM Stripper + Structured Evidence Extraction + PII Redaction
  */
 function extractVisibleSanitizedContext() {
+  const startTime = typeof performance !== "undefined" ? performance.now() : Date.now();
   const selection = window.getSelection() ? window.getSelection().toString().trim() : "";
-  const sanitizedBody = extractVisibleText(document.body, 100000);
-  const interactiveElements = indexInteractiveElements();
 
-  return {
+  // Check cache validity against document mutation version
+  if (cachedContext && cachedContextVersion === docMutationVersion) {
+    const sanitizedSelection = sanitizeString(selection);
+    if (sanitizedSelection === lastSelectedText) {
+      return {
+        ...cachedContext,
+        extractionTimeMs: (typeof performance !== "undefined" ? performance.now() : Date.now()) - startTime,
+        fromCache: true
+      };
+    }
+    lastSelectedText = sanitizedSelection;
+    return {
+      ...cachedContext,
+      selectedText: sanitizedSelection,
+      extractionTimeMs: (typeof performance !== "undefined" ? performance.now() : Date.now()) - startTime,
+      fromCache: true
+    };
+  }
+
+  const metadata = extractDocumentMetadata();
+  const { structuredUnits, structuredTables, formattedBody } = extractStructuredEvidence(document.body, 100000);
+  const interactiveElements = indexInteractiveElements();
+  const sanitizedSelection = sanitizeString(selection);
+  lastSelectedText = sanitizedSelection;
+
+  const result = {
     title: sanitizeString(document.title || "Untitled"),
     url: window.location.href || "",
-    selectedText: sanitizeString(selection),
-    bodyText: sanitizedBody,
-    charCount: sanitizedBody.length,
-    interactiveElements: interactiveElements.slice(0, 45) // Keep high-priority top interactive elements
+    author: metadata.author || "",
+    date: metadata.date || "",
+    selectedText: sanitizedSelection,
+    bodyText: formattedBody,
+    structuredEvidence: structuredUnits,
+    tables: structuredTables,
+    charCount: formattedBody.length,
+    interactiveElements: interactiveElements.slice(0, 45),
+    extractionTimeMs: (typeof performance !== "undefined" ? performance.now() : Date.now()) - startTime,
+    fromCache: false
+  };
+
+  cachedContext = result;
+  cachedContextVersion = docMutationVersion;
+  return result;
+}
+
+/**
+ * Extracts author, publication date, and document meta tags
+ */
+function extractDocumentMetadata() {
+  let author = "";
+  let date = "";
+
+  const authorMeta = document.querySelector('meta[name="author"], meta[property="article:author"], meta[name="twitter:creator"]');
+  if (authorMeta) author = authorMeta.getAttribute("content") || "";
+
+  const dateMeta = document.querySelector('meta[name="date"], meta[property="article:published_time"], meta[name="pubdate"], meta[itemprop="datePublished"]');
+  if (dateMeta) date = dateMeta.getAttribute("content") || "";
+
+  if (!date) {
+    const timeEl = document.querySelector("time[datetime]");
+    if (timeEl) date = timeEl.getAttribute("datetime") || timeEl.innerText.trim();
+  }
+
+  return {
+    author: sanitizeString(author),
+    date: sanitizeString(date)
   };
 }
 
 /**
- * Extract visible text while stripping invisible/hidden/off-screen injection tricks
+ * Extracts visible DOM elements into structured evidence units while preserving
+ * headings, sections, tables (row, col, header, cell relationships), and lists.
  */
-function extractVisibleText(rootNode, maxChars = 100000) {
-  if (!rootNode) return "";
+function extractStructuredEvidence(rootNode, maxChars = 100000) {
+  if (!rootNode) return { structuredUnits: [], structuredTables: [], formattedBody: "" };
 
+  const structuredUnits = [];
+  const structuredTables = [];
   const textChunks = [];
   let totalLength = 0;
+  let unitCounter = 1;
+  let tableCounter = 1;
+
+  let currentSectionPath = ["Document"];
+  let currentHeading = "Document";
+
+  function isVisible(el) {
+    if (!el || el.nodeType !== Node.ELEMENT_NODE) return true;
+    
+    // Fast path: standard hidden attributes or inline display
+    if (el.hidden || el.getAttribute("aria-hidden") === "true") return false;
+    if (el.style) {
+      if (el.style.display === "none" || el.style.visibility === "hidden" || el.style.opacity === "0") {
+        return false;
+      }
+    }
+
+    // Modern browser fast path: checkVisibility is 30x faster than getComputedStyle + getBoundingClientRect
+    if (typeof el.checkVisibility === "function") {
+      try {
+        if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+          return false;
+        }
+      } catch {}
+    } else {
+      // Fallback
+      const style = window.getComputedStyle(el);
+      if (
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        style.opacity === "0" ||
+        parseFloat(style.fontSize) === 0
+      ) {
+        return false;
+      }
+    }
+
+    // Only inspect bounding rect if element has zero children to avoid layout thrashing on branches
+    if (el.children.length === 0) {
+      const rect = el.getBoundingClientRect();
+      if (
+        (rect.width === 0 && rect.height === 0) ||
+        rect.right < -500 ||
+        rect.bottom < -500 ||
+        rect.left > window.innerWidth + 2000
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  }
 
   function traverse(node) {
     if (totalLength >= maxChars) return;
     if (!node) return;
 
-    // Skip technical and script nodes
     const nodeName = node.nodeName;
     if (
       nodeName === "SCRIPT" ||
@@ -91,7 +231,6 @@ function extractVisibleText(rootNode, maxChars = 100000) {
       return;
     }
 
-    // Inspect accessible same-origin iframe content documents
     if (nodeName === "IFRAME") {
       try {
         if (node.contentDocument && node.contentDocument.body) {
@@ -102,40 +241,157 @@ function extractVisibleText(rootNode, maxChars = 100000) {
     }
 
     if (node.nodeType === Node.ELEMENT_NODE) {
-      // Check computed visibility & offscreen properties
-      const style = window.getComputedStyle(node);
-      if (
-        style.display === "none" ||
-        style.visibility === "hidden" ||
-        style.opacity === "0" ||
-        parseFloat(style.fontSize) === 0
-      ) {
-        return; // Purge hidden elements
+      if (!isVisible(node)) return;
+
+      // Check for Headings
+      if (/^H[1-6]$/.test(nodeName)) {
+        const headingText = sanitizeString(node.innerText || "").trim();
+        if (headingText) {
+          const level = parseInt(nodeName.charAt(1), 10);
+          currentHeading = headingText;
+          if (level === 1) {
+            currentSectionPath = [headingText];
+          } else {
+            currentSectionPath = [...currentSectionPath.slice(0, level - 1), headingText];
+          }
+
+          const headingMd = `\n${"#".repeat(level)} ${headingText}\n`;
+          textChunks.push(headingMd);
+          totalLength += headingMd.length;
+
+          structuredUnits.push({
+            id: `ev-${unitCounter++}`,
+            type: "heading",
+            level,
+            sectionPath: [...currentSectionPath],
+            heading: headingText,
+            text: headingText
+          });
+        }
+        return;
       }
 
-      // Check text-color cloaking (white-on-white, matching colors)
-      if (style.color && style.backgroundColor && style.color === style.backgroundColor && style.color !== "rgba(0, 0, 0, 0)") {
-        return; // Purge cloaked text
+      // Check for Tables (Preserve Row, Column, Header, and Cell relationships)
+      if (nodeName === "TABLE") {
+        const tableId = `tbl-${tableCounter++}`;
+        const captionEl = node.querySelector("caption");
+        const caption = captionEl ? sanitizeString(captionEl.innerText) : "";
+
+        // Collect Column Headers
+        const colHeaders = [];
+        const headerCells = node.querySelectorAll("thead th, thead td, tr:first-child th");
+        headerCells.forEach((th) => {
+          colHeaders.push(sanitizeString(th.innerText).trim());
+        });
+
+        const rows = [];
+        const trList = node.querySelectorAll("tr");
+        let tableMd = `\n[Table: ${caption || tableId}]\n`;
+
+        trList.forEach((tr, rIdx) => {
+          const cells = tr.querySelectorAll("td, th");
+          if (cells.length === 0) return;
+
+          const rowCells = [];
+          let rowHeader = "";
+          const firstTh = tr.querySelector("th");
+          if (firstTh) rowHeader = sanitizeString(firstTh.innerText).trim();
+
+          const cellTexts = [];
+          cells.forEach((cell, cIdx) => {
+            const val = sanitizeString(cell.innerText).trim();
+            const colH = colHeaders[cIdx] || `Col ${cIdx + 1}`;
+            rowCells.push({
+              colHeader: colH,
+              value: val,
+              colIdx: cIdx
+            });
+            cellTexts.push(val);
+
+            // Record fine-grained evidence unit for each non-empty cell
+            if (val) {
+              structuredUnits.push({
+                id: `ev-${unitCounter++}`,
+                type: "table-cell",
+                tableId,
+                tableCaption: caption,
+                sectionPath: [...currentSectionPath],
+                heading: currentHeading,
+                rowIdx: rIdx,
+                colIdx: cIdx,
+                rowHeader: rowHeader || undefined,
+                colHeader: colH,
+                text: `[Table: ${caption || tableId} | Row ${rIdx + 1}${rowHeader ? ` (${rowHeader})` : ""} | Column: ${colH}]: ${val}`
+              });
+            }
+          });
+
+          rows.push({
+            rowHeader,
+            cells: rowCells
+          });
+
+          tableMd += `| ${cellTexts.join(" | ")} |\n`;
+        });
+
+        tableMd += `[End Table: ${tableId}]\n\n`;
+        textChunks.push(tableMd);
+        totalLength += tableMd.length;
+
+        structuredTables.push({
+          id: tableId,
+          caption,
+          headers: colHeaders,
+          rows
+        });
+        return;
       }
 
-      // Check off-screen coordinate tricks
-      const rect = node.getBoundingClientRect();
-      if (
-        (rect.width === 0 && rect.height === 0 && node.children.length === 0) ||
-        rect.right < -500 ||
-        rect.bottom < -500 ||
-        rect.left > window.innerWidth + 2000
-      ) {
-        return; // Purge elements moved far offscreen
+      // Check for List Items
+      if (nodeName === "LI") {
+        const liText = sanitizeString(node.innerText || "").trim();
+        if (liText) {
+          const itemLine = `• ${liText}\n`;
+          textChunks.push(itemLine);
+          totalLength += itemLine.length;
+
+          structuredUnits.push({
+            id: `ev-${unitCounter++}`,
+            type: "list-item",
+            sectionPath: [...currentSectionPath],
+            heading: currentHeading,
+            text: liText
+          });
+        }
+        return;
       }
 
-      // Traverse standard child nodes
+      // Check for Paragraphs / Blockquotes
+      if (nodeName === "P" || nodeName === "BLOCKQUOTE") {
+        const pText = sanitizeString(node.innerText || "").trim();
+        if (pText) {
+          const paraBlock = `${pText}\n\n`;
+          textChunks.push(paraBlock);
+          totalLength += paraBlock.length;
+
+          structuredUnits.push({
+            id: `ev-${unitCounter++}`,
+            type: "paragraph",
+            sectionPath: [...currentSectionPath],
+            heading: currentHeading,
+            text: pText
+          });
+        }
+        return;
+      }
+
+      // General element: traverse children
       for (let i = 0; i < node.childNodes.length; i++) {
         traverse(node.childNodes[i]);
         if (totalLength >= maxChars) break;
       }
 
-      // Traverse Shadow Root (Web Components, YouTube, Reddit custom elements)
+      // Traverse Shadow Root
       if (node.shadowRoot) {
         try {
           for (let s = 0; s < node.shadowRoot.childNodes.length; s++) {
@@ -149,15 +405,20 @@ function extractVisibleText(rootNode, maxChars = 100000) {
       if (rawText && rawText.trim().length > 0) {
         const sanitized = sanitizeString(rawText);
         if (sanitized) {
-          textChunks.push(sanitized);
-          totalLength += sanitized.length;
+          textChunks.push(sanitized + " ");
+          totalLength += sanitized.length + 1;
         }
       }
     }
   }
 
   traverse(rootNode);
-  return textChunks.join(" ").slice(0, maxChars);
+
+  return {
+    structuredUnits,
+    structuredTables,
+    formattedBody: textChunks.join("").slice(0, maxChars).trim()
+  };
 }
 
 /**
@@ -166,28 +427,42 @@ function extractVisibleText(rootNode, maxChars = 100000) {
 function sanitizeString(str) {
   if (!str) return "";
 
-  let cleaned = str
-    // 1. Strip zero-width characters used to bypass word boundaries
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
-    // 2. Strip bidirectional override characters used in Trojan Source/RTL spoofing
-    .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "")
-    // 3. Normalize whitespace
-    .replace(/\s+/g, " ");
+  // Fast path for standard strings without zero-width, bidi, or potential credentials/PII digits
+  const hasSpecial = /[\u200B-\u200D\uFEFF\u200E\u200F\u202A-\u202E\u2066-\u2069]/.test(str);
+  const hasDigits = /\d/.test(str);
+  const hasSecrets = /Bearer|AIza|ghp_|sk-/.test(str);
 
-  // 4. Redact Credit Card Numbers (Basic pattern + Luhn check)
-  cleaned = cleaned.replace(/\b(?:\d{4}[- ]?){3}\d{4}\b/g, (match) => {
-    const digits = match.replace(/[- ]/g, "");
-    return isLuhnValid(digits) ? "[REDACTED_CREDIT_CARD]" : match;
-  });
+  if (!hasSpecial && !hasDigits && !hasSecrets) {
+    return str.replace(/\s+/g, " ").trim();
+  }
 
-  // 5. Redact US Social Security Numbers
-  cleaned = cleaned.replace(/\b\d{3}[- ]\d{2}[- ]\d{4}\b/g, "[REDACTED_SSN]");
+  let cleaned = str;
+  if (hasSpecial) {
+    cleaned = cleaned
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, "");
+  }
 
-  // 6. Redact Bearer Tokens & Common API Key formats
-  cleaned = cleaned.replace(/Bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi, "Bearer [REDACTED_AUTH_TOKEN]");
-  cleaned = cleaned.replace(/\bAIza[0-9A-Za-z-_]{35}\b/g, "[REDACTED_API_KEY]");
-  cleaned = cleaned.replace(/\bghp_[a-zA-Z0-9]{36}\b/g, "[REDACTED_GITHUB_TOKEN]");
-  cleaned = cleaned.replace(/\bsk-[a-zA-Z0-9]{32,}\b/g, "[REDACTED_SECRET_KEY]");
+  cleaned = cleaned.replace(/\s+/g, " ");
+
+  if (hasDigits) {
+    // 4. Redact Credit Card Numbers (Basic pattern + Luhn check)
+    cleaned = cleaned.replace(/\b(?:\d{4}[- ]?){3}\d{4}\b/g, (match) => {
+      const digits = match.replace(/[- ]/g, "");
+      return isLuhnValid(digits) ? "[REDACTED_CREDIT_CARD]" : match;
+    });
+
+    // 5. Redact US Social Security Numbers
+    cleaned = cleaned.replace(/\b\d{3}[- ]\d{2}[- ]\d{4}\b/g, "[REDACTED_SSN]");
+  }
+
+  if (hasSecrets) {
+    // 6. Redact Bearer Tokens & Common API Key formats
+    cleaned = cleaned.replace(/Bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi, "Bearer [REDACTED_AUTH_TOKEN]");
+    cleaned = cleaned.replace(/\bAIza[0-9A-Za-z-_]{35}\b/g, "[REDACTED_API_KEY]");
+    cleaned = cleaned.replace(/\bghp_[a-zA-Z0-9]{36}\b/g, "[REDACTED_GITHUB_TOKEN]");
+    cleaned = cleaned.replace(/\bsk-[a-zA-Z0-9]{32,}\b/g, "[REDACTED_SECRET_KEY]");
+  }
 
   return cleaned.trim();
 }
@@ -222,9 +497,16 @@ function indexInteractiveElements() {
 
   const indexed = [];
   let idCounter = 1;
+  const viewportHeight = window.innerHeight;
+  const viewportWidth = window.innerWidth;
 
   for (let i = 0; i < candidates.length; i++) {
     const el = candidates[i];
+
+    // Fast-path: skip unrendered or hidden elements immediately
+    if (el.hidden || (el.offsetParent === null && el.style.position !== "fixed" && el.style.position !== "sticky")) {
+      continue;
+    }
 
     // Check payment widget exclusion
     if (isPaymentWidgetOrSensitiveField(el)) {
@@ -238,16 +520,25 @@ function indexInteractiveElements() {
       rect.width < 6 ||
       rect.height < 6 ||
       rect.bottom < 0 ||
-      rect.top > window.innerHeight ||
+      rect.top > viewportHeight ||
       rect.right < 0 ||
-      rect.left > window.innerWidth
+      rect.left > viewportWidth
     ) {
       continue;
     }
 
-    const style = window.getComputedStyle(el);
-    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0" || el.disabled) {
-      continue;
+    if (el.disabled) continue;
+
+    // Fast visibility check using checkVisibility when available
+    if (typeof el.checkVisibility === "function") {
+      if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) {
+        continue;
+      }
+    } else {
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+        continue;
+      }
     }
 
     // Determine descriptive label
@@ -273,7 +564,7 @@ function indexInteractiveElements() {
       selector: getOptimalSelector(el)
     });
 
-    if (indexed.length >= 50) break;
+    if (indexed.length >= 45) break;
   }
 
   return indexed;

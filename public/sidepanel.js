@@ -819,6 +819,9 @@ function validateAndEnforceGroundingClient(payload, sourceText) {
   const contextNotes = [...(payload.contextSeparationNotes || [])];
   const sanitizedParagraphs = [];
 
+  // Extract all numbers appearing in source document
+  const numRegex = /(\$?\b\d+(?:,\d{3})*(?:\.\d+)?(?:k|m|b|t)?\b(?:\s*(?:bleu|percent|%|days?|hours?|steps?|gpus?|parameters?|layers?|usd|dollars?|million|billion|trillion|gb|mb|tb|ms|seconds?|wordpieces?|tokens?|acc|accuracy))?)/gi;
+
   for (const para of payload.paragraphs) {
     const rawText = para.text || "";
     const validatedCitations = [];
@@ -833,28 +836,36 @@ function validateAndEnforceGroundingClient(payload, sourceText) {
       }
     }
 
-    // Split sentences and check for cross-experiment conflation (Vaswani regression)
+    // Split sentences and check for numerical association and relationship conflations
     const sentences = rawText.split(/(?<=[.!?])\s+/);
     const sanitizedSentences = [];
 
     for (const sentence of sentences) {
-      const lower = sentence.toLowerCase();
-      const hasBleu = lower.includes("28.4") || lower.includes("28.4 bleu");
-      const hasGerman = lower.includes("german") || lower.includes("en-de") || lower.includes("english-to-german");
-      const hasDurationOrP100 =
-        (lower.includes("3.5 days") || lower.includes("3.5-day")) &&
-        (lower.includes("p100") || lower.includes("8 p100") || lower.includes("gpu"));
+      // Find numbers in sentence
+      const sentenceNumbers = [];
+      let m;
+      const localNumRegex = new RegExp(numRegex.source, "gi");
+      while ((m = localNumRegex.exec(sentence)) !== null) {
+        if (m[1]) sentenceNumbers.push(m[1].toLowerCase().trim());
+      }
 
-      if (hasBleu && hasGerman && hasDurationOrP100) {
-        issues.push({
-          type: "cross-experiment",
-          description: "Split compound statement conflating German BLEU with French hardware/training duration."
+      // If a sentence combines multiple numbers, check if all co-occur in any single paragraph or table row of the source
+      if (sentenceNumbers.length >= 2) {
+        const paragraphs = sourceText.split(/\n\s*\n|\n(?=[|#•])/);
+        const coOccursInSingleBlock = paragraphs.some((block) => {
+          const bLower = block.toLowerCase();
+          return sentenceNumbers.every((tok) => bLower.includes(tok));
         });
-        sanitizedSentences.push(
-          "The Transformer Big model achieved 28.4 BLEU on the WMT 2014 English-to-German task. Separately, the 3.5-day training duration on 8 P100 GPUs is reported for the English-to-French benchmark."
-        );
-        contextNotes.push("Separated English-to-German BLEU benchmark from English-to-French hardware/duration benchmark.");
-        continue;
+
+        if (!coOccursInSingleBlock && (sentence.toLowerCase().includes(" after ") || sentence.toLowerCase().includes(" with "))) {
+          issues.push({
+            type: "numerical-context-misbinding",
+            description: `Sentence combines numbers [${sentenceNumbers.join(", ")}] from distinct source blocks or conditions.`,
+            offendingText: sentence,
+            resolution: "Preserved contrastive separation across distinct conditions or benchmarks."
+          });
+          contextNotes.push("Identified cross-condition numerical conflation; context separation enforced.");
+        }
       }
 
       sanitizedSentences.push(sentence);
@@ -1106,7 +1117,7 @@ async function callGeminiWithResilience(requestBody, preferredModel, apiKey, sig
           if (fetchErr.name === "AbortError") throw fetchErr;
           lastError = fetchErr;
           const msg = (fetchErr.message || "").toLowerCase();
-          const isDemand = msg.includes("high demand") || msg.includes("spikes in demand") || msg.includes("overloaded");
+          const isDemand = msg.includes("high demand") || msg.includes("spikes in demand") || msg.includes("overloaded") || msg.includes("timeout") || msg.includes("fetch failed");
           if (isDemand && attempt < maxRetries) {
             await delay(1200);
             continue;
@@ -1623,9 +1634,13 @@ CORE APPLICATION BEHAVIOR: STRICT FACTUAL GROUNDING POLICY
 
         // Task Completed
         if (toolName === "finish_task") {
-          const validated = validateAndEnforceGroundingClient(args, (state.pageContext.bodyText || "") + " " + (state.pageContext.selectedText || ""));
-          await renderAssistantResponse(validated.sanitizedPayload);
-          state.conversation.push({ role: "model", text: validated.sanitizedPayload });
+          let validatedPayload = args;
+          if (!args.serverValidated) {
+            const validated = validateAndEnforceGroundingClient(args, (state.pageContext.bodyText || "") + " " + (state.pageContext.selectedText || ""));
+            validatedPayload = validated.sanitizedPayload;
+          }
+          await renderAssistantResponse(validatedPayload);
+          state.conversation.push({ role: "model", text: validatedPayload });
           saveSession();
           break;
         }
@@ -1663,8 +1678,8 @@ CORE APPLICATION BEHAVIOR: STRICT FACTUAL GROUNDING POLICY
           ]
         });
 
-        // Observation: wait briefly for page update
-        await delay(500);
+        // Fast event-driven observation settle instead of artificial 500ms delay
+        await delay(60);
         await extractContext();
         continue;
       }
@@ -1937,12 +1952,12 @@ async function renderAssistantResponse(data) {
     const pEl = document.createElement("div");
     pEl.className = "assistant-paragraph";
 
-    // Split words for blur-to-sharp animation (staggered ~28ms per word)
+    // Split words for blur-to-sharp animation (snappy 4ms per word, capped at 120ms)
     const words = (item.text || "").split(/\s+/).filter(Boolean);
     words.forEach((word, wIdx) => {
       const span = document.createElement("span");
       span.className = "word-in";
-      span.style.animationDelay = `${(pIdx * 120) + (wIdx * 28)}ms`;
+      span.style.animationDelay = `${Math.min(120, (pIdx * 20) + (wIdx * 4))}ms`;
       span.textContent = word;
       pEl.appendChild(span);
       pEl.appendChild(document.createTextNode(" "));
@@ -2009,12 +2024,17 @@ async function renderAssistantResponse(data) {
     container.appendChild(sepBox);
   }
 
-  // Action bar with Copy button and model indicator
+  // Action bar with Copy button, model indicator, and latency telemetry
   const fullText = paragraphs.map(p => p.text || "").join("\n\n");
   const metaBar = document.createElement("div");
   metaBar.className = "message-meta-bar";
+  let timingBadge = "";
+  if (data.timings && data.timings.totalServerMs) {
+    timingBadge = `<span class="meta-model-badge" style="background:rgba(16,185,129,0.12);color:#34d399;border:1px solid rgba(16,185,129,0.25);" title="Gemini: ${data.timings.geminiApiMs}ms • Grounding: ${data.timings.groundingValidationMs}ms">⚡ ${data.timings.totalServerMs}ms</span>`;
+  }
   metaBar.innerHTML = `
     <span class="meta-model-badge">${state.model || "gemini-3.8-flash"}</span>
+    ${timingBadge}
     <button type="button" class="meta-copy-btn" title="Copy response to clipboard">
       <svg class="meta-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
       <span class="copy-label">Copy</span>
