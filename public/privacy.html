@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sidekick - Privacy Policy</title>
+  <style>
+    :root {
+      --bg: #07080b;
+      --card-bg: rgba(255, 255, 255, 0.03);
+      --border: rgba(255, 255, 255, 0.08);
+      --text: #eceef4;
+      --muted: #8b92a5;
+      --sky: #38bdf8;
+      --emerald: #34d399;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      line-height: 1.65;
+      padding: 40px 20px 80px;
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      max-width: 760px;
+      width: 100%;
+    }
+    header {
+      margin-bottom: 36px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 24px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: 999px;
+      color: var(--sky);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+    .effective-date {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    h2 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #fff;
+      margin-top: 32px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    p {
+      color: #c9cdd8;
+      font-size: 14.5px;
+      margin-bottom: 14px;
+    }
+    ul {
+      margin-bottom: 16px;
+      padding-left: 20px;
+      color: #c9cdd8;
+      font-size: 14.5px;
+    }
+    li { margin-bottom: 6px; }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin: 18px 0;
+    }
+    .card strong { color: #fff; }
+    code {
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--sky);
+    }
+    footer {
+      margin-top: 48px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    a { color: var(--sky); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge">Official Compliance Document</div>
+      <h1>Sidekick Chrome Extension Privacy Policy</h1>
+      <div class="effective-date">Effective Date: October 2026 • Version 1.1.2</div>
+    </header>
+
+    <div class="card">
+      <strong>Single-Purpose Statement:</strong> Sidekick is an AI-powered browser companion that grounds generative responses in your active browser tab, highlights cited passages in the page, and executes user-approved UI actions via Chrome DevTools Protocol.
+    </div>
+
+    <h2>1. Data Minimization & Local-First Architecture</h2>
+    <p>Sidekick adheres strictly to the principle of data minimization and local execution:</p>
+    <ul>
+      <li><strong>No Remote Tracking or Telemetry:</strong> Sidekick contains zero analytics, tracking beacons, fingerprinting scripts, or third-party advertising SDKs.</li>
+      <li><strong>Client-Side Storage:</strong> Your Gemini API key, user preferences, and chat history are saved exclusively in your browser's local sandbox via <code>chrome.storage.local</code>. They are never transmitted to external logging servers or developers.</li>
+      <li><strong>Zero Server-Side Retention:</strong> Sidekick does not run background databases that harvest or store your browsing history.</li>
+    </ul>
+
+    <h2>2. Defense-in-Depth Sanitization & PII Redaction</h2>
+    <p>Before any webpage text is transmitted to the AI model for analysis, Sidekick runs an automated client-side sanitization pipeline directly on your device:</p>
+    <ul>
+      <li><strong>Automatic PII Redaction:</strong> Credit card numbers (validated via the Luhn algorithm), Social Security Numbers (SSNs), and Bearer authentication tokens are scrubbed and replaced with safe redacting tags.</li>
+      <li><strong>Off-Screen & Invisible DOM Stripper:</strong> Hidden elements, invisible text traps, and zero-width characters are stripped to defend against prompt injection attacks.</li>
+      <li><strong>Strict Delimited Enclaves:</strong> Page context is wrapped in cryptographic delimiter tokens (<code>&lt;&lt;&lt;UNTRUSTED_CONTENT_uuid&gt;&gt;&gt;</code>) to isolate untrusted page text from AI instructions.</li>
+    </ul>
+
+    <h2>3. Permissions Justifications (Chrome Web Store Standard)</h2>
+    <p>Sidekick requests only the minimum set of permissions necessary to deliver its core features:</p>
+    <ul>
+      <li><code>sidePanel</code>: Enables Sidekick to reside conveniently alongside your active web tabs in Google Chrome's native side panel.</li>
+      <li><code>tabs</code> & <code>activeTab</code>: Used exclusively to identify the current tab's URL and title, ensuring the assistant knows which page you are discussing.</li>
+      <li><code>&lt;all_urls&gt;</code>: Required in Manifest V3 to read visible webpage text when you ask questions about the page and to highlight cited passages upon click.</li>
+      <li><code>scripting</code>: Used dynamically to locate and highlight verbatim citations when you click on quote citations in the conversation thread.</li>
+      <li><code>storage</code>: Stores your Gemini API key and chat history locally on your device.</li>
+      <li><code>debugger</code> (Option B CDP): Used strictly for ephemeral, just-in-time dispatch of true hardware mouse clicks and keystrokes for user-authorized automation tasks. The debugger attaches only for milliseconds during approved steps and detaches immediately.</li>
+    </ul>
+
+    <h2>4. Third-Party AI Services</h2>
+    <p>When you ask a question or request page analysis, the sanitized text and your prompt are transmitted via secure HTTPS directly to Google's official Gemini API (<code>https://generativelanguage.googleapis.com</code>) using your personal Gemini API key. Data processed through Google AI Studio is governed by Google's terms and privacy policies.</p>
+
+    <h2>5. Mandatory Human-in-the-Loop Security Gate</h2>
+    <p>Sidekick never performs sensitive browser interactions autonomously. Any high-risk keyword (such as "submit", "pay", "order", "delete", "purchase") triggers a mandatory, visual confirmation modal displaying the target selector and coordinates. Actions are aborted unless you explicitly click "Approve". Automation is permanently blocked on financial institutions and credential managers via an immutable deny-list.</p>
+
+    <h2>6. Contact & Inquiries</h2>
+    <p>For questions or compliance audits regarding this Privacy Policy, please visit the official Sidekick project dashboard or repository.</p>
+
+    <footer>
+      <div>Sidekick — Enterprise Browser Companion</div>
+      <div><a href="/">← Return to Companion Dashboard</a></div>
+    </footer>
+  </div>
+</body>
+</html>

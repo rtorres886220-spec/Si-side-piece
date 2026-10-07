@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, FunctionDeclaration, GenerateContentConfig } from '@google/genai';
 
 dotenv.config();
 
@@ -24,6 +24,11 @@ async function startServer() {
       hasApiKey: !!process.env.GEMINI_API_KEY,
       defaultModel: 'gemini-3.8-flash',
     });
+  });
+
+  // Hosted Privacy Policy Page (Required for Chrome Web Store compliance)
+  app.get('/privacy', (req, res) => {
+    res.sendFile(path.resolve(__dirname, isProd ? 'dist/privacy.html' : 'public/privacy.html'));
   });
 
   // Server-side Gemini API proxy route
@@ -48,7 +53,14 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing promptText' });
       }
 
-      const ai = new GoogleGenAI({ apiKey });
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
       const enclaveId = Math.random().toString(36).substring(2, 10);
 
       const systemInstruction = `You are Sidekick, an elite browser companion with native Chrome DevTools Protocol automation.
@@ -71,67 +83,95 @@ Strictly avoid payment card inputs.`;
       }
       payload += `User command: ${promptText}`;
 
-      const response = await ai.models.generateContent({
-        model: model || 'gemini-3.8-flash',
-        contents: payload,
-        config: {
-          systemInstruction,
-          tools: [
-            {
-              functionDeclarations: [
-                {
-                  name: 'click_element',
-                  description: 'Click an element at viewport coordinates using native trusted mouse click.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      x: { type: Type.NUMBER, description: 'X coordinate in pixels' },
-                      y: { type: Type.NUMBER, description: 'Y coordinate in pixels' },
-                      element_description: { type: Type.STRING, description: 'Brief description of element clicked' },
-                    },
-                    required: ['x', 'y', 'element_description'],
-                  },
-                },
-                {
-                  name: 'finish_task',
-                  description: 'Final factual summary with citations from the page context.',
-                  parameters: {
-                    type: Type.OBJECT,
-                    properties: {
-                      paragraphs: {
-                        type: Type.ARRAY,
-                        items: {
-                          type: Type.OBJECT,
-                          properties: {
-                            text: { type: Type.STRING, description: 'Paragraph text' },
-                            citations: {
-                              type: Type.ARRAY,
-                              items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                  quote: { type: Type.STRING, description: 'Exact quote substring' },
-                                  label: { type: Type.STRING, description: 'Short label' },
-                                },
-                                required: ['quote', 'label'],
-                              },
-                            },
-                          },
-                          required: ['text'],
-                        },
-                      },
-                      followUps: {
-                        type: Type.ARRAY,
-                        items: { type: Type.STRING },
-                      },
-                    },
-                    required: ['paragraphs'],
-                  },
-                },
-              ],
-            },
-          ],
+      const clickElementTool: FunctionDeclaration = {
+        name: 'click_element',
+        description: 'Click an element at viewport coordinates using native trusted mouse click.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            x: { type: Type.NUMBER, description: 'X coordinate in pixels' },
+            y: { type: Type.NUMBER, description: 'Y coordinate in pixels' },
+            element_description: { type: Type.STRING, description: 'Brief description of element clicked' },
+          },
+          required: ['x', 'y', 'element_description'],
         },
-      });
+      };
+
+      const finishTaskTool: FunctionDeclaration = {
+        name: 'finish_task',
+        description: 'Final factual summary with citations from the page context.',
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            paragraphs: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  text: { type: Type.STRING, description: 'Paragraph text' },
+                  citations: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        quote: { type: Type.STRING, description: 'Exact quote substring' },
+                        label: { type: Type.STRING, description: 'Short label' },
+                      },
+                      required: ['quote', 'label'],
+                    },
+                  },
+                },
+                required: ['text'],
+              },
+            },
+            followUps: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+            },
+          },
+          required: ['paragraphs'],
+        },
+      };
+
+      const generateConfig: GenerateContentConfig = {
+        systemInstruction,
+        tools: [
+          {
+            functionDeclarations: [clickElementTool, finishTaskTool],
+          },
+        ],
+      };
+
+      let response;
+      const targetModel = model || 'gemini-3.8-flash';
+      try {
+        response = await ai.models.generateContent({
+          model: targetModel,
+          contents: payload,
+          config: generateConfig,
+        });
+      } catch (firstErr: any) {
+        const errMsg = (firstErr?.message || '').toLowerCase();
+        const isHighDemand =
+          firstErr?.status === 503 ||
+          firstErr?.status === 429 ||
+          errMsg.includes('high demand') ||
+          errMsg.includes('spikes in demand') ||
+          errMsg.includes('overloaded') ||
+          errMsg.includes('capacity') ||
+          errMsg.includes('resource_exhausted');
+
+        if (isHighDemand && targetModel !== 'gemini-3.1-flash-lite') {
+          console.warn(`[server] ${targetModel} experiencing high demand, falling back to gemini-3.1-flash-lite...`);
+          response = await ai.models.generateContent({
+            model: 'gemini-3.1-flash-lite',
+            contents: payload,
+            config: generateConfig,
+          });
+        } else {
+          throw firstErr;
+        }
+      }
 
       const candidate = response?.candidates?.[0];
       const functionCalls = candidate?.content?.parts?.filter((p: any) => p.functionCall).map((p: any) => p.functionCall);

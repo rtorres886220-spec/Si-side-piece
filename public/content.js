@@ -6,21 +6,43 @@
 // Message Dispatcher
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "extractContext") {
-    const context = extractVisibleSanitizedContext();
-    sendResponse({ success: true, context });
-    return true;
+    try {
+      const context = extractVisibleSanitizedContext();
+      sendResponse({ success: true, context });
+    } catch (e) {
+      sendResponse({ success: false, error: e.message });
+    }
+    return false;
+  }
+
+  if (message.action === "reverifyCoordinates") {
+    try {
+      const coords = getLiveCoordinates(message.selector, message.x, message.y);
+      sendResponse({ success: true, coords });
+    } catch (e) {
+      sendResponse({ success: false, coords: { x: message.x, y: message.y } });
+    }
+    return false;
   }
 
   if (message.action === "scrollToQuote" && message.quote) {
-    const success = locateAndHighlight(message.quote);
-    sendResponse({ success });
-    return true;
+    try {
+      const success = locateAndHighlight(message.quote);
+      sendResponse({ success });
+    } catch (e) {
+      sendResponse({ success: false });
+    }
+    return false;
   }
 
   if (message.action === "highlightTarget" && message.x !== undefined && message.y !== undefined) {
-    showActionIndicator(message.x, message.y, message.label);
-    sendResponse({ success: true });
-    return true;
+    try {
+      showActionIndicator(message.x, message.y, message.label);
+      sendResponse({ success: true });
+    } catch (e) {
+      sendResponse({ success: false });
+    }
+    return false;
   }
 });
 
@@ -61,12 +83,21 @@ function extractVisibleText(rootNode, maxChars = 100000) {
       nodeName === "SCRIPT" ||
       nodeName === "STYLE" ||
       nodeName === "NOSCRIPT" ||
-      nodeName === "IFRAME" ||
       nodeName === "SVG" ||
       nodeName === "CANVAS" ||
       nodeName === "AUDIO" ||
       nodeName === "VIDEO"
     ) {
+      return;
+    }
+
+    // Inspect accessible same-origin iframe content documents
+    if (nodeName === "IFRAME") {
+      try {
+        if (node.contentDocument && node.contentDocument.body) {
+          traverse(node.contentDocument.body);
+        }
+      } catch {}
       return;
     }
 
@@ -98,9 +129,20 @@ function extractVisibleText(rootNode, maxChars = 100000) {
         return; // Purge elements moved far offscreen
       }
 
+      // Traverse standard child nodes
       for (let i = 0; i < node.childNodes.length; i++) {
         traverse(node.childNodes[i]);
         if (totalLength >= maxChars) break;
+      }
+
+      // Traverse Shadow Root (Web Components, YouTube, Reddit custom elements)
+      if (node.shadowRoot) {
+        try {
+          for (let s = 0; s < node.shadowRoot.childNodes.length; s++) {
+            traverse(node.shadowRoot.childNodes[s]);
+            if (totalLength >= maxChars) break;
+          }
+        } catch {}
       }
     } else if (node.nodeType === Node.TEXT_NODE) {
       const rawText = node.nodeValue;
@@ -396,4 +438,26 @@ function locateAndHighlight(rawQuote) {
   }
 
   return false;
+}
+
+/**
+ * JIT Coordinate Re-verification (Eliminates missed clicks from dynamic layouts or scrolling)
+ */
+function getLiveCoordinates(selector, fallbackX, fallbackY) {
+  if (selector) {
+    try {
+      const el = document.querySelector(selector);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          return {
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+            verified: true
+          };
+        }
+      }
+    } catch {}
+  }
+  return { x: fallbackX, y: fallbackY, verified: false };
 }

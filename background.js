@@ -89,6 +89,9 @@ async function handleCDPAction({ tabId, action, params }) {
   try {
     await chrome.debugger.attach(debugTarget, "1.3");
   } catch (attachErr) {
+    if (attachErr.message && attachErr.message.includes("Another debugger is already attached")) {
+      throw new Error("Chrome DevTools (F12) is already open on this tab. Please close DevTools to allow Sidekick CDP automation.");
+    }
     console.debug("JIT Attach notice:", attachErr.message);
   }
 

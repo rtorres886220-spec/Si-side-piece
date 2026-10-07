@@ -4,9 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Si</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@100;200;300;400&family=Geist+Mono:wght@200;300;400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
@@ -27,7 +24,7 @@
       <div id="wordmarkWrapper" class="wordmark-wrapper" title="Click to rename">
         <span id="wordmarkS">S</span><span id="wordmarkUper" class="wordmark-foldable">uper </span><span id="wordmarkI">I</span><span id="wordmarkNtelligence" class="wordmark-foldable">ntelligence</span>
       </div>
-      <input type="text" id="renameInput" class="rename-input hidden" style="display: none;" placeholder="Name..." />
+      <input type="text" id="renameInput" class="rename-input hidden" placeholder="Name..." />
 
       <div class="header-actions">
         <button id="newChatBtn" class="icon-btn" title="New chat" aria-label="New chat">
@@ -65,6 +62,22 @@
         </button>
       </div>
     </header>
+
+    <!-- Context & Status Tokens Bar -->
+    <div class="tokens-bar">
+      <button type="button" id="tabToken" class="mono-token ready" title="Active tab read status (Click to toggle/retry)">
+        <span id="tabTokenDot" class="token-dot"></span>
+        <span id="tabTokenLabel" class="token-text">This tab</span>
+      </button>
+
+      <button type="button" id="selectionToken" class="mono-token quote hidden" title="Captured selection context">
+        <span class="token-text">Selection</span>
+      </button>
+
+      <button type="button" id="modelToken" class="mono-token model" title="Current model (Click to change)">
+        <span id="modelTokenLabel" class="token-text">gemini-3.8-flash</span>
+      </button>
+    </div>
 
     <!-- History Drawer (Minimal overlay) -->
     <section id="historyDrawer" class="drawer hidden">
@@ -105,7 +118,8 @@
           <label for="modelSelect" class="field-label">Model</label>
           <select id="modelSelect" class="flat-select">
             <option value="gemini-3.8-flash" selected>gemini-3.8-flash (Recommended)</option>
-            <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+            <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Ultra-fast / High Capacity)</option>
+            <option value="gemini-flash-latest">gemini-flash-latest</option>
             <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
           </select>
         </div>
@@ -121,13 +135,30 @@
     <main id="threadContainer" class="thread-container">
       <!-- Empty State (Left-aligned, bottom of thread) -->
       <div id="emptyState" class="empty-state">
-        <h1 class="empty-headline">
-          What should we<br>
-          <span class="headline-mute">do with this page?</span>
-        </h1>
-        <p class="empty-subline">
-          Try <button type="button" class="empty-action-btn" data-prompt="Verify core claims with grounded citations">verify core claims</button>, <button type="button" class="empty-action-btn" data-prompt="Dispatch multi-step CDP automation">dispatch CDP automation</button>, or <button type="button" class="empty-action-btn" data-prompt="Audit cryptographic security enclave">audit security enclave</button>.
-        </p>
+        <!-- First-Run Onboarding Card (Shown when API key is missing) -->
+        <div id="onboardingCard" class="onboarding-card hidden">
+          <div class="onboarding-badge">First-Time Setup</div>
+          <h2 class="onboarding-title">Welcome to Sidekick</h2>
+          <p class="onboarding-desc">Connect your free Gemini API key to start summarizing pages, verifying claims, and dispatching automation.</p>
+          <div class="onboarding-form">
+            <input type="password" id="onboardingKeyInput" class="onboarding-input" placeholder="Paste Gemini key (AIzaSy...)" spellcheck="false" autocomplete="off" />
+            <button type="button" id="onboardingSaveBtn" class="onboarding-btn">Connect Key</button>
+          </div>
+          <div class="onboarding-footer">
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" class="onboarding-link">Get a free key in Google AI Studio ↗</a>
+            <span id="onboardingStatus" class="onboarding-status"></span>
+          </div>
+        </div>
+
+        <div id="promptSuggestions" class="prompt-suggestions">
+          <h1 class="empty-headline">
+            What should we<br>
+            <span class="headline-mute">do with this page?</span>
+          </h1>
+          <p class="empty-subline">
+            Try <button type="button" class="empty-action-btn" data-prompt="Verify core claims with grounded citations">verify core claims</button>, <button type="button" class="empty-action-btn" data-prompt="Dispatch multi-step CDP automation">dispatch CDP automation</button>, or <button type="button" class="empty-action-btn" data-prompt="Audit cryptographic security enclave">audit security enclave</button>.
+          </p>
+        </div>
       </div>
 
       <!-- Messages Thread -->
@@ -149,6 +180,10 @@
           <span id="safetyStepBadge" class="safety-step-count">Step 1 of 5</span>
         </div>
         <p id="safetyActionDesc" class="safety-gate-desc"></p>
+        <div class="safety-notice-tip">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <span>Chrome displays a brief top system notice during action dispatch — this is Chrome's native security confirmation and detaches immediately.</span>
+        </div>
         <div class="safety-gate-actions">
           <button type="button" id="approveActionBtn" class="safety-btn approve">Approve Action</button>
           <button type="button" id="denyActionBtn" class="safety-btn deny">Deny &amp; Stop</button>
@@ -188,8 +223,9 @@
             maxlength="8000"
           ></textarea>
 
-          <!-- Minimal Bottom Row: Send Button -->
+          <!-- Minimal Bottom Row: Slash shortcut & Send Button -->
           <div class="composer-bottom-row">
+            <button type="button" id="toggleSlashBtn" class="slash-btn" title="Quick slash commands">/</button>
             <div class="send-wrapper">
               <button type="submit" id="sendBtn" class="send-btn" title="Send" aria-label="Send">
                 <svg id="sendIconSvg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
