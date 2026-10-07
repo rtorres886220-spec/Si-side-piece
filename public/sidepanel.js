@@ -1933,9 +1933,32 @@ async function handleResilientDirectActionFallback(promptText) {
 
   // 4. Informational question answered from active tab text
   if (state.pageContext.bodyText && state.pageContext.bodyText.length > 50) {
+    const trimmed = pLower.trim();
+    const isPureGreeting = /^(hi|hello|hey|good\s+(morning|afternoon|evening|day))[\s!.?]*$/i.test(trimmed);
+    const isConversationalInquiry = /^(how\s+are\s+you(\s+doing)?|who\s+are\s+you|what\s+are\s+you|what\s+can\s+you\s+do|how's\s+it\s+going|how\s+do\s+you\s+do)[\s!.?]*$/i.test(trimmed);
+
+    if (isPureGreeting || isConversationalInquiry) {
+      renderAssistantPlainMessage(
+        isConversationalInquiry && /who/i.test(trimmed)
+          ? "I am Sidekick, your browser companion. Ask me a question about this page, or ask me to click, search, or summarize."
+          : "I'm doing well, thank you! I'm Sidekick, your browser companion. Ask me a question about this page, or ask me to click, search, or summarize."
+      );
+      return true;
+    }
+
+    const STOP_WORDS = new Set([
+      "how", "are", "you", "who", "what", "when", "where", "why",
+      "the", "and", "for", "with", "that", "this", "from", "have",
+      "has", "had", "can", "could", "will", "would", "should", "all",
+      "any", "some", "our", "your", "their", "its", "about", "into",
+      "more", "then", "them", "these", "those", "does", "been", "being",
+      "hello", "hey", "hi", "good", "morning", "afternoon", "evening",
+      "please", "tell", "show", "help", "thank", "thanks", "there", "here"
+    ]);
+
     const body = state.pageContext.bodyText;
     const sentences = body.split(/(?<=[.!?])\s+/);
-    const words = pLower.match(/[a-z0-9_-]{3,}/g) || [];
+    const words = (pLower.match(/[a-z0-9_-]{3,}/g) || []).filter((w) => !STOP_WORDS.has(w));
     if (words.length > 0) {
       let bestSentence = "";
       let bestMatches = 0;
@@ -2287,13 +2310,11 @@ function renderUserMessage(text) {
   indicator.innerHTML = `
     <div class="turn-action-row">
       <span id="turnActionLabel" class="turn-action-label">Processing…</span>
-      <button type="button" class="turn-action-stop" title="Stop execution">■</button>
     </div>
     <div class="turn-action-track">
       <div id="turnProgressBar" class="turn-action-bar"></div>
     </div>
   `;
-  indicator.querySelector(".turn-action-stop")?.addEventListener("click", stopRequest);
   entry.appendChild(indicator);
 
   elements.messagesList.appendChild(entry);

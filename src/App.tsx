@@ -1790,23 +1790,32 @@ export default function App() {
     if (textareaRef.current) textareaRef.current.style.height = "24px";
     setIsBusy(true);
 
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     startTurnTimer("Reading active tab context...", "", 1);
 
     try {
       // If server live engine mode is enabled, proxy through server-side /api/gemini
       if (engineMode === "server-live") {
-        await executeLiveGeminiLoop(promptText, currentQuote);
+        await executeLiveGeminiLoop(promptText, currentQuote, controller.signal);
       } else {
         await executeSimulatedAgentLoop(promptLower, promptText);
       }
     } finally {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
       stopTurnTimer();
       setIsBusy(false);
     }
   };
 
   // Live Server-Side Gemini Function Calling Loop
-  const executeLiveGeminiLoop = async (promptText: string, currentQuote: string) => {
+  const executeLiveGeminiLoop = async (promptText: string, currentQuote: string, signal?: AbortSignal) => {
     try {
       updateTurnAction("Analyzing page context...", "", 2);
       const res = await fetch("/api/gemini", {
@@ -1818,6 +1827,7 @@ export default function App() {
           currentPage,
           model: selectedModel,
         }),
+        signal,
       });
 
       if (!res.ok) {
@@ -1887,6 +1897,9 @@ export default function App() {
         await executeSimulatedAgentLoop(promptText.toLowerCase(), promptText);
       }
     } catch (err: any) {
+      if (err.name === "AbortError" || signal?.aborted) {
+        return;
+      }
       console.debug("Live Gemini server route notice:", err.message);
       await executeSimulatedAgentLoop(promptText.toLowerCase(), promptText);
     }
@@ -2172,6 +2185,25 @@ export default function App() {
       return;
     }
 
+    // Conversational & Pleasantry Guard: Return natural assistant message rather than page-grounded research data
+    const trimmedPrompt = promptText.trim();
+    const isPureGreeting = /^(hi|hello|hey|good\s+(morning|afternoon|evening|day))[\s!.?]*$/i.test(trimmedPrompt);
+    const isConversationalInquiry = /^(how\s+are\s+you(\s+doing)?|who\s+are\s+you|what\s+are\s+you|what\s+can\s+you\s+do|how's\s+it\s+going|how\s+do\s+you\s+do)[\s!.?]*$/i.test(trimmedPrompt);
+
+    if (isPureGreeting || isConversationalInquiry) {
+      updateTurnAction("Ready", "", 4);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: isConversationalInquiry && /who/i.test(trimmedPrompt)
+            ? "I am Sidekick, your browser companion. I can help summarize this page, search for elements, click buttons, or verify facts with verbatim citations."
+            : "I'm doing well, thank you! I'm Sidekick, your browser companion. Ask me a question about this page, or ask me to click, search, or summarize."
+        }
+      ]);
+      return;
+    }
+
     // Scenario D: Grounded Informational Query with Citations (Dynamic per active page)
     updateTurnAction("Analyzing page context...", "", 2);
     await new Promise((r) => setTimeout(r, 320));
@@ -2333,7 +2365,10 @@ export default function App() {
   };
 
   const handleStop = () => {
-    if (abortControllerRef.current) abortControllerRef.current.abort();
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     stopTurnTimer();
     setIsBusy(false);
   };
@@ -2963,10 +2998,10 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                       >
                         {msg.role === "user" ? (
                           <div className="flex flex-col items-end w-full group">
-                            <div className="font-mono text-[12.5px] text-[#777c8a] text-right max-w-[85%] leading-relaxed whitespace-pre-wrap">
+                            <div className="font-mono text-[12.5px] text-[#eceef4] text-right max-w-[85%] leading-relaxed whitespace-pre-wrap">
                               {msg.text}
                             </div>
-                            {/* Truthful Progress Indicator: Borderless, blends into UI theme, no model name, no timer, thin horizontal completion line matching conic gradient */}
+                            {/* Truthful Progress Indicator: Borderless, blends into UI theme, no model name, no timer, very thin horizontal completion line matching conic gradient */}
                             {isLastUserMsg && isBusy && (() => {
                               const progressPercent =
                                 currentTurnAction.step === 1 ? 25 :
@@ -2975,25 +3010,18 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
 
                               return (
                                 <div className="mt-2.5 flex flex-col items-end animate-in fade-in duration-200">
-                                  <div className="flex items-center gap-2 text-[#777c8a]">
-                                    <span className="font-mono text-[11px] font-extralight tracking-wide text-[#9da3b4]">
+                                  <div className="flex items-center text-[#777c8a]">
+                                    <span className="font-mono text-[11px] font-extralight tracking-wide text-[#777c8a]">
                                       {currentTurnAction.action || "Processing..."}
                                     </span>
-                                    <button
-                                      type="button"
-                                      onClick={handleStop}
-                                      title="Stop execution"
-                                      className="w-3.5 h-3.5 flex items-center justify-center text-[#777c8a]/60 hover:text-[#eceef4] transition-colors cursor-pointer"
-                                    >
-                                      <Square className="w-2 h-2 fill-current" />
-                                    </button>
                                   </div>
 
-                                  {/* Thinner single horizontal line beneath the text showing completion amount, matching conic specular white */}
-                                  <div className="w-44 h-[1px] bg-white/[0.06] mt-1 relative overflow-hidden">
+                                  {/* Very thin single horizontal line beneath the text showing completion amount */}
+                                  <div className="w-44 h-[0.5px] bg-white/[0.08] mt-1 relative overflow-hidden" style={{ height: "0.5px" }}>
                                     <div
-                                      className="h-[1px] transition-all duration-300 ease-out"
+                                      className="transition-all duration-300 ease-out"
                                       style={{
+                                        height: "0.5px",
                                         width: `${progressPercent}%`,
                                         background: "linear-gradient(90deg, rgba(255, 255, 255, 0.25) 0%, rgba(255, 255, 255, 0.85) 75%, rgba(255, 255, 255, 0.35) 100%)",
                                       }}
