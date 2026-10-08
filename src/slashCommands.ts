@@ -316,6 +316,39 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     example: "/audit"
   },
   {
+    id: "sludge-audit",
+    name: "/sludge-audit",
+    aliases: ["/sludge", "/predatory-audit"],
+    tier: 3,
+    tierLabel: "Tier 3: Power, Tech & Security",
+    syntax: "/sludge-audit",
+    description: "Audit page for hidden fees & asymmetric UI",
+    category: "Security",
+    example: "/sludge-audit"
+  },
+  {
+    id: "disinfect",
+    name: "/disinfect",
+    aliases: ["/clean-cart", "/uncheck-fees"],
+    tier: 2,
+    tierLabel: "Tier 2: Action, Data & Audio",
+    syntax: "/disinfect",
+    description: "Instantly uncheck hidden fees & predatory toggles",
+    category: "Browser Action",
+    example: "/disinfect"
+  },
+  {
+    id: "cancel",
+    name: "/cancel",
+    aliases: ["/click-to-cancel", "/unsubscribe-now"],
+    tier: 2,
+    tierLabel: "Tier 2: Action, Data & Audio",
+    syntax: "/cancel",
+    description: "Autonomous click-to-cancel roach motel navigator",
+    category: "Browser Action",
+    example: "/cancel"
+  },
+  {
     id: "denylist",
     name: "/denylist",
     aliases: ["/block", "/isolate"],

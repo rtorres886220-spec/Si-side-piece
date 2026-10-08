@@ -497,6 +497,8 @@ function isLuhnValid(numStr) {
   return sum % 10 === 0;
 }
 
+let sidekickIdCounter = 0;
+
 /**
  * 2. Interactive Element Indexer (Shielded from Payment Widgets)
  */
@@ -565,13 +567,21 @@ function indexInteractiveElements() {
     const centerX = Math.round(rect.left + rect.width / 2);
     const centerY = Math.round(rect.top + rect.height / 2);
 
+    // 1. INJECT UNIQUE ID to prevent selector collision
+    let uniqueId = el.getAttribute("data-sidekick-id");
+    if (!uniqueId) {
+      uniqueId = `sk-${Date.now()}-${sidekickIdCounter++}`;
+      el.setAttribute("data-sidekick-id", uniqueId);
+    }
+    const uniqueSelector = `[data-sidekick-id="${uniqueId}"]`;
+
     indexed.push({
       id: idCounter++,
       role: role,
       label: label || `Unnamed ${role}`,
       x: centerX,
       y: centerY,
-      selector: getOptimalSelector(el)
+      selector: uniqueSelector
     });
 
     if (indexed.length >= 45) break;
@@ -615,6 +625,7 @@ function isPaymentWidgetOrSensitiveField(el) {
  * Optimal CSS selector generator
  */
 function getOptimalSelector(el) {
+  if (el.getAttribute("data-sidekick-id")) return `[data-sidekick-id="${CSS.escape(el.getAttribute("data-sidekick-id"))}"]`;
   if (el.id) return `#${CSS.escape(el.id)}`;
   if (el.name) return `${el.tagName.toLowerCase()}[name="${CSS.escape(el.name)}"]`;
   if (el.getAttribute("aria-label")) return `[aria-label="${CSS.escape(el.getAttribute("aria-label"))}"]`;
@@ -841,3 +852,214 @@ function executeDOMFallback(cdpAction, params) {
 
   throw new Error(`Unsupported fallback action: ${cdpAction}`);
 }
+
+// ============================================================================
+// ANTI-SLUDGE & PREDATORY WEB NEUTRALIZER (PHASE 1)
+// ============================================================================
+
+/**
+ * @typedef {Object} DetectedDarkPattern
+ * @property {string} id - Unique identifier for the finding
+ * @property {string} type - e.g., "prechecked_opt_in", "asymmetric_visuals"
+ * @property {string} severity - "critical", "warning", "advisory"
+ * @property {string} selector - The CSS selector (using data-sidekick-id) to target it
+ * @property {string} detectedText - The text that triggered the flag
+ * @property {string} remedyActionDescription - What the bot should do to fix it
+ */
+
+/**
+ * Recursively pierces Shadow DOMs and Same-Origin iframes to find elements.
+ * This defeats modern web-component obfuscation used by adversarial UIs.
+ */
+function getPiercedElements(root, selector) {
+    let elements = Array.from(root.querySelectorAll(selector));
+    
+    // 1. Traverse into Shadow DOMs (Custom Web Components)
+    const allNodes = Array.from(root.querySelectorAll('*'));
+    for (let node of allNodes) {
+        if (node.shadowRoot) {
+            elements = elements.concat(getPiercedElements(node.shadowRoot, selector));
+        }
+    }
+
+    // 2. Traverse into Same-Origin iFrames
+    const iframes = root.querySelectorAll('iframe');
+    for (let iframe of iframes) {
+        try {
+            if (iframe.contentDocument) {
+                elements = elements.concat(getPiercedElements(iframe.contentDocument, selector));
+            }
+        } catch (e) {
+            // Cross-origin iframes (like external Stripe) require manifest all_frames: true
+            // but this safely catches the error so the script doesn't crash.
+        }
+    }
+    return elements;
+}
+
+if (typeof window !== "undefined") {
+    window.getPiercedElements = getPiercedElements;
+}
+
+class SludgeAuditor {
+    static scanPrecheckedFees() {
+        const findings = [];
+        const checkedInputs = getPiercedElements(document, 'input[type="checkbox"]:checked, input[type="radio"]:checked');
+        const feeTerms = ["fee", "protection", "insurance", "warranty", "subscription", "monthly", "annually", "$", "premium", "tip", "donation"];
+        const ignoreTerms = ["terms", "conditions", "privacy", "policy", "age", "18", "agree", "acknowledge", "rules"];
+
+        checkedInputs.forEach((input, index) => {
+            const labelElement = input.closest('label') || input.parentElement;
+            const textContext = (labelElement ? labelElement.textContent : "").toLowerCase();
+
+            if (ignoreTerms.some(term => textContext.includes(term))) return;
+
+            if (feeTerms.some(term => textContext.includes(term))) {
+                if (!input.hasAttribute('data-sidekick-id')) {
+                    input.setAttribute('data-sidekick-id', `sk-sludge-fee-${Date.now()}-${index}`);
+                }
+                findings.push({
+                    id: `sludge-fee-${index}`,
+                    type: "prechecked_opt_in",
+                    severity: "critical",
+                    selector: `[data-sidekick-id="${input.getAttribute('data-sidekick-id')}"]`,
+                    detectedText: textContext.trim().replace(/\s+/g, ' ').substring(0, 150),
+                    remedyActionDescription: "Uncheck unauthorized fee/opt-in toggle"
+                });
+            }
+        });
+        return findings;
+    }
+
+    /**
+     * STEP 3: Scans for Asymmetric Visual Hierarchies (e.g. Giant 'Keep Plan' vs Tiny 'Cancel')
+     */
+    static scanAsymmetricButtons() {
+        const findings = [];
+        const buttons = getPiercedElements(document, 'button, [role="button"], a.btn, a.button');
+
+        // Look for manipulative opposite pairs
+        const positiveRegex = /(accept all|keep plan|stay subscribed|claim offer)/i;
+        const negativeRegex = /(reject all|cancel plan|manage settings|unsubscribe)/i;
+
+        const positives = buttons.filter(b => positiveRegex.test(b.innerText || b.value));
+        const negatives = buttons.filter(b => negativeRegex.test(b.innerText || b.value));
+
+        if (positives.length > 0 && negatives.length > 0) {
+            const posRect = positives[0].getBoundingClientRect();
+            const negRect = negatives[0].getBoundingClientRect();
+
+            const posArea = posRect.width * posRect.height;
+            const negArea = negRect.width * negRect.height;
+
+            // GATE 3.1 Math Check: If the "Keep/Accept" button is 3x larger than "Cancel/Reject"
+            if (posArea > 0 && negArea > 0 && (posArea / negArea) >= 3) {
+                const ratio = (posArea / negArea).toFixed(1);
+                
+                if (!negatives[0].hasAttribute('data-sidekick-id')) {
+                    negatives[0].setAttribute('data-sidekick-id', `sk-sludge-async-${Date.now()}`);
+                }
+
+                findings.push({
+                    id: `sludge-asymmetric-0`,
+                    type: "asymmetric_visual_hierarchy",
+                    severity: "warning",
+                    selector: `[data-sidekick-id="${negatives[0].getAttribute('data-sidekick-id')}"]`,
+                    detectedText: `Deceptive sizing detected. 'Accept/Keep' is ${ratio}x larger than 'Reject/Cancel'.`,
+                    remedyActionDescription: "Click the hidden/smaller Reject or Cancel button"
+                });
+            }
+        }
+        return findings;
+    }
+}
+
+if (typeof window !== "undefined") {
+    window.SludgeAuditor = SludgeAuditor;
+}
+
+/**
+ * STEP 5 & 6: The Autonomous Click-to-Cancel Engine
+ */
+class CancelationEngine {
+    static getNextCancelationStep() {
+        const bodyText = document.body.innerText.toLowerCase();
+
+        // 1. GATE 6.1: Termination Proof (Check if we already succeeded)
+        const successText = /(successfully cancelled|has been cancelled|cancellation confirmed|we're sorry to see you go|cancellation complete)/i;
+        if (successText.test(bodyText)) {
+            return { status: "complete", message: "Cancellation cryptographically verified by DOM state." };
+        }
+
+        // 2. Survey Bypass: Handle mandatory guilt-trip radio buttons
+        const radios = getPiercedElements(document, 'input[type="radio"]');
+        if (radios.length > 0) {
+            // Find a neutral survey response like "Other" or "Too expensive", fallback to the first option
+            const targetRadio = radios.find(r => {
+                const label = (r.closest('label') || r.parentElement)?.innerText || "";
+                return /(other|expensive|financial|no longer need)/i.test(label);
+            }) || radios[0];
+
+            if (targetRadio && !targetRadio.checked) {
+                targetRadio.click();
+                return { status: "survey_bypassed", message: "Selected neutral option to bypass mandatory exit survey." };
+            }
+        }
+
+        // 3. GATE 5.1: Decoy Rejection & Target Resolution
+        const buttons = getPiercedElements(document, 'button, a, [role="button"]');
+        const cancelRegex = /(cancel|end|terminate|close account|continue to cancel|confirm cancellation)/i;
+        const decoyRegex = /(keep|stay|nevermind|go back|claim discount|save \d+%|never mind)/i;
+
+        let trueTarget = null;
+        for (let btn of buttons) {
+            const text = (btn.innerText || btn.value || btn.getAttribute('aria-label') || "").toLowerCase();
+            
+            // It MUST match a cancel intent, and MUST NOT match a retention lure
+            if (cancelRegex.test(text) && !decoyRegex.test(text)) {
+                const rect = btn.getBoundingClientRect();
+                // Ensure the button is actually visible, not hidden in a collapsed div
+                if (rect.width > 0 && rect.height > 0) {
+                    trueTarget = btn;
+                    break;
+                }
+            }
+        }
+
+        if (trueTarget) {
+            const targetName = trueTarget.innerText.trim().substring(0, 30);
+            trueTarget.click();
+            return { status: "progressing", message: `Clicked legitimate progression target: [${targetName}]` };
+        }
+
+        return { status: "stuck", message: "Could not find a valid cancellation path on this page." };
+    }
+}
+
+if (typeof window !== "undefined") {
+    window.CancelationEngine = CancelationEngine;
+}
+
+// UPDATE YOUR EXISTING LISTENER at the bottom of content.js to look like this:
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "RUN_SLUDGE_AUDIT") {
+        const feeFindings = SludgeAuditor.scanPrecheckedFees();
+        const visualFindings = SludgeAuditor.scanAsymmetricButtons();
+        sendResponse({ success: true, findings: [...feeFindings, ...visualFindings] });
+    } 
+    else if (request.action === "EXECUTE_DISINFECT") {
+        const threats = SludgeAuditor.scanPrecheckedFees();
+        let count = 0;
+        threats.forEach(t => {
+            const el = document.querySelector(t.selector) || getPiercedElements(document, t.selector)[0];
+            if (el) { el.click(); count++; }
+        });
+        sendResponse({ success: true, count });
+    }
+    else if (request.action === "EXECUTE_CANCEL_STEP") {
+        const result = CancelationEngine.getNextCancelationStep();
+        sendResponse(result);
+    }
+    return true; 
+});
+

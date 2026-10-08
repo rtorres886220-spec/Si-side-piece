@@ -54,6 +54,7 @@ import {
   AdversarialTestCase,
   AtomicClaim
 } from "./groundingEngine";
+import { GalaxyStarSystem } from "./GalaxyStarSystem";
 
 // Option B Manifest & Background Script constants for code viewer and zip generator
 const MANIFEST_CONTENT = `{
@@ -492,47 +493,14 @@ const RR_STARS: StarFiber[] = [
   { x: 45, y: 68, size: 0.72, opacity: 0.76, delay: "1.5s", depth: "near" }
 ];
 
-function RollsRoyceStarlight() {
+function GalaxyStarlightCeiling() {
   return (
-    <div className="absolute top-0 left-0 right-0 h-[48%] overflow-hidden pointer-events-none z-0 select-none">
-      {/* Restrained dark obsidian twilight atmosphere strictly on upper half - blue reduced */}
-      <div 
-        className="absolute inset-0"
-        style={{
-          background: "linear-gradient(to bottom, rgba(5, 7, 10, 0.98) 0%, rgba(12, 17, 26, 0.35) 60%, rgba(7, 8, 11, 0) 100%)"
-        }}
-      />
-
-      {/* Continuous Straight Shooting Star Track */}
-      <div className="rr-shooting-star-track">
-        <div className="rr-shooting-star" />
-      </div>
-
-      {/* Rolls-Royce 3D Depth Optical Fiber Starlight Points - Neutral Silver/White Palette */}
-      {RR_STARS.map((star, i) => (
-        <span
-          key={i}
-          className={`absolute rounded-full pointer-events-none ${
-            star.depth === "deep"
-              ? "bg-[#cbd5e1] animate-[rrFiberDeep_12s_ease-in-out_infinite]"
-              : star.depth === "mid"
-              ? "bg-[#e2e8f0] animate-[rrFiberMid_10s_ease-in-out_infinite]"
-              : "bg-white animate-[rrFiberNear_8s_ease-in-out_infinite]"
-          }`}
-          style={{
-            left: `${star.x}%`,
-            top: `${star.y}%`,
-            width: `${star.size}px`,
-            height: `${star.size}px`,
-            opacity: star.opacity,
-            animationDelay: star.delay,
-            boxShadow: star.depth === "near" 
-              ? "0 0 0.8px 0.15px rgba(255, 255, 255, 0.6)" 
-              : "none"
-          }}
-        />
-      ))}
-    </div>
+    <GalaxyStarSystem
+      heightPercent={54}
+      starCount={22000}
+      interactiveParallax={true}
+      nebulaIntensity={0.88}
+    />
   );
 }
 
@@ -1775,7 +1743,7 @@ export default function App() {
         {
           role: "assistant",
           isFallback: true,
-          text: "I can't read this page right now. It may still be loading, or the site blocks extensions. Try again, or select some text and ask about that.",
+          text: "Can't pull this page right now—either it's still loading or the site is blocking DOM reads. Highlight some text directly or try hitting it again.",
         },
       ]);
       setInputValue("");
@@ -2185,7 +2153,7 @@ export default function App() {
       return;
     }
 
-    // Conversational & Pleasantry Guard: Return natural assistant message rather than page-grounded research data
+    // Conversational & Pleasantry Guard: Return direct, blunt response with zero corporate fluff
     const trimmedPrompt = promptText.trim();
     const isPureGreeting = /^(hi|hello|hey|good\s+(morning|afternoon|evening|day))[\s!.?]*$/i.test(trimmedPrompt);
     const isConversationalInquiry = /^(how\s+are\s+you(\s+doing)?|who\s+are\s+you|what\s+are\s+you|what\s+can\s+you\s+do|how's\s+it\s+going|how\s+do\s+you\s+do)[\s!.?]*$/i.test(trimmedPrompt);
@@ -2197,8 +2165,22 @@ export default function App() {
         {
           role: "assistant",
           text: isConversationalInquiry && /who/i.test(trimmedPrompt)
-            ? "I am Sidekick, your browser companion. I can help summarize this page, search for elements, click buttons, or verify facts with verbatim citations."
-            : "I'm doing well, thank you! I'm Sidekick, your browser companion. Ask me a question about this page, or ask me to click, search, or summarize."
+            ? "I'm Sidekick. I run browser actions, pull verified facts, and cut through the noise with zero fluff. Talk to me—what are we doing on this page?"
+            : "I'm locked in. What are we doing on this tab?"
+        }
+      ]);
+      return;
+    }
+
+    // Capability / Automation / Income / Self-Queries
+    const isCapabilityInquiry = /(?:what\s+can\s+you\s+do|automate|income|service|product|how\s+can\s+you\s+help|what\s+can\s+you\s+do\s+on\s+your\s+own|other\s+ais)/i.test(promptLower);
+    if (isCapabilityInquiry && !promptLower.includes("bleu") && !promptLower.includes("attention")) {
+      updateTurnAction("Ready", "", 4);
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          text: `Here is what I execute on this browser to get you real leverage:\n\n1. **Data Harvesting & Lead Scraping:** I extract structured tables, competitor pricing, and contact directories directly out of messy DOMs into clean JSON without you paying for scraper tools.\n2. **Arbitrage & Price Monitoring:** I scan e-commerce pages for hidden discount codes, price drops, or restocks, verifying actual totals before checkout.\n3. **Dark Pattern & Scam Detection:** I catch buried recurring fees, fake discounts, and pre-checked subscription traps before you get burned.\n4. **CDP Automation:** I navigate forms, click controls, and handle repetitive browser tasks directly via Chrome DevTools Protocol.\n\nI handle the operational grunt work, research, and data extraction—you supply the strategy and close the deal.`
         }
       ]);
       return;
@@ -2499,7 +2481,15 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-hidden flex">
+      <main className="flex-1 overflow-hidden flex relative">
+        {/* Vast 3D Galaxy Star System Background for Upper Half Only - Silky Smooth Fade Towards Middle */}
+        <GalaxyStarSystem
+          heightPercent={54}
+          starCount={24000}
+          className="opacity-45"
+          interactiveParallax={true}
+          nebulaIntensity={0.85}
+        />
         {/* ================= TAB 1: OPTION B SIMULATOR ================= */}
         {activeTab === "simulator" && (
           <div className="flex-1 flex overflow-hidden">
@@ -2749,8 +2739,8 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                 }}
               />
 
-              {/* Calm Reserved Elegant Rolls-Royce Starlight Headliner Effect on Upper Half Only */}
-              <RollsRoyceStarlight />
+              {/* Vast 3-Dimensional Galaxy Star System on Upper Half Only */}
+              <GalaxyStarlightCeiling />
 
               {/* Minimal Header with Border Line Pushed Up to the Very Top - Sticky & Never Displaced */}
               <header className="sticky top-0 z-30 flex items-center justify-between px-4 py-2 border-b border-white/[0.06] bg-[#07080b] shrink-0">
@@ -2952,21 +2942,21 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                       Try{" "}
                       <button
                         type="button"
-                        onClick={() => handleSubmitPrompt("Verify core claims with grounded citations")}
+                        onClick={() => handleSubmitPrompt("Run Agent Behavior Audit")}
                         className="inline text-[#eceef4] relative group font-extralight"
                         style={{ fontWeight: 200 }}
                       >
-                        verify core claims
+                        Agent Behavior Audit
                         <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#eceef4] transition-all duration-200 group-hover:w-full" />
                       </button>
                       ,{" "}
                       <button
                         type="button"
-                        onClick={() => handleSubmitPrompt("Dispatch multi-step CDP automation")}
+                        onClick={() => handleSubmitPrompt("/sludge-audit")}
                         className="inline text-[#eceef4] relative group font-extralight"
                         style={{ fontWeight: 200 }}
                       >
-                        dispatch CDP automation
+                        Consumer Defense
                         <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#eceef4] transition-all duration-200 group-hover:w-full" />
                       </button>
                       , or{" "}
@@ -3116,30 +3106,6 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                               })}
                             </div>
                           ))}
-
-                          {/* Grounding Context Separation Policy - Borderless & blends into UI theme */}
-                          {msg.data.contextSeparationNotes && msg.data.contextSeparationNotes.length > 0 && (
-                            <div className="my-1.5 p-2 rounded-md bg-white/[0.02] text-[11px] font-mono text-[#777c8a] flex items-start gap-2 animate-in fade-in duration-200">
-                              <ShieldCheck className="w-3.5 h-3.5 text-[#777c8a] shrink-0 mt-0.5" />
-                              <div className="leading-tight">
-                                <span className="text-[#9da3b4]">Context Separation Policy: </span>
-                                <span>{msg.data.contextSeparationNotes.join(" • ")}</span>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Latency Pipeline Telemetry - Borderless & blends into UI theme */}
-                          {msg.data.timings && (
-                            <div className="my-1 px-2 py-1.5 rounded-md bg-white/[0.02] text-[10.5px] font-mono text-[#777c8a] flex items-center justify-between gap-2 animate-in fade-in duration-150">
-                              <div className="flex items-center gap-1.5">
-                                <Zap className="w-3 h-3 text-[#777c8a]" />
-                                <span>Pipeline: {msg.data.timings.totalServerMs}ms</span>
-                              </div>
-                              <div className="text-[10px] text-[#777c8a]/80">
-                                Gemini: {msg.data.timings.geminiApiMs}ms • Grounding: {msg.data.timings.groundingValidationMs}ms
-                              </div>
-                            </div>
-                          )}
 
                           {/* Quick Message Actions */}
                           <div className="flex items-center gap-2 pt-1 opacity-60 hover:opacity-100 transition-opacity">
@@ -3460,7 +3426,7 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                 {/* Reserved slot for small subtext */}
                 <div className="mt-1.5 px-2 text-center min-h-[14px]">
                   <span className="text-[10px] font-mono text-[#777c8a]/60">
-                    Type <code className="text-[#eceef4]/70">/</code> to trigger all 26 commands across 3 tiers
+                    Engineered for Agentic Intelligence by PROMPTWORKS
                   </span>
                 </div>
               </footer>

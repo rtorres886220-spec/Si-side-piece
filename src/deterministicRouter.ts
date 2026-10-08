@@ -28,10 +28,39 @@ export interface RouterResult {
 }
 
 const GREETING_PATTERNS = [
-  /^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|howdy)(?:[\s,!.?]|$)/i,
-  /(?:how\s+are\s+you(?:\s+doing)?|how's\s+it\s+going|what's\s+up)(?:[\s,!.?]|$)/i,
-  /^(?:thank\s+you|thanks(?:\s+a\s+lot)?|bye|goodbye|see\s+ya)(?:[\s,!.?]|$)/i,
-  /^(?:who\s+are\s+you|what\s+are\s+you|what\s+is\s+your\s+name|what\s+can\s+you\s+do|explain\s+yourself|help\s+me\s+understand\s+your\s+purpose|how\s+do\s+you\s+work)(?:[\s,!.?]|$)/i,
+  /^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|howdy|yo)[\s,!.?]*$/i,
+  /^(?:how\s+are\s+you(?:\s+doing)?|how's\s+it\s+going|what's\s+up)[\s,!.?]*$/i,
+  /^(?:thank\s+you|thanks(?:\s+a\s+lot)?|bye|goodbye|see\s+ya)[\s,!.?]*$/i,
+  /^(?:who\s+are\s+you|what\s+are\s+you|what\s+is\s+your\s+name)[\s,!.?]*$/i,
+];
+
+const ASSISTANT_CAPABILITY_PATTERNS = [
+  /\bwhat\s+can\s+you\s+do\b/i,
+  /\bwhat\s+(?:are\s+you\s+able|are\s+you\s+capable\s+of)\b/i,
+  /\bwhat\s+do\s+you\s+do\b/i,
+  /\bhow\s+can\s+you\s+help\b/i,
+  /\bwhat\s+can\s+you\s+automate\b/i,
+  /\bwhat\s+(?:tasks|actions|things)\s+can\s+you\s+do\b/i,
+  /\bwhat\s+can\s+you\s+do\s+on\s+your\s+own\b/i,
+  /\bhow\s+are\s+you\s+different\b/i,
+  /\bwhat\s+makes\s+you\s+different\b/i,
+  /\bwhat\s+can\s+you\s+do\s+that\s+other\b/i,
+  /\bwhat\s+else\s+can\s+you\s+do\b/i,
+  /\bhow\s+do\s+you\s+work\b/i,
+  /\bexplain\s+how\s+you\s+work\b/i,
+];
+
+const CONCEPTUAL_GENERAL_PATTERNS = [
+  /\bwhat\s+does\s+it\s+mean\s+when\b/i,
+  /\bwhat\s+does\s+["'].*?["']\s+mean\b/i,
+  /\bexplain\s+(?:what|how)\s+(?!this\s+page|the\s+page|this\s+table|the\s+author)\b/i,
+  /\b(?:what\s+is|what\s+are)\s+(?:phishing|malware|ransomware|cookies|dark\s+patterns?|arbitrage|seo|a\s+llm|prompt\s+injection)\b/i,
+];
+
+const PAGE_SPECIFIC_PATTERNS = [
+  /\b(?:this|the)\s+(?:page|article|site|website|paper|document|table|text|author|tab|score|bleu|model|benchmark|gpu|price|cost|product)\b/i,
+  /\b(?:on\s+this\s+page|in\s+this\s+document|on\s+this\s+site|from\s+this\s+page)\b/i,
+  /\b(?:summarize|extract|quote|citations?|table|pricing|bleu)\b/i,
 ];
 
 const SEMANTIC_SELECTION_PATTERNS = [
@@ -151,10 +180,22 @@ export function routeUserRequest(prompt: string): RouterResult {
   // 4. Detect Semantic Ambiguity in Actions (e.g., "find the cheapest one and buy it")
   const isSemanticSelection = SEMANTIC_SELECTION_PATTERNS.some((pat) => pat.test(pLower));
 
+  // 4b. Detect General / Assistant Capability Queries (not about the active tab's page content)
+  const isAssistantCapability = ASSISTANT_CAPABILITY_PATTERNS.some((pat) => pat.test(pLower));
+  const isConceptual = CONCEPTUAL_GENERAL_PATTERNS.some((pat) => pat.test(pLower));
+  const isPageSpecific = PAGE_SPECIFIC_PATTERNS.some((pat) => pat.test(pLower));
+  const isGeneralOrSelfQuery = (isAssistantCapability || isConceptual) && !isPageSpecific && !hasAction;
+
+  if (isGeneralOrSelfQuery) {
+    hasInformationQuery = false;
+  }
+
   // 5. Synthesize Intent
   let intent: "conversational" | "pure_action" | "informational" | "hybrid" | "ambiguous" = "informational";
 
-  if (isSemanticSelection && hasAction) {
+  if (isGeneralOrSelfQuery) {
+    intent = "conversational";
+  } else if (isSemanticSelection && hasAction) {
     intent = "ambiguous";
   } else if (hasAction && hasInformationQuery) {
     intent = "hybrid";
@@ -180,9 +221,9 @@ export function routeUserRequest(prompt: string): RouterResult {
     isSemanticSelection,
     isBroadSummary,
     requiresDomElements: intent === "pure_action" || intent === "hybrid" || intent === "ambiguous",
-    requiresPageEvidence: intent === "informational" || intent === "hybrid" || intent === "ambiguous",
+    requiresPageEvidence: (intent === "informational" || intent === "hybrid" || intent === "ambiguous") && !isGeneralOrSelfQuery,
     isConversationalOnly,
-    hasGreeting,
+    hasGreeting: hasGreeting && !isGeneralOrSelfQuery,
     hasAction,
     hasInformationQuery,
   };
