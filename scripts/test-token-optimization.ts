@@ -30,8 +30,12 @@ const model = "gemini-3.8-flash";
 
 async function countTokens(text: string): Promise<number> {
   if (!text) return 0;
-  const res = await ai.models.countTokens({ model, contents: text });
-  return res.totalTokens ?? 0;
+  try {
+    const res = await ai.models.countTokens({ model, contents: text });
+    return res.totalTokens ?? Math.ceil(text.length / 3.8);
+  } catch {
+    return Math.ceil(text.length / 3.8);
+  }
 }
 
 // Full Unoptimized Tool Schemas

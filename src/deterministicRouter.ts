@@ -12,6 +12,9 @@
 
 export interface RouterResult {
   intent: "conversational" | "pure_action" | "informational" | "hybrid" | "ambiguous";
+  scope: "on_screen" | "off_screen" | "hybrid";
+  isDeicticOrShorthand: boolean;
+  isGeneralKnowledge: boolean;
   actionTypes: Set<"click" | "type" | "scroll" | "navigate" | "upload">;
   targetTerms: string[];
   typeTextPayload?: { text: string; fieldDesc?: string; pressEnter?: boolean };
@@ -62,6 +65,103 @@ const PAGE_SPECIFIC_PATTERNS = [
   /\b(?:on\s+this\s+page|in\s+this\s+document|on\s+this\s+site|from\s+this\s+page)\b/i,
   /\b(?:summarize|extract|quote|citations?|table|pricing|bleu)\b/i,
 ];
+
+const SHORTHAND_PAGE_PATTERNS = [
+  /^(?:how\s+much(?:\s+is\s+it|\s+is\s+this)?|what\s+does\s+it\s+cost|price\??|cost\??)[\s,!.?]*$/i,
+  /^(?:how\s+many|is\s+it\s+(?:legit|worth\s+it|good|safe|real|fake|reliable|secure))[\s,!.?]*$/i,
+  /^(?:good\s+deal\??|bad\s+deal\??|specs\??|pros\s+and\s+cons|pros\s*\/\s*cons)[\s,!.?]*$/i,
+  /^(?:what\s+does\s+this\s+mean|summarize|explain\s+this|who\s+made\s+(?:this|it))[\s,!.?]*$/i,
+  /^(?:can\s+i\s+(?:buy|trust|eat|use)\s+this|what's\s+better|whats\s+better|alternatives\??)[\s,!.?]*$/i,
+  /^(?:any\s+(?:bad\s+)?reviews|return\s+policy|shipping\s+(?:cost|time|info))[\s,!.?]*$/i,
+  /^(?:is\s+this\s+(?:safe|legit|real|fake|a\s+scam)|scam\??)[\s,!.?]*$/i,
+];
+
+const DEICTIC_ANCHOR_PATTERNS = [
+  /\b(?:this|that|these|those)\s+(?:page|article|site|website|paper|document|table|text|author|tab|product|item|listing|deal|seller|store|company|cart|checkout|price|fee)\b/i,
+  /\b(?:on\s+this\s+page|in\s+this\s+document|on\s+this\s+site|from\s+this\s+page|right\s+here)\b/i,
+  /\b(?:is\s+it|does\s+it|can\s+it|will\s+it|why\s+is\s+it|how\s+do\s+i\s+use\s+this)\b/i,
+];
+
+const OPEN_DOMAIN_GENERAL_PATTERNS = [
+  // Coding & software engineering queries
+  /\b(?:write|create|implement|debug|explain)\s+(?:a|an)?\s*(?:python|javascript|typescript|rust|c\+\+|golang|html|css|sql|regex|bash|dockerfile)\b/i,
+  /\b(?:how\s+to|how\s+do\s+I)\s+(?:sort\s+an?\s+array|invert\s+a\s+binary\s+tree|parse\s+json|center\s+a\s+div|configure\s+nginx|git\s+rebase|install\s+[a-z0-9_-]+)\b/i,
+  /\b(?:regex\s+for|sql\s+query\s+to|python\s+script\s+to)\b/i,
+  // Calculations, math, physics formulas, conversions
+  /\b(?:convert\s+\d+|calculate\s+\d+|\d+\s*(?:\+|\-|\*|\/|x|divided\s+by|times|plus|minus)\s*\d+)\b/i,
+  /\b(?:ounces\s+in\s+a\s+pound|celsius\s+to\s+fahrenheit|fahrenheit\s+to\s+celsius|miles\s+to\s+km|km\s+to\s+miles|meters\s+to\s+feet)\b/i,
+  /\b(?:solve\s+for\s+x|derivative\s+of|integral\s+of|pythagorean\s+theorem|quadratic\s+formula)\b/i,
+  // Common knowledge, science, biology, astronomy, history
+  /\b(?:why\s+(?:is|do)\s+(?:the\s+)?sky\s+blue|speed\s+of\s+light|boiling\s+point\s+of|distance\s+to\s+(?:the\s+)?(?:moon|mars|sun))\b/i,
+  /\b(?:who\s+was\s+(?:the\s+)?(?:1st|2nd|3rd|16th|44th|\d+(?:st|nd|rd|th))\s+(?:us\s+)?president)\b/i,
+  /\b(?:capital\s+of\s+(?:france|australia|germany|canada|japan|brazil|italy|spain|china|india|russia|egypt|mexico))\b/i,
+  /\b(?:how\s+do\s+airplanes\s+fly|why\s+do\s+onions\s+make\s+you\s+cry|how\s+does\s+photosynthesis\s+work|what\s+is\s+mitochondria)\b/i,
+  /\b(?:recipe\s+for|how\s+to\s+boil\s+an?\s+egg|how\s+to\s+make\s+pancakes)\b/i,
+  // Creative writing & drafting
+  /\b(?:write\s+(?:a|an)\s+(?:email|letter|poem|essay|cover\s+letter|thank\s+you\s+note)|draft\s+an?\s+email)\b/i,
+];
+
+export function resolveEpistemicScope(
+  prompt: string,
+  pageMeta?: { title?: string; url?: string; domain?: string }
+): {
+  scope: "on_screen" | "off_screen" | "hybrid";
+  isDeicticOrShorthand: boolean;
+  isGeneralKnowledge: boolean;
+} {
+  const p = (prompt || "").trim();
+  const pLower = p.toLowerCase();
+
+  // 1. Shorthand or colloquial page queries (Claude-style shared screen binding)
+  const isShorthand = SHORTHAND_PAGE_PATTERNS.some((pat) => pat.test(pLower));
+  const isDeictic = DEICTIC_ANCHOR_PATTERNS.some((pat) => pat.test(pLower));
+  if (isShorthand || isDeictic) {
+    return {
+      scope: "on_screen",
+      isDeicticOrShorthand: true,
+      isGeneralKnowledge: false,
+    };
+  }
+
+  // 2. Open-domain general knowledge patterns (e.g. coding, math, world facts)
+  const isOpenDomain = OPEN_DOMAIN_GENERAL_PATTERNS.some((pat) => pat.test(pLower));
+  const isConceptual = CONCEPTUAL_GENERAL_PATTERNS.some((pat) => pat.test(pLower));
+
+  if (isOpenDomain || isConceptual) {
+    // Check if query entities coincidentally match page title or domain
+    const queryTokens = (pLower.match(/[a-z0-9_-]+/g) || []).filter((w) => w.length >= 3);
+    const pageMetaStr = `${pageMeta?.title || ""} ${pageMeta?.domain || ""}`.toLowerCase();
+    const hasOverlap = queryTokens.some((tok) => pageMetaStr.includes(tok));
+    if (hasOverlap) {
+      return {
+        scope: "on_screen",
+        isDeicticOrShorthand: false,
+        isGeneralKnowledge: false,
+      };
+    }
+    return {
+      scope: "off_screen",
+      isDeicticOrShorthand: false,
+      isGeneralKnowledge: true,
+    };
+  }
+
+  // 3. Fallback: check page specific markers
+  const isPageSpecific = PAGE_SPECIFIC_PATTERNS.some((pat) => pat.test(pLower));
+  if (isPageSpecific) {
+    return {
+      scope: "on_screen",
+      isDeicticOrShorthand: false,
+      isGeneralKnowledge: false,
+    };
+  }
+
+  return {
+    scope: "on_screen",
+    isDeicticOrShorthand: false,
+    isGeneralKnowledge: false,
+  };
+}
 
 const SEMANTIC_SELECTION_PATTERNS = [
   /\b(?:cheapest|lowest\s+price|most\s+expensive|best|highest\s+rated|top\s+rated|popular|first\s+available|second|recommended)\b/i,
@@ -211,8 +311,13 @@ export function routeUserRequest(prompt: string): RouterResult {
 
   const isConversationalOnly = intent === "conversational";
 
+  const scopeResult = resolveEpistemicScope(prompt);
+
   return {
     intent,
+    scope: scopeResult.scope,
+    isDeicticOrShorthand: scopeResult.isDeicticOrShorthand,
+    isGeneralKnowledge: scopeResult.isGeneralKnowledge,
     actionTypes,
     targetTerms,
     typeTextPayload,

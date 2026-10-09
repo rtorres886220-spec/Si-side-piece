@@ -16,26 +16,104 @@ const AUTOMATION_DENYLIST = [
   "bankofamerica.com",
   "citibank.com",
   "capitalone.com",
+  "usbank.com",
+  "americanexpress.com",
+  "amex.com",
+  "schwab.com",
+  "fidelity.com",
+  "vanguard.com",
+  "etrade.com",
+  "robinhood.com",
   "paypal.com",
+  "paypal.me",
   "stripe.com",
+  "venmo.com",
+  "cash.app",
+  "zellepay.com",
+  "wise.com",
+  "revolut.com",
   "coinbase.com",
   "binance.com",
   "kraken.com",
+  "gemini.com",
   "1password.com",
   "bitwarden.com",
   "lastpass.com",
-  "console.aws.amazon.com/billing",
-  "console.cloud.google.com/billing"
+  "dashlane.com",
+  "keepersecurity.com",
+  "accounts.google.com",
+  "mail.google.com",
+  "login.microsoftonline.com",
+  "outlook.live.com",
+  "auth0.com",
+  "okta.com",
+  "irs.gov",
+  "login.gov",
+  "usps.com",
+  "ssa.gov",
+  "console.aws.amazon.com",
+  "aws.amazon.com",
+  "console.cloud.google.com",
+  "portal.azure.com",
+  "github.com"
 ];
+
+function checkDomainAllowed(urlStr) {
+  if (!urlStr) return false;
+  const urlLower = urlStr.toLowerCase();
+  if (
+    urlLower.startsWith("chrome://") ||
+    urlLower.startsWith("chrome-extension://") ||
+    urlLower.startsWith("edge://") ||
+    urlLower.startsWith("about:") ||
+    urlLower.startsWith("file:") ||
+    urlLower.startsWith("javascript:") ||
+    urlLower.startsWith("data:")
+  ) {
+    throw new Error("Security Exception: Cannot attach debugger or automate internal/system pages.");
+  }
+  let hostname = "";
+  let pathname = "";
+  try {
+    const parsed = new URL(urlStr);
+    hostname = parsed.hostname.toLowerCase();
+    pathname = parsed.pathname.toLowerCase();
+  } catch {
+    hostname = urlLower;
+  }
+  for (const denied of AUTOMATION_DENYLIST) {
+    if (denied === "github.com") {
+      if ((hostname === "github.com" || hostname.endsWith(".github.com")) &&
+          (pathname.includes("/settings/security") || pathname.includes("/settings/keys") || pathname.includes("/settings/tokens") || pathname.includes("/settings/auth"))) {
+        throw new Error("Security Exception: Automation is strictly prohibited on sensitive GitHub security settings.");
+      }
+      continue;
+    }
+    if (hostname === denied || hostname.endsWith("." + denied)) {
+      throw new Error(`Security Exception: Automation is strictly prohibited on sensitive domain (${denied}).`);
+    }
+  }
+  return true;
+}
 
 // Sensitive payment keywords to block at background service level
 const PAYMENT_PATTERNS = [
-  "stripe", "paypal", "braintree", "credit-card", "cardnumber",
-  "cvv", "cvc", "exp-date", "cc-number", "payment-widget"
+  "stripe", "paypal", "braintree", "credit-card", "cardnumber", "card_number", "card-number",
+  "ccnum", "cvv", "cvc", "exp-date", "exp-month", "exp-year", "cc-number", "payment-widget"
 ];
 
 // Message Handler for Side Panel Requests
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // A13: Enforce caller security: only allow extension UI (sidepanel), never webpage content scripts
+  if (sender && sender.tab !== undefined) {
+    sendResponse({ success: false, error: "Unauthorized sender: CDP actions cannot be invoked from webpage content scripts." });
+    return false;
+  }
+  if (sender && sender.id && sender.id !== chrome.runtime.id) {
+    sendResponse({ success: false, error: "Unauthorized sender" });
+    return false;
+  }
+
   if (message.type === "EXECUTE_CDP_ACTION") {
     handleCDPAction(message)
       .then((result) => sendResponse({ success: true, result }))
@@ -61,25 +139,13 @@ async function handleCDPAction({ tabId, action, params }) {
   const tab = await chrome.tabs.get(tabId);
   if (!tab || !tab.url) throw new Error("Target tab not accessible");
 
-  const urlLower = tab.url.toLowerCase();
-  for (const denied of AUTOMATION_DENYLIST) {
-    if (urlLower.includes(denied)) {
-      throw new Error(`Security Exception: Automation is strictly prohibited on sensitive domain (${denied}).`);
-    }
-  }
+  checkDomainAllowed(tab.url);
 
-  // Guard against internal browser schemes
-  if (urlLower.startsWith("chrome://") || urlLower.startsWith("chrome-extension://") || urlLower.startsWith("edge://") || urlLower.startsWith("about:")) {
-    throw new Error("Security Exception: Cannot attach debugger to internal browser pages.");
-  }
-
-  // Explicit Payment Widget Lockout
-  if (params && params.selector) {
-    const selLower = params.selector.toLowerCase();
-    for (const pat of PAYMENT_PATTERNS) {
-      if (selLower.includes(pat)) {
-        throw new Error(`Security Exception: Automated interaction with payment widgets or checkout card elements is strictly blocked.`);
-      }
+  // Explicit Payment Widget Lockout across selector, element description, and text
+  const descToCheck = `${params?.selector || ""} ${params?.element_description || ""} ${params?.label || ""} ${params?.text || ""}`.toLowerCase();
+  for (const pat of PAYMENT_PATTERNS) {
+    if (descToCheck.includes(pat)) {
+      throw new Error("Security Exception: Automated interaction with payment widgets or checkout card elements is strictly blocked.");
     }
   }
 
@@ -204,6 +270,33 @@ async function handleCDPAction({ tabId, action, params }) {
 
       case "uploadFile": {
         const { selector, files } = params;
+        if (!files || !Array.isArray(files) || files.length === 0) {
+          throw new Error("Missing files parameter for uploadFile action");
+        }
+        for (const f of files) {
+          const fLower = String(f).toLowerCase();
+          if (
+            fLower.includes("/etc/") ||
+            fLower.includes("/root") ||
+            fLower.includes("/var/") ||
+            fLower.includes("/proc/") ||
+            fLower.includes("/sys/") ||
+            fLower.includes("/.ssh") ||
+            fLower.includes("/.aws") ||
+            fLower.includes("/.env") ||
+            fLower.includes("/.config") ||
+            fLower.includes("/.git") ||
+            fLower.includes("c:\\windows") ||
+            fLower.includes("id_rsa") ||
+            fLower.includes("credentials") ||
+            fLower.includes("passwd") ||
+            fLower.includes("hostname") ||
+            fLower.includes("secret") ||
+            fLower.includes(".bash_history")
+          ) {
+            throw new Error(`Security Exception: Access to protected or sensitive system path is blocked (${f}).`);
+          }
+        }
         await sendCommand(debugTarget, "DOM.enable", {});
         const doc = await sendCommand(debugTarget, "DOM.getDocument", {});
         const node = await sendCommand(debugTarget, "DOM.querySelector", {
@@ -223,6 +316,14 @@ async function handleCDPAction({ tabId, action, params }) {
 
       case "navigate": {
         const { url } = params;
+        if (!url || typeof url !== "string") throw new Error("Missing URL for navigate action");
+        const trimmed = url.trim().toLowerCase();
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+          throw new Error("Security Exception: Navigation is restricted to HTTP/HTTPS protocols only.");
+        }
+        if (!checkDomainAllowed(url)) {
+          throw new Error("Security Exception: Navigation to blocked or restricted domain is not allowed.");
+        }
         await sendCommand(debugTarget, "Page.enable", {});
         await sendCommand(debugTarget, "Page.navigate", { url });
         return { navigated: true, url };
