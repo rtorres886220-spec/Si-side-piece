@@ -180,11 +180,11 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     aliases: [],
     tier: 2,
     tierLabel: "Tier 2: Action, Data & Audio",
-    syntax: "/model [flash | pro]",
-    description: "Switch between Flash and Pro",
+    syntax: "/model [default | fallback]",
+    description: "Switch between 3.5 Flash-Lite and 3.1 Flash-Lite",
     category: "Utility",
-    example: "/model pro",
-    argSuggestions: ["flash", "pro"]
+    example: "/model fallback",
+    argSuggestions: ["default", "fallback"]
   },
   {
     id: "readaloud",

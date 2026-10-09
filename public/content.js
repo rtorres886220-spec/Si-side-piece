@@ -114,12 +114,58 @@
       return false;
     }
 
+    if (message.action === "EXECUTE_DISINFECT") {
+      try {
+        const feeFindings = SludgeAuditor.scanPrecheckedFees();
+        let neutralizedCount = 0;
+        feeFindings.forEach(f => {
+          if (f.selector) {
+            const el = document.querySelector(f.selector);
+            if (el && el.checked) {
+              el.checked = false;
+              el.removeAttribute('data-sidekick-id');
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+              neutralizedCount++;
+            }
+          }
+        });
+        sendResponse({ success: true, count: neutralizedCount });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message, count: 0 });
+      }
+      return false;
+    }
+
     if (message.action === "EXECUTE_CANCEL_STEP") {
       try {
         const step = CancelationEngine.getNextCancelationStep();
         sendResponse(step);
       } catch (e) {
         sendResponse({ status: "error", message: e.message });
+      }
+      return false;
+    }
+
+    if (message.action === "EXECUTE_APPROVED_CANCEL_CLICK") {
+      try {
+        let targetEl = null;
+        if (message.selector) {
+          targetEl = document.querySelector(message.selector);
+        }
+        if (targetEl) {
+          if (typeof targetEl.click === "function") {
+            targetEl.click();
+          } else {
+            targetEl.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+          }
+          targetEl.removeAttribute('data-sidekick-id');
+          sendResponse({ success: true, clicked: true });
+        } else {
+          sendResponse({ success: false, error: "Target element for approved cancellation step not found." });
+        }
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
       }
       return false;
     }
@@ -151,6 +197,12 @@
     } else {
       initObserver();
     }
+    window.addEventListener("scroll", () => {
+      docMutationVersion++;
+    }, { passive: true });
+    window.addEventListener("resize", () => {
+      docMutationVersion++;
+    }, { passive: true });
   }
 
   // A14: Sanitizes URL query parameters to prevent token/credential leak to external LLM
@@ -303,12 +355,21 @@
     // Bounds check for rendered boxes
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) {
-      return false;
+      // Allow inline text containers whose children carry text
+      if (style.display !== "inline" || el.childNodes.length === 0) {
+        return false;
+      }
     }
     if (rect.width <= 1 && rect.height <= 1 && (style.overflow === "hidden" || style.overflowX === "hidden" || style.overflowY === "hidden")) {
       return false;
     }
-    if (rect.right < -20 || rect.bottom < -20 || rect.left > window.innerWidth + 1000) {
+    // Only reject elements that are deliberately positioned off-screen (e.g. left: -9999px),
+    // NEVER strip elements simply because the user has scrolled down the page!
+    const docScrollY = window.scrollY || window.pageYOffset || 0;
+    const docScrollX = window.scrollX || window.pageXOffset || 0;
+    const docTop = rect.top + docScrollY;
+    const docLeft = rect.left + docScrollX;
+    if (docLeft < -2000 || docTop < -20000 || rect.left < -5000) {
       return false;
     }
 
@@ -1165,8 +1226,16 @@
             }) || radios[0];
 
             if (targetRadio && !targetRadio.checked && !isPaymentWidgetOrSensitiveField(targetRadio)) {
-              targetRadio.click();
-              return { status: "survey_bypassed", message: "Selected neutral option to bypass mandatory exit survey." };
+              const secureId = `sk-cancel-radio-${Date.now()}`;
+              targetRadio.setAttribute('data-sidekick-id', secureId);
+              const label = (targetRadio.closest('label') || targetRadio.parentElement)?.innerText?.trim() || "Survey option";
+              return {
+                status: "requires_approval",
+                actionType: "click",
+                selector: `[data-sidekick-id="${secureId}"]`,
+                targetName: `Survey option: "${label.slice(0, 30)}"`,
+                message: `Exit survey requires selecting: [${label.slice(0, 30)}]`
+              };
             }
           }
         }
@@ -1193,8 +1262,15 @@
 
       if (trueTarget) {
         const targetName = trueTarget.innerText.trim().substring(0, 30);
-        trueTarget.click();
-        return { status: "progressing", message: `Clicked cancellation progression target: [${targetName}]` };
+        const secureId = `sk-cancel-btn-${Date.now()}`;
+        trueTarget.setAttribute('data-sidekick-id', secureId);
+        return {
+          status: "requires_approval",
+          actionType: "click",
+          selector: `[data-sidekick-id="${secureId}"]`,
+          targetName,
+          message: `Confirm cancellation step: [${targetName}]`
+        };
       }
 
       return { status: "stuck", message: "Could not find a valid cancellation path on this page." };

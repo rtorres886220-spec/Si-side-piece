@@ -647,7 +647,7 @@ export default function App() {
   const [engineMode, setEngineMode] = useState<"server-live" | "workbench-sim">("server-live");
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("gemini-3.1-flash-lite");
+  const [selectedModel, setSelectedModel] = useState("gemini-3.5-flash-lite");
   const [tabReadState, setTabReadState] = useState<"reading" | "ready" | "off" | "failed">("ready");
   const [tabEnabled, setTabEnabled] = useState(true);
   const [activeSelectionQuote, setActiveSelectionQuote] = useState<string>("");
@@ -1457,14 +1457,14 @@ export default function App() {
 
     // 14. /model
     if (cmdToken === "/model") {
-      const targetModel = argLower.includes("pro") ? "gemini-3.1-pro" : "gemini-3.8-flash";
+      const targetModel = (argLower.includes("fallback") || argLower.includes("3.1")) ? "gemini-3.1-flash-lite" : "gemini-3.5-flash-lite";
       setSelectedModel(targetModel);
       showToast(`Model switched to ${targetModel}`);
       setChatMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: `⚡ Active model set to **${targetModel}** (${targetModel.includes("pro") ? "Deep Reasoning & High-Order Logic" : "Lightning-Fast Low Latency skimmer"}).`
+          text: `⚡ Active model set to **${targetModel}** (${targetModel.includes("3.5") ? "Default Fast Responsive Companion" : "High Availability Resilient Fallback"}).`
         }
       ]);
       setIsBusy(false);
@@ -1551,7 +1551,7 @@ export default function App() {
         ...prev,
         {
           role: "assistant",
-          text: `🌐 Executable cURL Request:\n\n\`\`\`bash\ncurl https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=$GEMINI_API_KEY \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "contents": [{\n      "parts": [{\n        "text": "Summarize this research paper: ${currentPage.url}"\n      }]\n    }]\n  }'\n\`\`\``
+          text: `🌐 Executable cURL Request:\n\n\`\`\`bash\ncurl https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$GEMINI_API_KEY \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "contents": [{\n      "parts": [{\n        "text": "Summarize this research paper: ${currentPage.url}"\n      }]\n    }]\n  }'\n\`\`\``
         }
       ]);
       setIsBusy(false);
@@ -2420,6 +2420,26 @@ export default function App() {
       zip.file("sidepanel.js", jsRes);
       zip.file("content.js", contentRes);
 
+      // Multi-Agent Pipeline modules
+      const agentsFolder = zip.folder("agents");
+      const agentFiles = [
+        "apiClient.js",
+        "retriever.js",
+        "router.js",
+        "workers.js",
+        "gate.js",
+        "critic.js",
+        "coordinator.js"
+      ];
+      for (const ag of agentFiles) {
+        try {
+          const agRes = await fetch(`/agents/${ag}?t=${t}`).then((r) => r.text());
+          agentsFolder?.file(ag, agRes);
+        } catch (e) {
+          console.debug("Agent bundle skip:", e);
+        }
+      }
+
       // Fonts folder
       const fontsFolder = zip.folder("fonts");
       const fontFiles = ["Geist-300.woff2", "Geist-400.woff2", "GeistMono-300.woff2"];
@@ -2457,7 +2477,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
 ## Key Upgrades:
 1. **Option B Chrome DevTools Protocol (CDP)**: Dispatches true OS-level trusted mouse clicks and keyboard keystrokes via \`chrome.debugger\`.
 2. **Ephemeral JIT Attachment**: Calls \`chrome.debugger.attach\` only for milliseconds during approved actions and detaches immediately so the yellow warning banner does not linger.
-3. **High-Demand Auto-Fallback**: Automatically retries and moves down from gemini-3.8-flash to gemini-3.7-flash if Google servers experience high demand spikes.
+3. **High-Demand Auto-Fallback**: Automatically retries and moves down from gemini-3.5-flash-lite to gemini-3.1-flash-lite if Google servers experience high demand spikes.
 4. **Defense-in-Depth Sanitization**: Strips hidden/invisible DOM elements, zero-width injection attacks, and automatically masks Credit Cards (Luhn validated), SSNs, and Bearer tokens.
 5. **Cryptographic UUID Enclaves**: Page contents are sealed in \`<<<UNTRUSTED_CONTENT_[UUID]>>>\` to neutralize Indirect Prompt Injection (IPI).
 6. **Human-in-the-Loop (HITL) Gate**: High-risk actions (Submit, Pay, Delete, Confirm) require explicit user approval.
@@ -2955,11 +2975,8 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                       onChange={(e) => setSelectedModel(e.target.value)}
                       className="w-full bg-white/[0.04] border border-white/[0.06] rounded-lg px-3 py-1.5 text-xs text-[#eceef4] font-mono outline-none"
                     >
-                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Constrained & High Availability)</option>
-                      <option value="gemini-3.8-flash">gemini-3.8-flash</option>
-                      <option value="gemini-3.7-flash">gemini-3.7-flash</option>
-                      <option value="gemini-flash-latest">gemini-flash-latest</option>
-                      <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview</option>
+                      <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Default)</option>
+                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Fallback)</option>
                     </select>
                   </div>
 
