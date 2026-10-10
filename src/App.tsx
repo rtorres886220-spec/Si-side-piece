@@ -2884,6 +2884,10 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                       <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Default)</option>
                       <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Fallback)</option>
                     </select>
+                    <div className="mt-1 flex items-center justify-between text-[11px] font-mono text-[#777c8a]">
+                      <span>Thinking Level</span>
+                      <span className="text-sky-400 font-semibold">HIGH (All Agents Active)</span>
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between pt-1">

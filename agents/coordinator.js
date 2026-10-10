@@ -22,6 +22,7 @@
       const {
         signal = null,
         onProgress = () => {},
+        thinkingLevel = "HIGH",
       } = options;
 
       const tStart = performance.now();
@@ -59,7 +60,7 @@
       onProgress("Routing intent & ranking sections…", "1. Router Agent", 1);
       const tRouterStart = performance.now();
 
-      const route = await SidekickRouter.routeRequest(this.apiClient, promptText, sectionCatalog, { signal });
+      const route = await SidekickRouter.routeRequest(this.apiClient, promptText, sectionCatalog, { signal, thinkingLevel });
       telemetry.routerMs = Math.round(performance.now() - tRouterStart);
       telemetry.intent = route.intent;
 
@@ -85,7 +86,7 @@
           promptText,
           pageContext?.interactiveElements || [],
           pageContext,
-          { signal, elementHint: route.element_hint, enclaveId }
+          { signal, elementHint: route.element_hint, enclaveId, thinkingLevel }
         );
       } else if (route.intent === "answer") {
         onProgress("Synthesizing grounded facts & receipts…", "2. Answer Worker", 2);
@@ -95,7 +96,7 @@
           promptText,
           evidence.evidenceText,
           pageContext,
-          { signal, enclaveId }
+          { signal, enclaveId, thinkingLevel }
         );
       } else {
         // "transform" (open synthesis, rewrite, translate, draft, quiz, evaluate)
@@ -106,7 +107,7 @@
           promptText,
           evidence.evidenceText,
           pageContext,
-          { signal, enclaveId }
+          { signal, enclaveId, thinkingLevel }
         );
       }
       telemetry.workerMs = Math.round(performance.now() - tWorkerStart);
@@ -151,7 +152,7 @@
           promptText,
           evidence.evidenceText,
           pageContext,
-          { signal, interactiveElements: pageContext?.interactiveElements || [], enclaveId }
+          { signal, interactiveElements: pageContext?.interactiveElements || [], enclaveId, thinkingLevel }
         );
 
         telemetry.criticMs = Math.round(performance.now() - tCriticStart);

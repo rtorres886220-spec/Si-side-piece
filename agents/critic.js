@@ -21,7 +21,7 @@
      * Attempts one-shot repair of a failed worker payload
      */
     static async repairFailure(apiClient, workerType, originalPayload, gateFailure, promptText, evidenceText, pageMeta, options = {}) {
-      const { signal, interactiveElements } = options;
+      const { signal, interactiveElements, thinkingLevel = "HIGH" } = options;
       const enclaveId = getSafeEnclaveId(options);
 
       // Do NOT attempt to repair security lockouts (e.g. payment fields)
@@ -93,8 +93,11 @@ Provide the corrected JSON with "text":`;
         systemInstruction: { parts: [{ text: systemInstruction }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.1,
+          temperature: 0.5,
           responseMimeType: "application/json",
+          thinkingConfig: {
+            thinkingLevel,
+          },
         },
       };
 

@@ -35,7 +35,7 @@
      * Executes tiny structured Router call using Gemini Flash-Lite
      */
     static async routeRequest(apiClient, promptText, sectionCatalog, options = {}) {
-      const { signal } = options;
+      const { signal, thinkingLevel = "HIGH" } = options;
 
       const systemInstruction = `You are a precision router for an autonomous browser companion.
 Classify the user prompt into exactly ONE specialist worker:
@@ -62,8 +62,11 @@ USER PROMPT: "${promptText}"`;
         systemInstruction: { parts: [{ text: systemInstruction }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.0,
+          temperature: 0.5,
           responseMimeType: "application/json",
+          thinkingConfig: {
+            thinkingLevel,
+          },
         },
       };
 

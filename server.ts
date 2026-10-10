@@ -45,7 +45,9 @@ async function startServer() {
     res.json({
       status: 'ok',
       hasApiKey: !!process.env.GEMINI_API_KEY,
-      defaultModel: 'gemini-3.1-flash-lite',
+      defaultModel: 'gemini-3.5-flash-lite',
+      thinkingLevel: 'HIGH',
+      temperature: 0.5,
     });
   });
 
@@ -71,7 +73,7 @@ async function startServer() {
         promptText,
         currentQuote,
         currentPage,
-        model = 'gemini-3.1-flash-lite',
+        model = 'gemini-3.5-flash-lite',
         stream = false,
       } = req.body;
 
@@ -532,18 +534,20 @@ ${GROUNDING_SYSTEM_POLICY}`;
 
       const generateConfig: GenerateContentConfig = {
         systemInstruction,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+        temperature: 0.5,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
       };
       if (activeTools && activeTools.length > 0) {
         generateConfig.tools = activeTools;
       }
 
-      // Model cascade: prioritize gemini-3.1-flash-lite
-      let targetModel = model || 'gemini-3.1-flash-lite';
+      // Model cascade: prioritize gemini-3.5-flash-lite
+      let targetModel = model || 'gemini-3.5-flash-lite';
 
       const cascade = [
         targetModel,
-        targetModel !== 'gemini-3.1-flash-lite' ? 'gemini-3.1-flash-lite' : 'gemini-3.8-flash',
+        targetModel !== 'gemini-3.5-flash-lite' ? 'gemini-3.5-flash-lite' : 'gemini-3.1-flash-lite',
+        'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
         'gemini-flash-latest',
       ].filter((m, i, a) => a.indexOf(m) === i);

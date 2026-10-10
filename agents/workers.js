@@ -63,7 +63,7 @@
      * with multi-process situational awareness and continuous task planning.
      */
     static async executeActionWorker(apiClient, promptText, interactiveElements, pageMeta, options = {}) {
-      const { signal, elementHint, cognitiveLedger } = options;
+      const { signal, elementHint, cognitiveLedger, thinkingLevel = "HIGH" } = options;
       const enclaveId = getSafeEnclaveId(options);
 
       const elementListStr = (interactiveElements || []).slice(0, 35).map((el) => {
@@ -150,8 +150,11 @@ USER COMMAND: "${promptText}"`;
         systemInstruction: { parts: [{ text: systemInstruction }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.1,
+          temperature: 0.5,
           responseMimeType: "application/json",
+          thinkingConfig: {
+            thinkingLevel,
+          },
         },
       };
 
@@ -299,7 +302,7 @@ USER COMMAND: "${promptText}"`;
      * Answers factual questions with verbatim quotes and structured paragraphs
      */
     static async executeAnswerWorker(apiClient, promptText, evidenceText, pageMeta, options = {}) {
-      const { signal } = options;
+      const { signal, thinkingLevel = "HIGH" } = options;
       const enclaveId = getSafeEnclaveId(options);
 
       const systemInstruction = `You are a factual evidence retrieval specialist.
@@ -348,8 +351,11 @@ USER QUESTION: "${promptText}"`;
         systemInstruction: { parts: [{ text: systemInstruction }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.1,
+          temperature: 0.5,
           responseMimeType: "application/json",
+          thinkingConfig: {
+            thinkingLevel,
+          },
         },
       };
 
@@ -374,7 +380,7 @@ USER QUESTION: "${promptText}"`;
      * NO FALSE CITATION REQUIREMENTS.
      */
     static async executeTransformWorker(apiClient, promptText, evidenceText, pageMeta, options = {}) {
-      const { signal } = options;
+      const { signal, thinkingLevel = "HIGH" } = options;
       const enclaveId = getSafeEnclaveId(options);
 
       const systemInstruction = `You are a high-signal synthesis, writing, and evaluation specialist for a browser companion.
@@ -413,8 +419,11 @@ USER COMMAND: "${promptText}"`;
         systemInstruction: { parts: [{ text: systemInstruction }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.2,
+          temperature: 0.5,
           responseMimeType: "application/json",
+          thinkingConfig: {
+            thinkingLevel,
+          },
         },
       };
 

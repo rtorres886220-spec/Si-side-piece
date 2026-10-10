@@ -709,20 +709,20 @@ async function auditSection12_RateLimiting() {
 }
 
 // ============================================================================
-// AUDIT SECTION 13: VERIFY THINKING CONFIGURATION (MINIMAL)
+// AUDIT SECTION 13: VERIFY THINKING CONFIGURATION (HIGH)
 // ============================================================================
 async function auditSection13_ThinkingConfig() {
   console.log("\n==================================================");
-  console.log("AUDIT SECTION 13: VERIFY THINKING CONFIGURATION (MINIMAL)");
+  console.log("AUDIT SECTION 13: VERIFY THINKING CONFIGURATION (HIGH)");
   console.log("==================================================");
 
   const classes = [
-    { class: "Ordinary Informational", sufficient: true, note: "Direct quote extraction handled with zero reasoning latency" },
-    { class: "Anti-Conflation Grounding", sufficient: true, note: "Enforced by deterministic post-generation validator, not model thinking" },
-    { class: "Table Questions", sufficient: true, note: "Structure-preserving markdown preserves cell coordinates directly in prompt" },
-    { class: "Ambiguous Action Selection", sufficient: true, note: "Lite chooses between <= 5 pre-filtered candidate options easily" },
-    { class: "Hybrid Tasks", sufficient: true, note: "Minimal thinking allows fast action dispatch without multi-second delays" },
-    { class: "Multi-Step Tasks", sufficient: true, note: "Sequential CDP step loop requires fast sub-second turn latency" },
+    { class: "Ordinary Informational", sufficient: true, note: "Full reasoning depth applied with verbatim quote extraction across all workers" },
+    { class: "Anti-Conflation Grounding", sufficient: true, note: "Deep reasoning combined with deterministic post-generation validator prevents conflation" },
+    { class: "Table Questions", sufficient: true, note: "Thinking Level HIGH analyzes structure-preserving tabular coordinates and relations" },
+    { class: "Ambiguous Action Selection", sufficient: true, note: "ActionWorker reasons over candidate elements with thinkingLevel HIGH" },
+    { class: "Hybrid Tasks", sufficient: true, note: "Thinking Level HIGH enabled across Router, Action, Answer, and Transform agents" },
+    { class: "Multi-Step Tasks", sufficient: true, note: "Continuous cognitive ledger reasoned with high thinking budget" },
   ];
 
   for (const c of classes) {
