@@ -145,37 +145,113 @@
     }
 
     /**
-     * Extracts text or JSON candidate parts from Gemini response
+     * Resilient JSON parser that handles code blocks, preambles, and trailing commas
      */
-    static extractCandidate(data) {
-      const candidate = data?.candidates?.[0];
-      const part = candidate?.content?.parts?.[0];
-      if (!part) return { text: "", json: null, functionCall: null };
+    static parseJsonFromText(rawText) {
+      if (!rawText || typeof rawText !== "string") return null;
+      const str = rawText.trim();
+      if (!str) return null;
 
-      const text = part.text || "";
-      let json = null;
-      if (text) {
+      // 1. Direct parse attempt
+      try {
+        return JSON.parse(str);
+      } catch {}
+
+      // 2. Extract code block content (```json ... ``` or ``` ... ```) anywhere in string
+      const codeBlockMatch = str.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      if (codeBlockMatch && codeBlockMatch[1]) {
+        const candidate = codeBlockMatch[1].trim();
         try {
-          json = JSON.parse(text);
+          return JSON.parse(candidate);
         } catch {
-          const cleaned = text.replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "").trim();
+          const cleaned = candidate.replace(/,\s*([}\]])/g, "$1");
           try {
-            json = JSON.parse(cleaned);
+            return JSON.parse(cleaned);
           } catch {}
         }
       }
 
+      // 3. Find outer balanced braces {...}
+      const firstBrace = str.indexOf("{");
+      const lastBrace = str.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        const candidateJson = str.substring(firstBrace, lastBrace + 1).trim();
+        try {
+          return JSON.parse(candidateJson);
+        } catch {
+          const cleaned = candidateJson.replace(/,\s*([}\]])/g, "$1");
+          try {
+            return JSON.parse(cleaned);
+          } catch {}
+        }
+      }
+
+      // 4. Find outer brackets [...]
+      const firstBracket = str.indexOf("[");
+      const lastBracket = str.lastIndexOf("]");
+      if (firstBracket !== -1 && lastBracket > firstBracket) {
+        const candidateJson = str.substring(firstBracket, lastBracket + 1).trim();
+        try {
+          return JSON.parse(candidateJson);
+        } catch {
+          const cleaned = candidateJson.replace(/,\s*([}\]])/g, "$1");
+          try {
+            return JSON.parse(cleaned);
+          } catch {}
+        }
+      }
+
+      return null;
+    }
+
+    /**
+     * Extracts text, JSON, and function calls from Gemini response parts.
+     * Accurately filters out internal thought blocks from Gemini 2.0/3.x models.
+     */
+    static extractCandidate(data) {
+      const candidate = data?.candidates?.[0];
+      const parts = candidate?.content?.parts || [];
+      if (!parts.length) return { text: "", json: null, functionCall: null };
+
+      // Look for functionCall first
+      const functionCallPart = parts.find((p) => p && p.functionCall);
+      const functionCall = functionCallPart ? functionCallPart.functionCall : null;
+
+      // Filter out internal reasoning/thought parts (Gemini 2.0 Flash Thinking / Gemini 3)
+      const nonThoughtParts = parts.filter(
+        (p) => p && !p.thought && typeof p.text === "string" && p.text.trim().length > 0
+      );
+
+      let text = "";
+      if (nonThoughtParts.length > 0) {
+        text = nonThoughtParts.map((p) => p.text).join("");
+      } else {
+        // Fallback: use all text parts if model only provided a single part without thought flag
+        text = parts
+          .filter((p) => p && typeof p.text === "string")
+          .map((p) => p.text)
+          .join("");
+      }
+
+      const json = SidekickApiClient.parseJsonFromText(text);
+
       return {
         text,
         json,
-        functionCall: part.functionCall || null,
+        functionCall,
       };
     }
   }
 
-  // Export to global scope
+  // Export to global scope across window, service worker (self), and globalThis (Node.js/browser)
+  if (typeof globalThis !== "undefined") {
+    globalThis.SidekickApiClient = SidekickApiClient;
+  }
   if (typeof window !== "undefined") {
     window.SidekickApiClient = SidekickApiClient;
+  }
+  if (typeof self !== "undefined") {
+    self.SidekickApiClient = SidekickApiClient;
   }
   if (typeof module !== "undefined" && module.exports) {
     module.exports = { SidekickApiClient };

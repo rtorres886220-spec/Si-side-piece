@@ -67,6 +67,7 @@ const MANIFEST_CONTENT = `{
   "permissions": [
     "sidePanel",
     "tabs",
+    "tabGroups",
     "activeTab",
     "webNavigation",
     "scripting",
@@ -2509,279 +2510,30 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
   };
 
   return (
-    <div className="flex flex-col h-screen h-[100dvh] max-h-screen bg-[#07080b] text-[#eceef4] font-sans antialiased overflow-hidden">
-      {/* Top Application Navigation Bar - Kept cleanly in viewpoint */}
-      <header className="flex items-center justify-between px-4 py-1.5 border-b border-white/[0.04] bg-[#07080b]/95 backdrop-blur z-20 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <AssistantWordmark
-              customName={customName}
-              hasCollapsed={hasCollapsed}
-              effectIndex={effectIndex}
-              onTriggerEffect={handleTriggerEffect}
-            />
-          </div>
+    <div className="flex flex-col h-screen h-[100dvh] max-h-screen bg-[#07080b] text-[#eceef4] font-sans antialiased overflow-hidden select-none">
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-black/80 border border-white/10 text-xs font-mono text-white shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-150">
+          {toastMessage}
         </div>
+      )}
 
-        {/* 1-Click ZIP Download */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleDownloadZip}
-            disabled={isZipping}
-            className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-white text-xs font-light border border-blue-500/30 transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50"
-          >
-            <Download className="w-3.5 h-3.5 text-sky-400" />
-            <span>{isZipping ? "Packaging ZIP..." : "Download Option B (.zip)"}</span>
-          </button>
-        </div>
-      </header>
-
-      {/* Main Content Area */}
-      <main className="flex-1 overflow-hidden flex relative">
-        {/* Vast 3D Galaxy Star System Background for Upper Half Only - Silky Smooth Fade Towards Middle */}
+      {/* Main Extension Viewport - Clean, Centered, Native Extension Side Panel Layout (No Fake Browser) */}
+      <main className="flex-1 flex justify-center items-center h-full w-full bg-[#07080b] relative overflow-hidden">
+        {/* Vast 3D Galaxy Star System Background for Upper Half Only */}
         <GalaxyStarSystem
           heightPercent={54}
           starCount={24000}
-          className="opacity-45"
+          className="opacity-45 pointer-events-none"
           interactiveParallax={true}
           nebulaIntensity={0.85}
         />
-        {/* ================= TAB 1: OPTION B SIMULATOR ================= */}
+
+        {/* ================= PURE SIDEKICK EXTENSION ================= */}
         {activeTab === "simulator" && (
-          <div className="flex-1 flex overflow-hidden">
-            {/* Left: Simulated Chrome Browser Tab */}
-            <div className="flex-1 flex flex-col border-r border-white/5 bg-[#0b0d13]/60 min-w-0 relative">
-              {/* Ephemeral JIT CDP Toast Banner */}
-              {jitBanner.visible && (
-                <div className="absolute top-12 left-4 right-4 z-40 bg-[#f59e0b]/15 border border-[#f59e0b]/40 rounded-lg p-2.5 text-xs font-mono text-[#f59e0b] shadow-2xl backdrop-blur-md flex items-center justify-between animate-in fade-in slide-in-from-top-2 duration-150">
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-[#f59e0b] animate-ping" />
-                    <span>{jitBanner.message}</span>
-                  </div>
-                  <span className="text-[10px] uppercase tracking-wider bg-[#f59e0b]/20 px-2 py-0.5 rounded">
-                    Ephemeral JIT Detached
-                  </span>
-                </div>
-              )}
-
-              {/* Action Pulse Dot Indicator on Simulated Coordinates */}
-              {actionIndicator && (
-                <div
-                  className="absolute pointer-events-none z-50 transition-all duration-300 transform -translate-x-1/2 -translate-y-1/2"
-                  style={{ left: `${actionIndicator.x}px`, top: `${actionIndicator.y + 60}px` }}
-                >
-                  <div className="w-8 h-8 rounded-full bg-gradient-to-r from-[#1e40af] to-[#38bdf8] opacity-80 animate-ping absolute" />
-                  <div className="w-6 h-6 rounded-full bg-gradient-to-r from-[#1e40af] to-[#38bdf8] shadow-[0_0_16px_rgba(30,64,175,0.5)] border-2 border-white flex items-center justify-center">
-                    <div className="w-1.5 h-1.5 bg-white rounded-full" />
-                  </div>
-                  <div className="absolute left-7 top-0 whitespace-nowrap bg-black/80 text-[10px] font-mono text-white px-2 py-0.5 rounded border border-white/20">
-                    {actionIndicator.label}
-                  </div>
-                </div>
-              )}
-
-              {/* Chrome Mock Tab Bar */}
-              <div className="flex items-center justify-between px-3 pt-2 bg-[#07080b] border-b border-white/5 shrink-0">
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5">
-                  {DEMO_PAGES.filter(
-                    (page) => page.id !== "adversarial-conflation-bench" && page.id !== "ecommerce-demo"
-                  ).map((page) => (
-                    <button
-                      key={page.id}
-                      onClick={() => setActivePageId(page.id)}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-t-lg text-xs font-mono transition-all ${
-                        activePageId === page.id
-                          ? "bg-[#0b0d13] text-white border-t border-x border-white/10"
-                          : "text-[#777c8a] hover:text-white hover:bg-white/5"
-                      }`}
-                    >
-                      {page.domain === "chase.com" ? (
-                        <Lock className="w-3 h-3 text-red-400" />
-                      ) : page.type === "automation" ? (
-                        <Zap className="w-3 h-3 text-sky-400" />
-                      ) : (
-                        <Globe className="w-3 h-3 text-blue-400" />
-                      )}
-                      <span className="truncate max-w-[170px]">{page.title}</span>
-                    </button>
-                  ))}
-                </div>
-
-                <div className="flex items-center gap-2 pb-1.5 text-xs font-mono text-[#777c8a]">
-                  <span className="flex items-center gap-1 text-[11px]">
-                    <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                    <span>Single-Tab Lock</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* Chrome Omnibox / URL Bar */}
-              <div className="flex items-center gap-2 px-4 py-2 bg-[#07080b]/50 border-b border-white/5 shrink-0 text-xs font-mono">
-                <div className="flex items-center gap-1.5 text-[#777c8a]">
-                  <span className="w-2.5 h-2.5 rounded-full bg-red-500/20 border border-red-500/40 inline-block" />
-                  <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/20 border border-yellow-500/40 inline-block" />
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 inline-block" />
-                </div>
-                <div className="flex-1 flex items-center justify-between bg-white/[0.04] border border-white/5 rounded-md px-3 py-1">
-                  <div className="flex items-center gap-2 text-[#eceef4]">
-                    {currentPage.domain === "chase.com" ? (
-                      <Lock className="w-3 h-3 text-red-400" />
-                    ) : (
-                      <Lock className="w-3 h-3 text-emerald-400" />
-                    )}
-                    <span>{currentPage.url}</span>
-                  </div>
-                  <span className="text-[10px] text-[#777c8a] uppercase">
-                    Tab #{currentPage.id === "ecommerce-demo" ? "42" : "1"}
-                  </span>
-                </div>
-                <button
-                  onClick={() => setShowEnclaveInspector(!showEnclaveInspector)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] transition-colors ${
-                    showEnclaveInspector
-                      ? "bg-blue-600/20 text-[#eceef4] border-blue-500/35"
-                      : "bg-white/[0.03] text-[#777c8a] border-white/5 hover:text-white"
-                  }`}
-                  title="View cryptographic enclave payload generated by sidepanel.js"
-                >
-                  <Eye className="w-3 h-3 text-sky-400" />
-                  <span>Enclave Payload</span>
-                </button>
-              </div>
-
-              {/* Simulated Page Body */}
-              <div className="flex-1 p-8 overflow-y-auto font-sans leading-relaxed select-text relative">
-                {/* Enclave Raw Inspector Drawer */}
-                {showEnclaveInspector && (
-                  <div className="mb-6 p-4 rounded-xl bg-black/60 border border-blue-500/30 text-xs font-mono backdrop-blur-md">
-                    <div className="flex items-center justify-between mb-2 text-sky-400">
-                      <span className="flex items-center gap-1.5 font-medium">
-                        <Terminal className="w-3.5 h-3.5" />
-                        Per-Request Cryptographic UUID Enclave (Pre-LLM Transmission)
-                      </span>
-                      <button onClick={() => setShowEnclaveInspector(false)} className="text-[#777c8a] hover:text-white">
-                        &times;
-                      </button>
-                    </div>
-                    <pre className="text-[#eceef4]/90 whitespace-pre-wrap text-[11px] leading-relaxed max-h-48 overflow-y-auto">
-{`<<<UNTRUSTED_CONTENT_${Math.random().toString(36).substring(2, 10)} title="${currentPage.title}" url="${currentPage.url}">>>
-${currentPage.content.slice(0, 300)}...
-VISIBLE INTERACTIVE ELEMENTS:
-${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at (${e.x}, ${e.y})`).join("\n")}
-<<<END_UNTRUSTED_CONTENT>>>`}
-                    </pre>
-                  </div>
-                )}
-
-                {/* Simulated Webpage Content Render */}
-                <div className="max-w-2xl mx-auto space-y-6">
-                  {/* Page Title & Domain Badge */}
-                  <div className="border-b border-white/10 pb-4">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-white/5 text-[#777c8a]">
-                        {currentPage.domain}
-                      </span>
-                      {currentPage.domain === "chase.com" && (
-                        <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20">
-                          AUTOMATION_DENYLIST Protected
-                        </span>
-                      )}
-                    </div>
-                    <h1 className="text-2xl font-light tracking-tight text-[#eceef4]">
-                      {currentPage.title}
-                    </h1>
-                  </div>
-
-                  {/* Render Specialized Interactive Controls for Ecommerce Lab */}
-                  {currentPage.id === "ecommerce-demo" && (
-                    <div className="p-5 rounded-2xl bg-white/[0.03] border border-white/5 space-y-4">
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="text"
-                          value={searchInputValue}
-                          onChange={(e) => setSearchInputValue(e.target.value)}
-                          placeholder="Search gear catalog..."
-                          className="flex-1 bg-white/[0.05] border border-white/10 rounded-lg px-3 py-2 text-xs font-mono outline-none text-[#eceef4]"
-                        />
-                        <button
-                          onClick={() => {
-                            triggerSimulatedCDPAction("Search Button", 310, 110);
-                          }}
-                          className="px-4 py-2 bg-white/10 hover:bg-white/15 text-xs font-mono rounded-lg transition-colors"
-                        >
-                          Search [#2]
-                        </button>
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                        <div className="text-xs font-mono text-[#777c8a]">
-                          Cart Items: <span className="text-white font-medium">{cartCount}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => {
-                              triggerSimulatedCDPAction("Add to Cart", 140, 320);
-                              setCartCount((c) => c + 1);
-                            }}
-                            className="px-3.5 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 text-[#eceef4] text-xs font-mono rounded-lg border border-blue-500/30 transition-colors"
-                          >
-                            Add to Cart [#3]
-                          </button>
-                          <button
-                            onClick={async () => {
-                              const approved = await askHITLApproval(
-                                "click_element",
-                                `Click "Submit Order & Pay $349"`,
-                                { label: "Submit Order" },
-                                1
-                              );
-                              if (approved) {
-                                triggerSimulatedCDPAction("Submit Order & Pay", 320, 320);
-                              }
-                            }}
-                            className="px-3.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-mono rounded-lg border border-amber-500/30 transition-colors flex items-center gap-1.5"
-                          >
-                            <AlertTriangle className="w-3 h-3 text-amber-400" />
-                            <span>Submit Order (High-Risk) [#4]</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Locked Payment Widget Placeholder */}
-                      <div className="p-3 rounded-lg bg-red-500/[0.04] border border-red-500/20 text-xs font-mono text-[#777c8a] flex items-center justify-between">
-                        <span className="flex items-center gap-2 text-red-300">
-                          <Lock className="w-3 h-3 text-red-400" />
-                          <span>Stripe / Checkout Card Iframe: Hardware Automation Locked</span>
-                        </span>
-                        <span className="text-[10px] text-[#777c8a]">Security Rule #5</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Body Text with In-Page Highlighting */}
-                  <div className="text-sm text-[#777c8a] leading-relaxed whitespace-pre-wrap font-sans">
-                    {currentPage.content.split("\n\n").map((chunk, idx) => {
-                      const isHighlighted = inPageHighlight && chunk.toLowerCase().includes(inPageHighlight.toLowerCase().slice(0, 30));
-                      return (
-                        <p
-                          key={idx}
-                          className={`mb-4 transition-all duration-300 ${
-                            isHighlighted
-                              ? "bg-blue-600/25 text-[#eceef4] p-2.5 rounded-lg border border-blue-500/40 shadow-[0_0_16px_rgba(37,99,235,0.3)]"
-                              : ""
-                          }`}
-                        >
-                          {chunk}
-                        </p>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Right: Side Panel Interface */}
-            <div className="w-[430px] border-l border-white/5 bg-[#07080b] flex flex-col h-full relative overflow-hidden shrink-0 select-none">
+          <div className="flex-1 flex justify-center items-center h-full w-full relative overflow-hidden">
+            {/* Pure Sidekick Extension Panel - Native Side Panel Dimensions (Exact 400px Chrome Standard) */}
+            <div className="w-[400px] max-w-full h-full flex flex-col bg-[#07080b] relative overflow-hidden border-x border-white/[0.08] shadow-[0_0_50px_rgba(0,0,0,0.85)] select-none">
               {/* Restrained Quiet Obsidian Glow - Upper Half */}
               <div
                 className={`pointer-events-none absolute -top-16 left-1/2 -translate-x-1/2 w-[500px] h-[320px] rounded-full blur-[60px] transition-all duration-[1200ms] ${
@@ -2903,6 +2655,16 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                   >
                     <HelpCircle className="w-4 h-4 drop-shadow-[0_1px_3px_rgba(255,255,255,0.25)] group-hover:drop-shadow-[0_0_8px_rgba(56,189,248,0.6)] transition-all" />
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={handleDownloadZip}
+                    disabled={isZipping}
+                    className="border-0 bg-transparent p-1 flex items-center justify-center text-white/70 hover:text-sky-300 transition-all hover:scale-110 active:scale-95 group focus:outline-none disabled:opacity-50"
+                    title={isZipping ? "Packaging ZIP..." : "Download Chrome Extension (.zip)"}
+                  >
+                    <Download className="w-4 h-4 drop-shadow-[0_1px_3px_rgba(255,255,255,0.25)] group-hover:drop-shadow-[0_0_8px_rgba(56,189,248,0.6)] text-sky-400 transition-all" />
+                  </button>
                 </div>
               </header>
 
@@ -2988,6 +2750,20 @@ ${(currentPage.elements || []).map(e => `[#${e.id}] ${e.role} "${e.label}" at ($
                       Done
                     </button>
                     <span className="text-xs font-mono text-[#777c8a]">Protected Enclave ✓</span>
+                  </div>
+
+                  <div className="pt-2 border-t border-white/[0.06]">
+                    <button
+                      onClick={handleDownloadZip}
+                      disabled={isZipping}
+                      className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-white text-xs font-light border border-blue-500/30 transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50"
+                    >
+                      <Download className="w-3.5 h-3.5 text-sky-400" />
+                      <span>{isZipping ? "Packaging ZIP..." : "Download Chrome Extension (.zip)"}</span>
+                    </button>
+                    <p className="text-[10px] text-[#777c8a] text-center mt-1.5">
+                      Unpack and load via chrome://extensions with Developer mode enabled.
+                    </p>
                   </div>
                 </div>
               )}

@@ -99,6 +99,9 @@ function checkDomainAllowed(urlStr) {
   } catch {
     hostname = urlLower;
   }
+  if (hostname === "chromewebstore.google.com" || (hostname === "chrome.google.com" && pathname.startsWith("/webstore"))) {
+    return false;
+  }
   for (const denied of AUTOMATION_DENYLIST) {
     if (denied === "github.com") {
       if ((hostname === "github.com" || hostname.endsWith(".github.com")) &&
@@ -177,7 +180,17 @@ const state = {
   conversation: [],
   isBusy: false,
   abortController: null,
-  pendingSafetyApproval: null
+  pendingSafetyApproval: null,
+  tabGroup: {
+    isConfigured: false,
+    groupId: null,
+    groupTitle: "Sidekick Workgroup",
+    groupColor: "purple",
+    isolationEnabled: true,
+    tabs: [],
+    currentTabId: null,
+    isCurrentTabInGroup: false
+  }
 };
 
 // DOM Elements
@@ -186,6 +199,25 @@ const elements = {
   newChatBtn: document.getElementById("newChatBtn"),
   historyBtn: document.getElementById("historyBtn"),
   settingsBtn: document.getElementById("settingsBtn"),
+
+  // Tab Group Controls
+  tabGroupBar: document.getElementById("tabGroupBar"),
+  groupBadgeBtn: document.getElementById("groupBadgeBtn"),
+  groupColorDot: document.getElementById("groupColorDot"),
+  groupTitleLabel: document.getElementById("groupTitleLabel"),
+  groupTabCount: document.getElementById("groupTabCount"),
+  newGroupTabBtn: document.getElementById("newGroupTabBtn"),
+  tabGroupDrawer: document.getElementById("tabGroupDrawer"),
+  closeGroupDrawerBtn: document.getElementById("closeGroupDrawerBtn"),
+  isolationToggle: document.getElementById("isolationToggle"),
+  addActiveTabBtn: document.getElementById("addActiveTabBtn"),
+  groupTabsList: document.getElementById("groupTabsList"),
+  createBindGroupBtn: document.getElementById("createBindGroupBtn"),
+  unbindGroupBtn: document.getElementById("unbindGroupBtn"),
+  isolationWarningBanner: document.getElementById("isolationWarningBanner"),
+  isolationBannerText: document.getElementById("isolationBannerText"),
+  bannerAddTabBtn: document.getElementById("bannerAddTabBtn"),
+  bannerSwitchTabBtn: document.getElementById("bannerSwitchTabBtn"),
 
   // Drawers
   historyDrawer: document.getElementById("historyDrawer"),
@@ -279,6 +311,141 @@ const storage = {
   }
 };
 
+// Tab Group Helper Functions
+async function refreshTabGroupState() {
+  try {
+    const res = await new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: "GET_MANAGED_GROUP_STATE" }, (r) => {
+        const _ = chrome.runtime.lastError;
+        resolve(r);
+      });
+      setTimeout(() => resolve(null), 300);
+    });
+
+    if (res && res.success && res.state) {
+      state.tabGroup = res.state;
+      updateTabGroupUI();
+    }
+  } catch (err) {
+    console.debug("[TabGroup] refresh failed:", err);
+  }
+}
+
+function updateTabGroupUI() {
+  const tg = state.tabGroup;
+  if (!elements.groupTitleLabel) return;
+
+  if (tg.isConfigured && tg.groupId) {
+    elements.groupTitleLabel.textContent = tg.groupTitle || "Sidekick Workgroup";
+    elements.groupTabCount.textContent = `${tg.tabs.length} tab${tg.tabs.length === 1 ? "" : "s"}`;
+    if (elements.groupColorDot) {
+      elements.groupColorDot.className = `group-dot ${tg.groupColor || "purple"}`;
+    }
+  } else {
+    elements.groupTitleLabel.textContent = "No Tab Group";
+    elements.groupTabCount.textContent = "Click to bind";
+    if (elements.groupColorDot) {
+      elements.groupColorDot.className = "group-dot grey";
+    }
+  }
+
+  if (elements.isolationToggle) {
+    elements.isolationToggle.checked = tg.isolationEnabled !== false;
+  }
+
+  // Isolation Warning Banner Visibility
+  if (elements.isolationWarningBanner) {
+    if (tg.isConfigured && tg.isolationEnabled && !tg.isCurrentTabInGroup) {
+      elements.isolationWarningBanner.classList.remove("hidden");
+      if (elements.isolationBannerText) {
+        elements.isolationBannerText.textContent = `Tab outside "${tg.groupTitle}". Automation locked to group.`;
+      }
+    } else {
+      elements.isolationWarningBanner.classList.add("hidden");
+    }
+  }
+
+  // Populate drawer tab list
+  if (elements.groupTabsList) {
+    elements.groupTabsList.innerHTML = "";
+    if (tg.tabs && tg.tabs.length > 0) {
+      tg.tabs.forEach((t) => {
+        const item = document.createElement("div");
+        item.className = `group-tab-item ${t.id === state.activeTabId ? "active" : ""}`;
+        item.innerHTML = `
+          <span class="tab-title-text" title="${t.title} (${t.url})">${t.title || "Untitled"}</span>
+          ${t.id === state.activeTabId ? '<span class="tab-active-dot" title="Active Tab"></span>' : ''}
+        `;
+        item.addEventListener("click", () => {
+          chrome.tabs.update(t.id, { active: true }, () => {
+            elements.tabGroupDrawer?.classList.add("hidden");
+            extractContext();
+            refreshTabGroupState();
+          });
+        });
+        elements.groupTabsList.appendChild(item);
+      });
+    } else {
+      elements.groupTabsList.innerHTML = '<div style="color: var(--mute); font-size: 10px; padding: 6px;">No tabs in this workgroup.</div>';
+    }
+  }
+}
+
+async function bindOrCreateGroup() {
+  const res = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "CREATE_OR_BIND_GROUP", params: { targetTabId: state.activeTabId } }, resolve);
+  });
+  if (res?.state) {
+    state.tabGroup = res.state;
+    updateTabGroupUI();
+    renderAgentStepBadge(`Workgroup bound: ${res.state.groupTitle}`, true);
+    renderAssistantPlainMessage(`🟣 **Sidekick Tab Group Active:**\nControl is now strictly scoped to tabs within "${res.state.groupTitle}". New tabs will automatically open inside this group.`);
+  }
+}
+
+async function addActiveTabToGroup() {
+  if (!state.activeTabId) return;
+  const res = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "ADD_TAB_TO_MANAGED_GROUP", tabId: state.activeTabId }, resolve);
+  });
+  if (res?.state) {
+    state.tabGroup = res.state;
+    updateTabGroupUI();
+    renderAgentStepBadge("Tab added to workgroup", true);
+  }
+}
+
+async function openNewTabInManagedGroup(url = "https://www.google.com") {
+  const res = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "OPEN_TAB_IN_MANAGED_GROUP", url }, resolve);
+  });
+  if (res?.state) {
+    state.tabGroup = res.state;
+    updateTabGroupUI();
+  }
+}
+
+async function unbindGroup() {
+  const res = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "UNBIND_MANAGED_GROUP" }, resolve);
+  });
+  if (res?.state) {
+    state.tabGroup = res.state;
+    updateTabGroupUI();
+    renderAgentStepBadge("Tab Group unbound", false);
+  }
+}
+
+async function toggleIsolation(enabled) {
+  const res = await new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "SET_GROUP_ISOLATION", enabled }, resolve);
+  });
+  if (res?.state) {
+    state.tabGroup = res.state;
+    updateTabGroupUI();
+  }
+}
+
 /**
  * Initialize
  */
@@ -311,6 +478,7 @@ async function init() {
   initWordmarkAndRenaming();
   initRollsRoyceStarlight();
   await extractContext();
+  await refreshTabGroupState();
 
   if (elements.promptInput) elements.promptInput.focus();
 }
@@ -450,6 +618,46 @@ function bindEvents() {
     elements.threadContainer.classList.remove("has-messages");
     hideSafetyModal();
     removeFollowUps();
+  });
+
+  // Tab Group Management Controls
+  elements.groupBadgeBtn?.addEventListener("click", () => {
+    elements.tabGroupDrawer?.classList.toggle("hidden");
+    if (!elements.tabGroupDrawer?.classList.contains("hidden")) {
+      refreshTabGroupState();
+    }
+  });
+
+  elements.closeGroupDrawerBtn?.addEventListener("click", () => {
+    elements.tabGroupDrawer?.classList.add("hidden");
+  });
+
+  elements.newGroupTabBtn?.addEventListener("click", () => {
+    openNewTabInManagedGroup();
+  });
+
+  elements.addActiveTabBtn?.addEventListener("click", async () => {
+    await addActiveTabToGroup();
+  });
+
+  elements.createBindGroupBtn?.addEventListener("click", async () => {
+    await bindOrCreateGroup();
+  });
+
+  elements.unbindGroupBtn?.addEventListener("click", async () => {
+    await unbindGroup();
+  });
+
+  elements.isolationToggle?.addEventListener("change", (e) => {
+    toggleIsolation(e.target.checked);
+  });
+
+  elements.bannerAddTabBtn?.addEventListener("click", async () => {
+    await addActiveTabToGroup();
+  });
+
+  elements.bannerSwitchTabBtn?.addEventListener("click", () => {
+    elements.tabGroupDrawer?.classList.remove("hidden");
   });
 
   // History Drawer
@@ -731,15 +939,23 @@ function setupTabListeners() {
   if (typeof chrome !== "undefined" && chrome.tabs) {
     chrome.tabs.onActivated?.addListener(async () => {
       await extractContext();
+      await refreshTabGroupState();
     });
     chrome.tabs.onUpdated?.addListener((tabId, changeInfo) => {
       if (tabId === state.activeTabId) {
         if (changeInfo.status === "complete" || (changeInfo.url && changeInfo.url !== state.activeTabUrl)) {
           if (changeInfo.url) state.activeTabUrl = changeInfo.url;
           extractContext();
+          refreshTabGroupState();
         }
       }
     });
+
+    if (chrome.tabGroups) {
+      chrome.tabGroups.onUpdated?.addListener(refreshTabGroupState);
+      chrome.tabGroups.onRemoved?.addListener(refreshTabGroupState);
+      chrome.tabGroups.onCreated?.addListener(refreshTabGroupState);
+    }
 
     // SPA client-side history navigation (YouTube, GitHub, X/Twitter, Gmail, Next.js / React apps)
     if (chrome.webNavigation && chrome.webNavigation.onHistoryStateUpdated) {
@@ -2702,10 +2918,52 @@ async function submitPrompt(promptText) {
       return;
     }
 
-    // 3. Action Worker Execution (Element [#ID] based)
+    // 3. Action Worker Execution (Element [#ID] based or Tab Group)
     if (result.type === "action") {
-      const actionData = result.payload;
+      const actionData = result.payload || {};
       const actType = actionData.action;
+
+      // Safe informational explanation when no action was needed or possible
+      if (actType === "none") {
+        const expl = actionData.explanation || "No interactive action could be taken on this page. Try scrolling or checking if the page is loaded.";
+        renderAgentStepBadge("Information", true);
+        renderAssistantPlainMessage(expl);
+        state.conversation.push({ role: "model", text: expl });
+        saveSession();
+        return;
+      }
+
+      // Open new tab inside the managed Chrome Tab Group
+      if (actType === "open_tab") {
+        let targetUrl = (actionData.url || "https://www.google.com").trim();
+        if (!/^https?:\/\//i.test(targetUrl)) targetUrl = "https://" + targetUrl;
+        if (!checkDomainAllowed(targetUrl)) {
+          renderAgentStepBadge(`Blocked navigation: Restricted domain`, false);
+          renderAssistantPlainMessage(`🛡️ Navigation blocked: Destination "${targetUrl}" matches restricted domain.`);
+          return;
+        }
+        await openNewTabInManagedGroup(targetUrl);
+        renderAgentStepBadge(`Opened tab in Sidekick Workgroup: ${targetUrl}`, true);
+        renderAssistantPlainMessage(`Opened new tab in Sidekick Workgroup: ${targetUrl}`);
+        state.conversation.push({ role: "model", text: `Opened new tab in workgroup: ${targetUrl}` });
+        saveSession();
+        await delay(120);
+        await extractContext();
+        await refreshTabGroupState();
+        return;
+      }
+
+      // Strict Tab Group Isolation Guard: Ensure active tab is inside the managed workgroup
+      if (state.tabGroup?.isConfigured && state.tabGroup?.isolationEnabled && !state.tabGroup?.isCurrentTabInGroup) {
+        const groupTitle = state.tabGroup.groupTitle || "Sidekick Workgroup";
+        renderAgentStepBadge("Action Blocked: Tab outside workgroup", false);
+        renderAssistantPlainMessage(
+          `🔒 **Tab Group Isolation Active:**\nThis active tab is outside the managed "${groupTitle}". Sidekick automation is strictly restricted to tabs inside this workgroup.\n\nClick **[+ Add Tab]** in the top bar to add this tab to your workgroup, or switch to a workgroup tab.`
+        );
+        state.conversation.push({ role: "model", text: `Action blocked: Active tab is outside ${groupTitle}.` });
+        saveSession();
+        return;
+      }
 
       if (actType === "scroll") {
         const dir = actionData.direction || "down";
@@ -2738,7 +2996,8 @@ async function submitPrompt(promptText) {
       } else if (actType === "click" || actType === "type") {
         let targetEl = null;
         if (state.pageContext?.interactiveElements) {
-          targetEl = state.pageContext.interactiveElements.find(e => e.id === actionData.target_id);
+          const targetNum = Number(actionData.target_id);
+          targetEl = state.pageContext.interactiveElements.find(e => Number(e.id) === targetNum);
         }
 
         if (!targetEl && actionData.element_label && state.pageContext?.interactiveElements) {
@@ -2746,7 +3005,11 @@ async function submitPrompt(promptText) {
         }
 
         if (!targetEl) {
-          renderAssistantPlainMessage(`Target element [#${actionData.target_id || "?"}] could not be found in active viewport.`);
+          const expl = `Target element [#${actionData.target_id || "?"}] could not be found in active viewport. ${actionData.explanation || ""}`.trim();
+          renderAgentStepBadge("Element not found", false);
+          renderAssistantPlainMessage(expl);
+          state.conversation.push({ role: "model", text: expl });
+          saveSession();
           return;
         }
 

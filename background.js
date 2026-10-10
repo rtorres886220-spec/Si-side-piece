@@ -95,6 +95,9 @@ function checkDomainAllowed(urlStr) {
   } catch {
     hostname = urlLower;
   }
+  if (hostname === "chromewebstore.google.com" || (hostname === "chrome.google.com" && pathname.startsWith("/webstore"))) {
+    throw new Error("Security Exception: Chrome restricts automation and debugging on the Chrome Web Store.");
+  }
   for (const denied of AUTOMATION_DENYLIST) {
     if (denied === "github.com") {
       if ((hostname === "github.com" || hostname.endsWith(".github.com")) &&
@@ -115,6 +118,149 @@ const PAYMENT_PATTERNS = [
   "stripe", "paypal", "braintree", "credit-card", "cardnumber", "card_number", "card-number",
   "ccnum", "cvv", "cvc", "exp-date", "exp-month", "exp-year", "cc-number", "payment-widget"
 ];
+
+// Tab Group Management State & Functions
+async function getManagedGroupState() {
+  const storage = await chrome.storage.local.get([
+    "sidekickManagedGroupId",
+    "sidekickManagedGroupName",
+    "sidekickGroupIsolationEnabled"
+  ]);
+
+  let groupId = storage.sidekickManagedGroupId || null;
+  const isolationEnabled = storage.sidekickGroupIsolationEnabled !== false;
+  let groupTitle = storage.sidekickManagedGroupName || "Sidekick Workgroup";
+  let groupColor = "purple";
+  let groupTabs = [];
+  let isConfigured = false;
+
+  if (groupId && chrome.tabGroups) {
+    try {
+      const group = await chrome.tabGroups.get(groupId);
+      if (group) {
+        isConfigured = true;
+        groupTitle = group.title || groupTitle;
+        groupColor = group.color || "purple";
+        groupTabs = await chrome.tabs.query({ groupId });
+      }
+    } catch {
+      // Group was removed or closed
+      await chrome.storage.local.remove("sidekickManagedGroupId");
+      groupId = null;
+      isConfigured = false;
+    }
+  }
+
+  // Get current active tab
+  let activeTab = null;
+  try {
+    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTabs && activeTabs.length > 0) activeTab = activeTabs[0];
+  } catch {}
+
+  const isCurrentTabInGroup = !!(
+    activeTab &&
+    groupId &&
+    activeTab.groupId === groupId
+  );
+
+  return {
+    isConfigured,
+    groupId,
+    groupTitle,
+    groupColor,
+    isolationEnabled,
+    tabs: groupTabs.map((t) => ({
+      id: t.id,
+      title: t.title || "Untitled",
+      url: t.url || "",
+      active: t.active,
+      favIconUrl: t.favIconUrl || ""
+    })),
+    currentTabId: activeTab ? activeTab.id : null,
+    currentTabGroupId: activeTab ? activeTab.groupId : null,
+    isCurrentTabInGroup
+  };
+}
+
+async function createOrBindGroup({ targetTabId, existingGroupId, title = "Sidekick Workgroup", color = "purple" } = {}) {
+  if (!chrome.tabs || !chrome.tabGroups) {
+    throw new Error("Tab Groups API not supported in this browser version");
+  }
+
+  let finalGroupId = existingGroupId;
+
+  if (!finalGroupId) {
+    // If no existing group ID provided, group the active or new tab
+    let tabId = targetTabId;
+    if (!tabId) {
+      const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTabs && activeTabs.length > 0) tabId = activeTabs[0].id;
+    }
+
+    if (!tabId) {
+      const newTab = await chrome.tabs.create({ url: "https://www.google.com", active: true });
+      tabId = newTab.id;
+    }
+
+    finalGroupId = await chrome.tabs.group({ tabIds: [tabId] });
+    await chrome.tabGroups.update(finalGroupId, { title, color });
+  }
+
+  await chrome.storage.local.set({
+    sidekickManagedGroupId: finalGroupId,
+    sidekickManagedGroupName: title,
+    sidekickGroupIsolationEnabled: true
+  });
+
+  return await getManagedGroupState();
+}
+
+async function addTabToManagedGroup(tabId) {
+  const state = await getManagedGroupState();
+  if (!state.groupId) {
+    return await createOrBindGroup({ targetTabId: tabId });
+  }
+  await chrome.tabs.group({ tabIds: [tabId], groupId: state.groupId });
+  return await getManagedGroupState();
+}
+
+async function openTabInManagedGroup(url = "https://www.google.com") {
+  const state = await getManagedGroupState();
+  let cleanUrl = (url || "").trim() || "https://www.google.com";
+  if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+    cleanUrl = "https://" + cleanUrl;
+  }
+  checkDomainAllowed(cleanUrl);
+
+  const newTab = await chrome.tabs.create({ url: cleanUrl, active: true });
+  if (state.groupId) {
+    try {
+      await chrome.tabs.group({ tabIds: [newTab.id], groupId: state.groupId });
+    } catch {
+      await createOrBindGroup({ targetTabId: newTab.id });
+    }
+  } else {
+    await createOrBindGroup({ targetTabId: newTab.id });
+  }
+
+  return await getManagedGroupState();
+}
+
+async function unbindManagedGroup() {
+  await chrome.storage.local.remove(["sidekickManagedGroupId", "sidekickManagedGroupName"]);
+  return await getManagedGroupState();
+}
+
+// Clean up storage when tab group is closed
+if (chrome.tabGroups && chrome.tabGroups.onRemoved) {
+  chrome.tabGroups.onRemoved.addListener(async (group) => {
+    const storage = await chrome.storage.local.get("sidekickManagedGroupId");
+    if (storage.sidekickManagedGroupId === group.id) {
+      await chrome.storage.local.remove("sidekickManagedGroupId");
+    }
+  });
+}
 
 // Message Handler for Side Panel Requests
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -141,6 +287,50 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
+
+  // Tab Group Management Message Handlers
+  if (message.type === "GET_MANAGED_GROUP_STATE") {
+    getManagedGroupState()
+      .then((groupState) => sendResponse({ success: true, state: groupState }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "CREATE_OR_BIND_GROUP") {
+    createOrBindGroup(message.params)
+      .then((groupState) => sendResponse({ success: true, state: groupState }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "ADD_TAB_TO_MANAGED_GROUP") {
+    addTabToManagedGroup(message.tabId)
+      .then((groupState) => sendResponse({ success: true, state: groupState }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "OPEN_TAB_IN_MANAGED_GROUP") {
+    openTabInManagedGroup(message.url)
+      .then((groupState) => sendResponse({ success: true, state: groupState }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "UNBIND_MANAGED_GROUP") {
+    unbindManagedGroup()
+      .then((groupState) => sendResponse({ success: true, state: groupState }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "SET_GROUP_ISOLATION") {
+    chrome.storage.local.set({ sidekickGroupIsolationEnabled: !!message.enabled })
+      .then(() => getManagedGroupState())
+      .then((groupState) => sendResponse({ success: true, state: groupState }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
 
 /**
@@ -154,6 +344,24 @@ async function handleCDPAction({ tabId, action, params }) {
   if (!tab || !tab.url) throw new Error("Target tab not accessible");
 
   checkDomainAllowed(tab.url);
+
+  // 1b. Tab Group Isolation Check: Enforce that actions only execute on tabs within the managed group
+  const storage = await chrome.storage.local.get([
+    "sidekickManagedGroupId",
+    "sidekickManagedGroupName",
+    "sidekickGroupIsolationEnabled"
+  ]);
+  const managedGroupId = storage.sidekickManagedGroupId;
+  const isolationEnabled = storage.sidekickGroupIsolationEnabled !== false;
+
+  if (isolationEnabled && managedGroupId) {
+    if (tab.groupId !== managedGroupId) {
+      const groupName = storage.sidekickManagedGroupName || "Sidekick Workgroup";
+      throw new Error(
+        `Tab Group Isolation Lock: Operation blocked. Tab #${tabId} is outside the active Sidekick Tab Group ("${groupName}"). Sidekick can only control tabs inside this group.`
+      );
+    }
+  }
 
   // Explicit Payment Widget Lockout across selector, element description, and text
   const descToCheck = `${params?.selector || ""} ${params?.element_description || ""} ${params?.label || ""} ${params?.text || ""}`.toLowerCase();
@@ -171,11 +379,8 @@ async function handleCDPAction({ tabId, action, params }) {
     await chrome.debugger.attach(debugTarget, "1.3");
     isDebuggerAttached = true;
   } catch (attachErr) {
-    if (attachErr.message && attachErr.message.includes("Another debugger is already attached")) {
-      console.warn("DevTools (F12) is open. Gracefully dispatching via content script DOM action...");
-      return await dispatchDOMFallback(tabId, action, params);
-    }
-    console.debug("JIT Attach notice:", attachErr.message);
+    console.warn("CDP Attach notice (DevTools active or target restricted):", attachErr.message);
+    return await dispatchDOMFallback(tabId, action, params);
   }
 
   try {

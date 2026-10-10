@@ -64,20 +64,78 @@
       </div>
     </header>
 
-    <!-- Context & Status Tokens Bar -->
-    <div class="tokens-bar">
-      <button type="button" id="tabToken" class="mono-token ready" title="Active tab read status (Click to toggle/retry)">
-        <span id="tabTokenDot" class="token-dot"></span>
-        <span id="tabTokenLabel" class="token-text">This tab</span>
-      </button>
+    <!-- Dedicated Chrome Tab Group Workgroup Bar -->
+    <div id="tabGroupBar" class="tab-group-bar">
+      <div class="tab-group-info">
+        <button id="groupBadgeBtn" class="tab-group-chip" title="Manage Sidekick Tab Group" type="button">
+          <span id="groupColorDot" class="group-dot purple"></span>
+          <span id="groupTitleLabel" class="group-title">Sidekick Workgroup</span>
+          <span id="groupTabCount" class="group-count">0 tabs</span>
+          <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" class="group-chevron">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </button>
+      </div>
 
-      <button type="button" id="selectionToken" class="mono-token quote hidden" title="Captured selection context">
-        <span class="token-text">Selection</span>
-      </button>
+      <div class="tab-group-actions">
+        <button id="newGroupTabBtn" class="pill-action-btn" title="Open new tab in this Sidekick group" type="button">
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          New Tab
+        </button>
+      </div>
+    </div>
 
-      <button type="button" id="modelToken" class="mono-token model" title="Current model (Click to change)">
-        <span id="modelTokenLabel" class="token-text">gemini-3.5-flash-lite</span>
-      </button>
+    <!-- Tab Group Details & Managed Tabs Popover Drawer -->
+    <div id="tabGroupDrawer" class="group-drawer hidden">
+      <div class="group-drawer-header">
+        <span class="group-drawer-title">Managed Chrome Tab Group</span>
+        <button id="closeGroupDrawerBtn" class="drawer-close" type="button">&times;</button>
+      </div>
+      <div class="group-drawer-body">
+        <div class="isolation-toggle-row">
+          <div class="isolation-text">
+            <span class="isolation-label">Strict Group Isolation</span>
+            <span class="isolation-desc">Sidekick will ONLY control tabs inside this group, keeping all other tabs safe.</span>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="isolationToggle" checked>
+            <span class="slider round"></span>
+          </label>
+        </div>
+
+        <div class="group-tabs-section">
+          <div class="group-tabs-header">
+            <span>Tabs in Workgroup</span>
+            <button id="addActiveTabBtn" class="mini-btn" type="button">+ Add Current Tab</button>
+          </div>
+          <div id="groupTabsList" class="group-tabs-list">
+            <!-- Dynamically populated tab items -->
+          </div>
+        </div>
+
+        <div class="group-drawer-actions">
+          <button id="createBindGroupBtn" class="action-btn" type="button">Bind / Create Workgroup</button>
+          <button id="unbindGroupBtn" class="action-btn text-danger" type="button">Unbind Group</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Isolation Warning Banner: Alert when active tab is outside the managed group -->
+    <div id="isolationWarningBanner" class="isolation-banner hidden">
+      <div class="isolation-banner-content">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" class="warning-icon">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+        <span id="isolationBannerText" class="isolation-warning-text">Tab outside Sidekick Group. Automation locked.</span>
+      </div>
+      <div class="isolation-banner-btns">
+        <button id="bannerAddTabBtn" class="banner-btn primary" type="button">+ Add Tab</button>
+        <button id="bannerSwitchTabBtn" class="banner-btn secondary" type="button">Switch</button>
+      </div>
     </div>
 
     <!-- History Drawer (Minimal overlay) -->

@@ -101,12 +101,35 @@
 
       const { action, target_id, url } = actionPayload;
 
+      // Safe No-Op when element is not present or action is not possible
+      if (action === "none") {
+        return {
+          passed: true,
+          isNoOp: true,
+          explanation: actionPayload.explanation || "No interactive action was performed.",
+        };
+      }
+
       if (action === "scroll") {
         return { passed: true };
       }
 
+      if (action === "open_tab") {
+        let dest = (url || "https://www.google.com").trim();
+        if (!/^https?:\/\//i.test(dest)) {
+          dest = "https://" + dest;
+          actionPayload.url = dest;
+        }
+        return { passed: true, isTabAction: true, url: dest };
+      }
+
       if (action === "navigate") {
-        if (!url || typeof url !== "string" || !url.startsWith("http")) {
+        let dest = (url || "").trim();
+        if (dest && !/^https?:\/\//i.test(dest)) {
+          dest = "https://" + dest;
+          actionPayload.url = dest;
+        }
+        if (!dest || !dest.startsWith("http")) {
           return {
             passed: false,
             reason: "Invalid navigation destination URL.",
@@ -117,7 +140,7 @@
       }
 
       if (action === "click" || action === "type") {
-        if (target_id === null || target_id === undefined) {
+        if (target_id === null || target_id === undefined || target_id === "") {
           return {
             passed: false,
             reason: "Action specifies no target element ID.",
@@ -125,7 +148,8 @@
           };
         }
 
-        const matched = (interactiveElements || []).find((el) => el.id === target_id);
+        const numId = Number(target_id);
+        const matched = (interactiveElements || []).find((el) => Number(el.id) === numId);
         if (!matched) {
           return {
             passed: false,
