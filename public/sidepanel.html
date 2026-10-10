@@ -14,10 +14,10 @@
     <!-- Vast 3D Galaxy Star System on Upper Half Only -->
     <div id="rrStarlightCeiling" class="rr-starlight-ceiling" aria-hidden="true">
       <canvas id="galaxyCanvas" class="galaxy-canvas"></canvas>
+      <div class="rr-starlight-scrim"></div>
       <div class="rr-shooting-star-track">
         <div class="rr-shooting-star"></div>
       </div>
-      <div id="rrStarsContainer" class="rr-stars-container"></div>
     </div>
 
     <!-- Minimal Header Pushed Right Up to Top Edge -->
@@ -52,6 +52,11 @@
             <line x1="9" y1="8" x2="15" y2="8"></line>
             <line x1="17" y1="16" x2="23" y2="16"></line>
           </svg>
+        </button>
+
+        <button id="emergencyStopBtn" class="emergency-stop-header-btn hidden" title="Emergency Stop Loop [Esc]" type="button">
+          <span class="stop-dot"></span>
+          <span>Stop [Esc]</span>
         </button>
 
         <button id="helpBtn" class="icon-btn" title="Slash commands cheat sheet (/help)" aria-label="Slash commands">
@@ -221,6 +226,30 @@
         </div>
       </div>
 
+      <!-- Continuous Process Active Task Ledger & Live Checklist Card -->
+      <section id="activeTaskLedger" class="active-task-ledger hidden">
+        <div class="ledger-header">
+          <div class="ledger-title-group">
+            <span class="ledger-pulsing-dot"></span>
+            <span class="ledger-badge-label">Autonomous Process</span>
+            <span id="ledgerStepBadge" class="ledger-step-badge">Step 1</span>
+            <span id="ledgerTimer" class="ledger-timer font-mono">0.0s</span>
+          </div>
+          <button id="ledgerStopBtn" class="ledger-stop-action-btn" type="button" title="Stop Loop [Esc]">
+            Stop [Esc]
+          </button>
+        </div>
+        <div id="ledgerObjective" class="ledger-objective">Objective: Initializing workflow…</div>
+        <div id="ledgerChecklist" class="ledger-checklist"></div>
+        <details id="ledgerThoughtsAccordion" class="ledger-thoughts-accordion" open>
+          <summary class="ledger-thoughts-summary">
+            <span>Cognitive Reasoning &amp; DOM State</span>
+            <span class="summary-hint font-mono">live</span>
+          </summary>
+          <div id="ledgerThoughtsText" class="ledger-thoughts-text">Decomposing objective and analyzing viewport candidate elements…</div>
+        </details>
+      </section>
+
       <!-- Messages Thread -->
       <div id="messagesList" class="messages-list"></div>
     </main>
@@ -342,6 +371,8 @@
   <script src="agents/gate.js"></script>
   <script src="agents/critic.js"></script>
   <script src="agents/coordinator.js"></script>
+  <!-- 4K 3D Living Cosmos WebGL Engine -->
+  <script src="cosmos.bundle.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

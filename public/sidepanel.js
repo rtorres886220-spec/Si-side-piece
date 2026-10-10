@@ -199,6 +199,17 @@ const elements = {
   newChatBtn: document.getElementById("newChatBtn"),
   historyBtn: document.getElementById("historyBtn"),
   settingsBtn: document.getElementById("settingsBtn"),
+  emergencyStopBtn: document.getElementById("emergencyStopBtn"),
+
+  // Active Task Ledger & Autonomous Engine
+  activeTaskLedger: document.getElementById("activeTaskLedger"),
+  ledgerStepBadge: document.getElementById("ledgerStepBadge"),
+  ledgerTimer: document.getElementById("ledgerTimer"),
+  ledgerStopBtn: document.getElementById("ledgerStopBtn"),
+  ledgerObjective: document.getElementById("ledgerObjective"),
+  ledgerChecklist: document.getElementById("ledgerChecklist"),
+  ledgerThoughtsAccordion: document.getElementById("ledgerThoughtsAccordion"),
+  ledgerThoughtsText: document.getElementById("ledgerThoughtsText"),
 
   // Tab Group Controls
   tabGroupBar: document.getElementById("tabGroupBar"),
@@ -915,6 +926,39 @@ function bindEvents() {
       resolve(false);
     }
   });
+
+  // Autonomous Multi-Process Engine: Emergency Stop Handlers
+  elements.emergencyStopBtn?.addEventListener("click", () => {
+    if (state.abortController) {
+      state.abortController.abort();
+    }
+    renderAgentStepBadge("Emergency Stop Activated [Esc]", false);
+    renderAssistantPlainMessage("🛑 **Emergency Stop:** Autonomous loop halted immediately by user.");
+    hideActiveTaskLedger();
+    setBusyState(false);
+  });
+
+  elements.ledgerStopBtn?.addEventListener("click", () => {
+    if (state.abortController) {
+      state.abortController.abort();
+    }
+    renderAgentStepBadge("Emergency Stop Activated [Esc]", false);
+    renderAssistantPlainMessage("🛑 **Emergency Stop:** Autonomous loop halted immediately by user.");
+    hideActiveTaskLedger();
+    setBusyState(false);
+  });
+
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && state.isBusy) {
+      if (state.abortController) {
+        state.abortController.abort();
+      }
+      renderAgentStepBadge("Emergency Stop Activated [Esc]", false);
+      renderAssistantPlainMessage("🛑 **Emergency Stop:** Autonomous loop halted immediately by user [Esc].");
+      hideActiveTaskLedger();
+      setBusyState(false);
+    }
+  });
 }
 
 function updateModelToken(mdl) {
@@ -937,15 +981,18 @@ function autoResizeTextarea() {
  */
 function setupTabListeners() {
   if (typeof chrome !== "undefined" && chrome.tabs) {
-    chrome.tabs.onActivated?.addListener(async () => {
-      await extractContext();
+    // When user switches tabs, extract context from the newly activated tab immediately
+    chrome.tabs.onActivated?.addListener(async (activeInfo) => {
+      await extractContext(activeInfo?.tabId);
       await refreshTabGroupState();
     });
-    chrome.tabs.onUpdated?.addListener((tabId, changeInfo) => {
-      if (tabId === state.activeTabId) {
-        if (changeInfo.status === "complete" || (changeInfo.url && changeInfo.url !== state.activeTabUrl)) {
+
+    // When tab updates (navigates, changes title, completes load)
+    chrome.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
+      if (tab?.active || tabId === state.activeTabId) {
+        if (changeInfo.status === "complete" || (changeInfo.url && changeInfo.url !== state.activeTabUrl) || changeInfo.title) {
           if (changeInfo.url) state.activeTabUrl = changeInfo.url;
-          extractContext();
+          extractContext(tabId);
           refreshTabGroupState();
         }
       }
@@ -957,13 +1004,22 @@ function setupTabListeners() {
       chrome.tabGroups.onCreated?.addListener(refreshTabGroupState);
     }
 
-    // SPA client-side history navigation (YouTube, GitHub, X/Twitter, Gmail, Next.js / React apps)
+    // Window focus change (e.g. switching between Chrome windows)
+    if (chrome.windows && chrome.windows.onFocusChanged) {
+      chrome.windows.onFocusChanged.addListener(async (windowId) => {
+        if (windowId !== chrome.windows.WINDOW_ID_NONE) {
+          await extractContext();
+        }
+      });
+    }
+
+    // SPA client-side history navigation (YouTube, GitHub, X/Twitter, Gmail, Google Search)
     if (chrome.webNavigation && chrome.webNavigation.onHistoryStateUpdated) {
       chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
         if (details.tabId === state.activeTabId && details.frameId === 0) {
           if (details.url && details.url !== state.activeTabUrl) {
             state.activeTabUrl = details.url;
-            extractContext();
+            extractContext(details.tabId);
           }
         }
       });
@@ -1000,23 +1056,58 @@ function setTabReadState(newState) {
 
 /**
  * Context Extraction via Sanitized Pipeline
+ * Fully asynchronous with guaranteed Promise resolution so callers can await real tab data.
  */
-async function extractContext() {
+async function extractContext(explicitTabId = null) {
   setTabReadState("reading");
 
   try {
-    if (typeof chrome !== "undefined" && chrome.tabs && chrome.tabs.query) {
-      let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      if (!tabs || tabs.length === 0) {
-        tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (typeof chrome !== "undefined" && chrome.tabs) {
+      let activeTab = null;
+
+      if (explicitTabId) {
+        try {
+          activeTab = await chrome.tabs.get(explicitTabId);
+        } catch {
+          activeTab = null;
+        }
       }
-      const activeTab = tabs && tabs[0];
+
+      if (!activeTab || !activeTab.id) {
+        // Query active tab in the last focused window first
+        let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (!tabs || tabs.length === 0) {
+          tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        }
+        if (!tabs || tabs.length === 0) {
+          tabs = await chrome.tabs.query({ active: true });
+        }
+        // Exclude extension page tabs if multiple windows exist
+        activeTab = (tabs && tabs.find((t) => !t.url?.startsWith("chrome-extension://"))) || tabs?.[0];
+      }
+
       if (!activeTab || !activeTab.id) {
         setTabReadState("off");
-        return;
+        return state.pageContext;
       }
+
       state.activeTabId = activeTab.id;
       state.activeTabUrl = activeTab.url || "";
+
+      // Immediately seed state with live tab title and URL to guarantee freshness
+      if (!state.pageContext) {
+        state.pageContext = {
+          title: activeTab.title || "",
+          url: activeTab.url || "",
+          selectedText: "",
+          bodyText: "",
+          charCount: 0,
+          interactiveElements: []
+        };
+      } else {
+        if (activeTab.title) state.pageContext.title = activeTab.title;
+        if (activeTab.url) state.pageContext.url = activeTab.url;
+      }
 
       // Check if internal system URL (new tab, settings, extensions)
       const isInternal =
@@ -1031,7 +1122,7 @@ async function extractContext() {
       if (isInternal) {
         state.isInternalTab = true;
         state.pageContext = {
-          title: "New Tab",
+          title: activeTab.title || "New Tab",
           url: state.activeTabUrl || "about:blank",
           selectedText: "",
           bodyText: "",
@@ -1042,7 +1133,7 @@ async function extractContext() {
         if (elements.tabTokenLabel) {
           elements.tabTokenLabel.textContent = "New tab";
         }
-        return;
+        return state.pageContext;
       }
       state.isInternalTab = false;
 
@@ -1051,42 +1142,84 @@ async function extractContext() {
         if (state.activeTabUrl.toLowerCase().includes(denied)) {
           setTabReadState("off");
           renderNotice(`Security Lock: Automation disabled on protected domain (${denied}).`);
-          return;
+          return state.pageContext;
         }
       }
 
-      // Message content.js to run defense-in-depth sanitization
-      chrome.tabs.sendMessage(activeTab.id, { action: "extractContext" }, { frameId: 0 }, (res) => {
-        const err = chrome.runtime.lastError; // Checked to prevent console warning
-        if (err || !res || !res.context) {
-          // If content script was not ready, inject dynamically
-          chrome.scripting.executeScript(
-            { target: { tabId: activeTab.id }, files: ["content.js"] },
-            () => {
-              const injectErr = chrome.runtime.lastError; // Checked to prevent console warning
-              if (injectErr) {
-                setTabReadState("ready");
-                return;
-              }
-              chrome.tabs.sendMessage(activeTab.id, { action: "extractContext" }, { frameId: 0 }, (res2) => {
-                const err2 = chrome.runtime.lastError; // Checked to prevent console warning
-                if (!err2 && res2 && res2.context) {
-                  state.pageContext = res2.context;
-                  setTabReadState(state.tabEnabled ? "ready" : "off");
-                  updateSelectionUI();
-                } else {
-                  setTabReadState("ready");
+      // Message content.js and await the response with a safety timeout
+      const context = await new Promise((resolve) => {
+        let finished = false;
+        const timer = setTimeout(() => {
+          if (!finished) {
+            finished = true;
+            resolve(null);
+          }
+        }, 1800);
+
+        chrome.tabs.sendMessage(activeTab.id, { action: "extractContext" }, { frameId: 0 }, (res) => {
+          const err = chrome.runtime.lastError;
+          if (err || !res || !res.context) {
+            // Content script not ready; attempt dynamic injection
+            if (chrome.scripting) {
+              chrome.scripting.executeScript(
+                { target: { tabId: activeTab.id }, files: ["content.js"] },
+                () => {
+                  const injectErr = chrome.runtime.lastError;
+                  if (injectErr) {
+                    if (!finished) {
+                      finished = true;
+                      clearTimeout(timer);
+                      resolve(null);
+                    }
+                    return;
+                  }
+                  chrome.tabs.sendMessage(activeTab.id, { action: "extractContext" }, { frameId: 0 }, (res2) => {
+                    const err2 = chrome.runtime.lastError;
+                    if (!finished) {
+                      finished = true;
+                      clearTimeout(timer);
+                      resolve(!err2 && res2?.context ? res2.context : null);
+                    }
+                  });
                 }
-              });
+              );
+            } else {
+              if (!finished) {
+                finished = true;
+                clearTimeout(timer);
+                resolve(null);
+              }
             }
-          );
-        } else {
-          state.pageContext = res.context;
-          setTabReadState(state.tabEnabled ? "ready" : "off");
-          updateSelectionUI();
-        }
+          } else {
+            if (!finished) {
+              finished = true;
+              clearTimeout(timer);
+              resolve(res.context);
+            }
+          }
+        });
       });
-      return;
+
+      if (context) {
+        state.pageContext = context;
+        if (!state.pageContext.title && activeTab.title) state.pageContext.title = activeTab.title;
+        if (!state.pageContext.url && activeTab.url) state.pageContext.url = activeTab.url;
+        setTabReadState(state.tabEnabled ? "ready" : "off");
+        updateSelectionUI();
+      } else {
+        // Fallback: If content.js was blocked or still loading, guarantee title and URL from activeTab
+        state.pageContext = {
+          title: activeTab.title || "Active Tab",
+          url: activeTab.url || "",
+          selectedText: "",
+          bodyText: activeTab.title ? `Page Title: ${activeTab.title} (${activeTab.url})` : "",
+          charCount: activeTab.title ? activeTab.title.length : 0,
+          interactiveElements: []
+        };
+        setTabReadState(state.tabEnabled ? "ready" : "off");
+      }
+
+      return state.pageContext;
     }
 
     // Fallback simulation for local development preview
@@ -2217,6 +2350,86 @@ function renderHelpList(q = "") {
   });
 }
 
+// Active Task Ledger UI State & Timer
+let ledgerTimerInterval = null;
+let ledgerStartTime = 0;
+
+function showActiveTaskLedger(objective) {
+  if (!elements.activeTaskLedger) return;
+  elements.activeTaskLedger.classList.remove("hidden");
+  elements.emergencyStopBtn?.classList.remove("hidden");
+  if (elements.ledgerObjective) {
+    elements.ledgerObjective.textContent = `Objective: ${objective}`;
+  }
+  if (elements.ledgerStepBadge) {
+    elements.ledgerStepBadge.textContent = "Step 1";
+  }
+  if (elements.ledgerTimer) {
+    elements.ledgerTimer.textContent = "0.0s";
+  }
+  if (elements.ledgerChecklist) {
+    elements.ledgerChecklist.innerHTML = `
+      <div class="checklist-item active">
+        <svg class="checklist-icon active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="9"></circle>
+        </svg>
+        <span>Deliberating objective and extracting live interactive candidates…</span>
+      </div>
+    `;
+  }
+  if (elements.ledgerThoughtsText) {
+    elements.ledgerThoughtsText.textContent = "Synthesizing page context into actionable sub-goals…";
+  }
+
+  if (ledgerTimerInterval) clearInterval(ledgerTimerInterval);
+  ledgerStartTime = performance.now();
+  ledgerTimerInterval = setInterval(() => {
+    if (elements.ledgerTimer) {
+      const sec = ((performance.now() - ledgerStartTime) / 1000).toFixed(1);
+      elements.ledgerTimer.textContent = `${sec}s`;
+    }
+  }, 100);
+}
+
+function updateTaskLedger(checklist, stepNum, situationalThought) {
+  if (!elements.activeTaskLedger) return;
+  if (elements.ledgerStepBadge) {
+    elements.ledgerStepBadge.textContent = `Step ${stepNum}`;
+  }
+  if (situationalThought && elements.ledgerThoughtsText) {
+    elements.ledgerThoughtsText.textContent = situationalThought;
+  }
+  if (elements.ledgerChecklist && Array.isArray(checklist) && checklist.length > 0) {
+    elements.ledgerChecklist.innerHTML = "";
+    checklist.forEach((item, idx) => {
+      const div = document.createElement("div");
+      const status = item.status || (idx + 1 < stepNum ? "completed" : idx + 1 === stepNum ? "active" : "pending");
+      div.className = `checklist-item ${status}`;
+
+      let iconSvg = "";
+      if (status === "completed") {
+        iconSvg = `<svg class="checklist-icon completed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+      } else if (status === "active") {
+        iconSvg = `<svg class="checklist-icon active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"></circle></svg>`;
+      } else {
+        iconSvg = `<svg class="checklist-icon pending" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9" stroke-dasharray="2 2"></circle></svg>`;
+      }
+
+      div.innerHTML = `${iconSvg}<span>${escapeHtml(item.title || item.name || `Sub-goal ${idx + 1}`)}</span>`;
+      elements.ledgerChecklist.appendChild(div);
+    });
+  }
+}
+
+function hideActiveTaskLedger() {
+  if (ledgerTimerInterval) {
+    clearInterval(ledgerTimerInterval);
+    ledgerTimerInterval = null;
+  }
+  elements.activeTaskLedger?.classList.add("hidden");
+  elements.emergencyStopBtn?.classList.add("hidden");
+}
+
 function openAuditModal() {
   elements.auditModal?.classList.remove("hidden");
   if (!elements.auditModalBody) return;
@@ -2886,6 +3099,9 @@ async function submitPrompt(promptText) {
   state.abortController = new AbortController();
 
   try {
+    // Perform guaranteed live active tab extraction immediately before running turn
+    await extractContext();
+
     const apiClient = new SidekickApiClient(state.apiKey, state.model);
     const coordinator = new SidekickCoordinator(apiClient);
 
@@ -2918,159 +3134,213 @@ async function submitPrompt(promptText) {
       return;
     }
 
-    // 3. Action Worker Execution (Element [#ID] based or Tab Group)
+    // 3. Action Worker Execution (Autonomous Continuous Multi-Process Loop)
     if (result.type === "action") {
-      const actionData = result.payload || {};
-      const actType = actionData.action;
+      showActiveTaskLedger(promptText);
 
-      // Safe informational explanation when no action was needed or possible
-      if (actType === "none") {
-        const expl = actionData.explanation || "No interactive action could be taken on this page. Try scrolling or checking if the page is loaded.";
-        renderAgentStepBadge("Information", true);
-        renderAssistantPlainMessage(expl);
-        state.conversation.push({ role: "model", text: expl });
-        saveSession();
-        return;
-      }
+      const cognitiveLedger = {
+        taskObjective: promptText,
+        stepNumber: 1,
+        completedMilestones: [],
+        activePlan: result.payload?.plan_checklist || [],
+        lastAction: null,
+        domDelta: "Initial viewport state captured",
+        historySignatures: []
+      };
 
-      // Open new tab inside the managed Chrome Tab Group
-      if (actType === "open_tab") {
-        let targetUrl = (actionData.url || "https://www.google.com").trim();
-        if (!/^https?:\/\//i.test(targetUrl)) targetUrl = "https://" + targetUrl;
-        if (!checkDomainAllowed(targetUrl)) {
-          renderAgentStepBadge(`Blocked navigation: Restricted domain`, false);
-          renderAssistantPlainMessage(`🛡️ Navigation blocked: Destination "${targetUrl}" matches restricted domain.`);
-          return;
-        }
-        await openNewTabInManagedGroup(targetUrl);
-        renderAgentStepBadge(`Opened tab in Sidekick Workgroup: ${targetUrl}`, true);
-        renderAssistantPlainMessage(`Opened new tab in Sidekick Workgroup: ${targetUrl}`);
-        state.conversation.push({ role: "model", text: `Opened new tab in workgroup: ${targetUrl}` });
-        saveSession();
-        await delay(120);
-        await extractContext();
-        await refreshTabGroupState();
-        return;
-      }
+      try {
+        while (!state.abortController?.signal.aborted) {
+          const actionData = result.payload || {};
+          const actType = actionData.action;
 
-      // Strict Tab Group Isolation Guard: Ensure active tab is inside the managed workgroup
-      if (state.tabGroup?.isConfigured && state.tabGroup?.isolationEnabled && !state.tabGroup?.isCurrentTabInGroup) {
-        const groupTitle = state.tabGroup.groupTitle || "Sidekick Workgroup";
-        renderAgentStepBadge("Action Blocked: Tab outside workgroup", false);
-        renderAssistantPlainMessage(
-          `🔒 **Tab Group Isolation Active:**\nThis active tab is outside the managed "${groupTitle}". Sidekick automation is strictly restricted to tabs inside this workgroup.\n\nClick **[+ Add Tab]** in the top bar to add this tab to your workgroup, or switch to a workgroup tab.`
-        );
-        state.conversation.push({ role: "model", text: `Action blocked: Active tab is outside ${groupTitle}.` });
-        saveSession();
-        return;
-      }
+          // Safe completion or informational exit
+          if (actionData.is_task_complete || actType === "none") {
+            const summary = actionData.completion_summary || actionData.explanation || "Objective reached successfully.";
+            updateTaskLedger(actionData.plan_checklist || [], cognitiveLedger.stepNumber, actionData.situational_thought || "Task completed.");
+            renderAssistantPlainMessage(`✅ **Task Completed:** ${summary}`);
+            state.conversation.push({ role: "model", text: summary });
+            break;
+          }
 
-      if (actType === "scroll") {
-        const dir = actionData.direction || "down";
-        await executeJITAction("scroll_viewport", { direction: dir, pixels: 450 });
-        renderAgentStepBadge(`Scrolled page ${dir} [CDP Action]`, true);
-        renderAssistantPlainMessage(`Viewport smoothly scrolled ${dir}.`);
-      } else if (actType === "navigate") {
-        if (!actionData.url || (!actionData.url.startsWith("http://") && !actionData.url.startsWith("https://"))) {
-          renderAgentStepBadge(`Blocked navigation: Invalid URL`, false);
-          renderAssistantPlainMessage(`🛑 Navigation blocked: Invalid protocol for "${actionData.url}".`);
-          return;
-        }
-        if (!checkDomainAllowed(actionData.url)) {
-          renderAgentStepBadge(`Blocked navigation: Restricted domain`, false);
-          renderAssistantPlainMessage(`🛡️ Navigation blocked: Destination "${actionData.url}" matches restricted domain.`);
-          return;
-        }
-        // MANDATORY SAFETY APPROVAL FOR NAVIGATION
-        const approved = await requestSafetyApproval("navigate_to", { url: actionData.url }, 1);
-        if (!approved) {
-          renderAgentStepBadge(`Navigation denied by user: ${actionData.url}`, false);
-          renderAssistantPlainMessage("Navigation stopped by user.");
-          return;
-        }
-        await executeJITAction("navigate_to", { url: actionData.url });
-        renderAgentStepBadge(`Navigated to ${actionData.url} [CDP Action]`, true);
-        renderAssistantPlainMessage(`Navigated active tab to ${actionData.url}.`);
-        await delay(80);
-        await extractContext();
-      } else if (actType === "click" || actType === "type") {
-        let targetEl = null;
-        if (state.pageContext?.interactiveElements) {
-          const targetNum = Number(actionData.target_id);
-          targetEl = state.pageContext.interactiveElements.find(e => Number(e.id) === targetNum);
-        }
+          // Update Active Task Ledger checklist and situational reasoning
+          updateTaskLedger(
+            actionData.plan_checklist || [],
+            cognitiveLedger.stepNumber,
+            actionData.situational_thought || actionData.explanation
+          );
 
-        if (!targetEl && actionData.element_label && state.pageContext?.interactiveElements) {
-          targetEl = resolveElementCoordinates({ element_description: actionData.element_label }, state.pageContext.interactiveElements);
-        }
-
-        if (!targetEl) {
-          const expl = `Target element [#${actionData.target_id || "?"}] could not be found in active viewport. ${actionData.explanation || ""}`.trim();
-          renderAgentStepBadge("Element not found", false);
-          renderAssistantPlainMessage(expl);
-          state.conversation.push({ role: "model", text: expl });
-          saveSession();
-          return;
-        }
-
-        // Live coordinate re-verification to eliminate stale coordinates
-        let liveX = targetEl.x;
-        let liveY = targetEl.y;
-        if (state.activeTabId && targetEl.selector) {
-          try {
-            const liveRes = await new Promise(res => {
-              chrome.tabs.sendMessage(state.activeTabId, { action: "reverifyCoordinates", selector: targetEl.selector, x: liveX, y: liveY }, { frameId: 0 }, r => {
-                const _ = chrome.runtime.lastError;
-                res(r?.coords);
-              });
-              setTimeout(() => res(null), 120);
-            });
-            if (liveRes && liveRes.verified) {
-              liveX = liveRes.x;
-              liveY = liveRes.y;
+          // Open new tab inside managed Chrome Tab Group
+          if (actType === "open_tab") {
+            let targetUrl = (actionData.url || "https://www.google.com").trim();
+            if (!/^https?:\/\//i.test(targetUrl)) targetUrl = "https://" + targetUrl;
+            if (!checkDomainAllowed(targetUrl)) {
+              renderAgentStepBadge(`Blocked navigation: Restricted domain`, false);
+              renderAssistantPlainMessage(`🛡️ Navigation blocked: Destination "${targetUrl}" matches restricted domain.`);
+              break;
             }
-          } catch {}
-        }
+            await openNewTabInManagedGroup(targetUrl);
+            const stepDesc = `Opened tab in Workgroup: ${targetUrl}`;
+            renderAgentStepBadge(`[Step ${cognitiveLedger.stepNumber}] ${stepDesc}`, true);
+            renderAssistantPlainMessage(stepDesc);
+            cognitiveLedger.lastAction = stepDesc;
+            cognitiveLedger.completedMilestones.push(stepDesc);
+            await delay(200);
+            await extractContext();
+            await refreshTabGroupState();
+          } else {
+            // Strict Tab Group Isolation Guard
+            if (state.tabGroup?.isConfigured && state.tabGroup?.isolationEnabled && !state.tabGroup?.isCurrentTabInGroup) {
+              const groupTitle = state.tabGroup.groupTitle || "Sidekick Workgroup";
+              renderAgentStepBadge("Action Blocked: Tab outside workgroup", false);
+              renderAssistantPlainMessage(
+                `🔒 **Tab Group Isolation Active:**\nThis active tab is outside the managed "${groupTitle}". Sidekick automation is strictly restricted to tabs inside this workgroup.\n\nClick **[+ Add Tab]** in the top bar to add this tab to your workgroup.`
+              );
+              break;
+            }
 
-        const isClick = actType === "click";
-        const cdpTool = isClick ? "click_element" : "type_text";
-        const cdpArgs = {
-          x: liveX,
-          y: liveY,
-          selector: targetEl.selector,
-          element_description: targetEl.label,
-        };
-        if (!isClick) {
-          cdpArgs.text = actionData.text || "test";
-          cdpArgs.press_enter = false;
-        }
+            if (actType === "scroll") {
+              const dir = actionData.direction || "down";
+              await executeJITAction("scroll_viewport", { direction: dir, pixels: 450 });
+              const stepDesc = `Scrolled page ${dir}`;
+              renderAgentStepBadge(`[Step ${cognitiveLedger.stepNumber}] ${stepDesc}`, true);
+              renderAssistantPlainMessage(`Viewport smoothly scrolled ${dir}.`);
+              cognitiveLedger.lastAction = stepDesc;
+              cognitiveLedger.completedMilestones.push(stepDesc);
+            } else if (actType === "navigate") {
+              if (!actionData.url || (!actionData.url.startsWith("http://") && !actionData.url.startsWith("https://"))) {
+                renderAgentStepBadge(`Blocked navigation: Invalid URL`, false);
+                renderAssistantPlainMessage(`🛑 Navigation blocked: Invalid protocol for "${actionData.url}".`);
+                break;
+              }
+              if (!checkDomainAllowed(actionData.url)) {
+                renderAgentStepBadge(`Blocked navigation: Restricted domain`, false);
+                renderAssistantPlainMessage(`🛡️ Navigation blocked: Destination "${actionData.url}" matches restricted domain.`);
+                break;
+              }
+              const approved = await requestSafetyApproval("navigate_to", { url: actionData.url }, cognitiveLedger.stepNumber);
+              if (!approved) {
+                renderAgentStepBadge(`Navigation denied by user: ${actionData.url}`, false);
+                renderAssistantPlainMessage("Navigation stopped by user.");
+                break;
+              }
+              await executeJITAction("navigate_to", { url: actionData.url });
+              const stepDesc = `Navigated to ${actionData.url}`;
+              renderAgentStepBadge(`[Step ${cognitiveLedger.stepNumber}] ${stepDesc}`, true);
+              renderAssistantPlainMessage(stepDesc);
+              cognitiveLedger.lastAction = stepDesc;
+              cognitiveLedger.completedMilestones.push(stepDesc);
+              await delay(200);
+              await extractContext();
+            } else if (actType === "click" || actType === "type") {
+              let targetEl = null;
+              if (state.pageContext?.interactiveElements) {
+                const targetNum = Number(actionData.target_id);
+                targetEl = state.pageContext.interactiveElements.find(e => Number(e.id) === targetNum);
+              }
 
-        // Check high risk confirmation
-        const isHighRisk = checkHighRiskAction(cdpTool, cdpArgs, targetEl.label);
-        if (isHighRisk) {
-          const approved = await requestSafetyApproval(cdpTool, cdpArgs, 1);
-          if (!approved) {
-            renderAgentStepBadge(`Action denied by user: ${targetEl.label}`, false);
-            renderAssistantPlainMessage("Action stopped by user.");
-            return;
+              if (!targetEl && actionData.element_label && state.pageContext?.interactiveElements) {
+                targetEl = resolveElementCoordinates({ element_description: actionData.element_label }, state.pageContext.interactiveElements);
+              }
+
+              if (!targetEl) {
+                const expl = `Target element [#${actionData.target_id || "?"}] could not be found in active viewport. ${actionData.explanation || ""}`.trim();
+                renderAgentStepBadge("Element not found", false);
+                renderAssistantPlainMessage(expl);
+                break;
+              }
+
+              // Live coordinate re-verification
+              let liveX = targetEl.x;
+              let liveY = targetEl.y;
+              if (state.activeTabId && targetEl.selector) {
+                try {
+                  const liveRes = await new Promise(res => {
+                    chrome.tabs.sendMessage(state.activeTabId, { action: "reverifyCoordinates", selector: targetEl.selector, x: liveX, y: liveY }, { frameId: 0 }, r => {
+                      const _ = chrome.runtime.lastError;
+                      res(r?.coords);
+                    });
+                    setTimeout(() => res(null), 120);
+                  });
+                  if (liveRes && liveRes.verified) {
+                    liveX = liveRes.x;
+                    liveY = liveRes.y;
+                  }
+                } catch {}
+              }
+
+              const isClick = actType === "click";
+              const cdpTool = isClick ? "click_element" : "type_text";
+              const cdpArgs = {
+                x: liveX,
+                y: liveY,
+                selector: targetEl.selector,
+                element_description: targetEl.label,
+              };
+              if (!isClick) {
+                cdpArgs.text = actionData.text || "test";
+                cdpArgs.press_enter = false;
+              }
+
+              // Check high-risk confirmation
+              const isHighRisk = checkHighRiskAction(cdpTool, cdpArgs, targetEl.label);
+              if (isHighRisk) {
+                const approved = await requestSafetyApproval(cdpTool, cdpArgs, cognitiveLedger.stepNumber);
+                if (!approved) {
+                  renderAgentStepBadge(`Action denied by user: ${targetEl.label}`, false);
+                  renderAssistantPlainMessage("Action stopped by user safety policy.");
+                  break;
+                }
+              }
+
+              await executeJITAction(cdpTool, cdpArgs);
+              const stepDesc = isClick
+                ? `Clicked "${targetEl.label}" (element [#${targetEl.id}])`
+                : `Typed "${cdpArgs.text}" into "${targetEl.label}"`;
+              renderAgentStepBadge(`[Step ${cognitiveLedger.stepNumber}] ${stepDesc} [CDP Trusted]`, true);
+              renderAssistantPlainMessage(stepDesc);
+              cognitiveLedger.lastAction = stepDesc;
+              cognitiveLedger.completedMilestones.push(stepDesc);
+
+              await delay(250);
+              await extractContext();
+            }
+          }
+
+          // Cycle detection (Anti-thrashing: detect 3 repeated identical states)
+          const currentSignature = `${actType}:${actionData.target_id || ""}:${actionData.url || ""}:${state.pageContext?.interactiveElements?.length || 0}`;
+          cognitiveLedger.historySignatures.push(currentSignature);
+          const last3 = cognitiveLedger.historySignatures.slice(-3);
+          if (last3.length === 3 && last3[0] === last3[1] && last3[1] === last3[2]) {
+            renderAssistantPlainMessage("⚠️ **Cycle Detection Guard:** Detected 3 consecutive identical actions without DOM progress. Halting loop to prevent runaway behavior.");
+            break;
+          }
+
+          cognitiveLedger.stepNumber++;
+
+          // Deliberate next step in continuous workflow
+          updateTurnAction(`Deliberating Step ${cognitiveLedger.stepNumber}…`, "Action Worker", 2);
+          result = await coordinator.processTurn(promptText, state.pageContext, {
+            signal: state.abortController.signal,
+            enclaveId: state.activeEnclaveId,
+            cognitiveLedger,
+            onProgress: (actionLabel, detail, step) => updateTurnAction(actionLabel, detail, step)
+          });
+
+          if (result.type !== "action") {
+            if (result.type === "answer") {
+              await renderAssistantResponse(result.payload);
+            } else if (result.type === "transform") {
+              renderAssistantMarkdownMessage(result.payload.text || "");
+            }
+            break;
           }
         }
-
-        await executeJITAction(cdpTool, cdpArgs);
-        renderAgentStepBadge(`[Step 1] ${isClick ? "Clicked" : "Typed into"} "${targetEl.label}" [CDP Trusted]`, true);
-        const feedback = isClick
-          ? `Clicked "${targetEl.label}" (element [#${targetEl.id}]). Hardware event dispatched via Chrome DevTools Protocol.`
-          : `Typed "${cdpArgs.text}" into "${targetEl.label}". Keystrokes dispatched via Chrome DevTools Protocol.`;
-        renderAssistantPlainMessage(feedback);
-
-        // Invalidate stale observation and re-extract context after action
-        await delay(80);
-        await extractContext();
+      } finally {
+        hideActiveTaskLedger();
       }
 
-      state.conversation.push({ role: "model", text: JSON.stringify(actionData) });
+      state.conversation.push({ role: "model", text: JSON.stringify(result?.payload || "Completed") });
       saveSession();
-      return;
     }
 
     // 4. Answer Worker Execution (Factual with receipts)
@@ -4261,6 +4531,20 @@ function initWordmarkAndRenaming() {
 }
 
 function initRollsRoyceStarlight() {
+  if (typeof window.initLivingCosmos === "function") {
+    try {
+      window.initLivingCosmos({
+        canvasId: "galaxyCanvas",
+        containerId: "rrStarlightCeiling",
+        starCount: 26000,
+        nebulaCount: 650
+      });
+      return;
+    } catch (e) {
+      console.warn("[Sidekick] Failed to initialize 3D Living Cosmos, falling back to 2D:", e);
+    }
+  }
+
   const canvas = document.getElementById("galaxyCanvas");
   const ceiling = document.getElementById("rrStarlightCeiling");
   if (!canvas || !ceiling) return;

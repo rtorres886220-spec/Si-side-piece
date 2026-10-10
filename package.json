@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
+    "build:cosmos": "esbuild src/cosmosEngine.ts --bundle --minify --format=iife --outfile=cosmos.bundle.js && cp cosmos.bundle.js public/cosmos.bundle.js",
+    "pack:extension": "npm run build:cosmos && tsx scripts/pack-extension.ts",
+    "build": "npm run build:cosmos && vite build",
     "start": "node server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",

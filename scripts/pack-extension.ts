@@ -12,6 +12,7 @@ async function packExtension() {
     "sidepanel.html",
     "sidepanel.css",
     "sidepanel.js",
+    "cosmos.bundle.js",
     "privacy.html",
   ];
 

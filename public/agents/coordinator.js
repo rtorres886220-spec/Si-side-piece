@@ -182,6 +182,182 @@
         telemetry: telemetry,
       };
     }
+
+    /**
+     * Executes an autonomous, continuous multi-process loop until the task is complete.
+     * Continuously observes the live page, reasons about progress, performs actions,
+     * verifies state mutations, and updates the real-time checklist and thought stream.
+     */
+    async runContinuousTaskLoop(promptText, getPageContextFn, callbacks = {}, options = {}) {
+      const {
+        signal = null,
+        enclaveId = "enclave-" + Date.now(),
+        postActionDelay = 350,
+      } = options;
+
+      const {
+        onProgress = () => {},
+        onChecklistUpdate = () => {},
+        onStepExecuted = () => {},
+        onVerificationUpdate = () => {},
+        onComplete = () => {},
+        requestSafetyApproval = async () => true,
+        executeAction = async () => ({ success: true }),
+      } = callbacks;
+
+      // 1. FAST PATH: Check mechanical bypass (0ms)
+      const mechanical = SidekickRouter.checkMechanicalFastPath(promptText);
+      if (mechanical.isMechanical) {
+        if (executeAction) {
+          await executeAction("mechanical", mechanical);
+        }
+        onComplete(`Mechanical shortcut completed: ${mechanical.mechanicalAction}`);
+        return { type: "mechanical", mechanicalAction: mechanical.mechanicalAction };
+      }
+
+      // Initial observation
+      let pageContext = await getPageContextFn();
+
+      // Check intent via router
+      const docSections = SidekickRetriever.parseDocumentSections(pageContext?.bodyText || "");
+      const sectionCatalog = SidekickRetriever.generateSectionCatalog(docSections);
+      onProgress("Analyzing intent and required workflow…", "Router Agent", 1);
+      const route = await SidekickRouter.routeRequest(this.apiClient, promptText, sectionCatalog, { signal });
+
+      // If purely informational or transform, process single turn with receipts and exit
+      if (route.intent === "answer" || route.intent === "transform") {
+        const turnResult = await this.processTurn(promptText, pageContext, { signal, onProgress, enclaveId });
+        onComplete(turnResult.type === "answer" ? "Verified factual answer generated." : "Synthesis complete.", turnResult);
+        return turnResult;
+      }
+
+      // 2. CONTINUOUS ACTION LOOP PREPARATION
+      const cognitiveLedger = {
+        taskObjective: promptText,
+        stepNumber: 1,
+        completedMilestones: [],
+        activePlan: [],
+        lastAction: null,
+        domDelta: "Initial viewport state captured",
+        historySignatures: [],
+      };
+
+      onProgress("Decomposing objective into sub-goals…", "Action Planner", 1);
+
+      while (!signal?.aborted) {
+        if (signal?.aborted) break;
+
+        onProgress(`Deliberating Step ${cognitiveLedger.stepNumber}…`, `Step ${cognitiveLedger.stepNumber}`, 2);
+
+        // Execute Action Worker with cognitive ledger
+        const workerPayload = await SidekickWorkers.executeActionWorker(
+          this.apiClient,
+          promptText,
+          pageContext?.interactiveElements || [],
+          pageContext,
+          { signal, elementHint: route.element_hint, enclaveId, cognitiveLedger }
+        );
+
+        if (signal?.aborted) break;
+
+        // Check if task is already complete or no more action needed
+        if (workerPayload.is_task_complete || workerPayload.action === "none") {
+          const completionSummary = workerPayload.completion_summary || workerPayload.explanation || "Task completed successfully.";
+          onChecklistUpdate(workerPayload.plan_checklist || [], cognitiveLedger.stepNumber, workerPayload.situational_thought || "Task objective reached.");
+          onComplete(completionSummary, workerPayload);
+          return {
+            type: "continuous_complete",
+            stepsCompleted: cognitiveLedger.stepNumber - 1,
+            summary: completionSummary,
+            checklist: workerPayload.plan_checklist,
+          };
+        }
+
+        // Notify UI of updated plan and thought stream
+        onChecklistUpdate(
+          workerPayload.plan_checklist || [],
+          cognitiveLedger.stepNumber,
+          workerPayload.situational_thought || workerPayload.explanation
+        );
+
+        // Deterministic Gate Check
+        let gateResult = SidekickGate.verifyActionWorker(workerPayload, pageContext?.interactiveElements || []);
+        if (!gateResult.passed) {
+          if (gateResult.isSecurityViolation) {
+            onVerificationUpdate(`Security policy blocked action: ${gateResult.reason}`);
+            return { type: "security_blocked", reason: gateResult.reason };
+          }
+          // Attempt Critic Repair
+          onProgress(`Refining action invariant (${gateResult.code})…`, "Critic Verifier", 3);
+          const repair = await SidekickCritic.repairFailure(
+            this.apiClient,
+            "action",
+            workerPayload,
+            gateResult,
+            promptText,
+            "",
+            pageContext,
+            { signal, interactiveElements: pageContext?.interactiveElements || [], enclaveId }
+          );
+          if (repair.repaired && repair.payload) {
+            Object.assign(workerPayload, repair.payload);
+          } else {
+            onVerificationUpdate(`Action repair failed: ${gateResult.reason}`);
+            break;
+          }
+        }
+
+        // Cycle Detection (Anti-thrashing: detect identical repeated actions without progress)
+        const currentSignature = `${workerPayload.action}:${workerPayload.target_id || ""}:${workerPayload.text || ""}:${pageContext?.interactiveElements?.length || 0}`;
+        cognitiveLedger.historySignatures.push(currentSignature);
+        const last3 = cognitiveLedger.historySignatures.slice(-3);
+        if (last3.length === 3 && last3[0] === last3[1] && last3[1] === last3[2]) {
+          onVerificationUpdate("Halting: Detected 3 identical consecutive actions without DOM state progress to prevent runaway loops.");
+          break;
+        }
+
+        // Dispatch action via callback
+        onProgress(`Dispatching ${workerPayload.action} action via CDP…`, "Execution Engine", 3);
+        const execRes = await executeAction(workerPayload.action, workerPayload);
+        const desc = workerPayload.element_label 
+          ? `${workerPayload.action === "click" ? "Clicked" : "Typed into"} "${workerPayload.element_label}"`
+          : `${workerPayload.action} dispatched`;
+        
+        onStepExecuted(cognitiveLedger.stepNumber, desc, execRes?.success !== false);
+
+        // Verification pause for live DOM mutation / network responses
+        await new Promise((r) => setTimeout(r, postActionDelay));
+        if (signal?.aborted) break;
+
+        // Re-extract fresh page context
+        const prevContext = pageContext;
+        pageContext = await getPageContextFn();
+
+        // Calculate DOM state delta
+        const urlChanged = prevContext?.url !== pageContext?.url;
+        const elemDelta = (pageContext?.interactiveElements?.length || 0) - (prevContext?.interactiveElements?.length || 0);
+        let deltaDesc = urlChanged 
+          ? `Navigated to new URL: ${pageContext?.url}`
+          : `DOM updated (${pageContext?.interactiveElements?.length || 0} interactive elements visible, ${elemDelta >= 0 ? "+" : ""}${elemDelta} delta)`;
+        
+        cognitiveLedger.domDelta = deltaDesc;
+        cognitiveLedger.lastAction = desc;
+        cognitiveLedger.completedMilestones.push(`Step ${cognitiveLedger.stepNumber}: ${desc}`);
+        onVerificationUpdate(`Verified: ${deltaDesc}`);
+
+        cognitiveLedger.stepNumber++;
+      }
+
+      if (signal?.aborted) {
+        onVerificationUpdate("🛑 Emergency stop activated: Continuous task loop stopped.");
+        return { type: "aborted", stepsCompleted: cognitiveLedger.stepNumber - 1 };
+      }
+
+      return {
+        type: "continuous_finished",
+        stepsCompleted: cognitiveLedger.stepNumber - 1,
+      };
+    }
   }
 
   // Export to global scope

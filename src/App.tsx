@@ -733,9 +733,111 @@ export default function App() {
     }
   };
 
+  // Active Task Ledger State for Continuous Autonomous Multi-Process Execution
+  const [activeTaskLedger, setActiveTaskLedger] = useState<{
+    visible: boolean;
+    objective: string;
+    stepNumber: number;
+    timerSeconds: number;
+    checklist: Array<{ title: string; status: "completed" | "active" | "pending" }>;
+    situationalThought: string;
+  } | null>(null);
+  const ledgerTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const startLedger = (
+    objective: string,
+    initialChecklist: Array<{ title: string; status: "completed" | "active" | "pending" }> = [],
+    initialThought = "Deliberating objective and decomposing workflow into sub-goals…"
+  ) => {
+    if (ledgerTimerRef.current) clearInterval(ledgerTimerRef.current);
+    const startT = performance.now();
+    setActiveTaskLedger({
+      visible: true,
+      objective,
+      stepNumber: 1,
+      timerSeconds: 0,
+      checklist: initialChecklist.length > 0 ? initialChecklist : [
+        { title: "Deliberate objective and locate target elements", status: "active" }
+      ],
+      situationalThought: initialThought,
+    });
+    ledgerTimerRef.current = setInterval(() => {
+      setActiveTaskLedger((prev) => {
+        if (!prev || !prev.visible) return prev;
+        return {
+          ...prev,
+          timerSeconds: (performance.now() - startT) / 1000,
+        };
+      });
+    }, 100);
+  };
+
+  const updateLedger = (
+    stepNum: number,
+    checklist: Array<{ title: string; status: "completed" | "active" | "pending" }>,
+    thought?: string
+  ) => {
+    setActiveTaskLedger((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        stepNumber: stepNum,
+        checklist,
+        situationalThought: thought !== undefined ? thought : prev.situationalThought,
+      };
+    });
+  };
+
+  const stopLedger = () => {
+    if (ledgerTimerRef.current) {
+      clearInterval(ledgerTimerRef.current);
+      ledgerTimerRef.current = null;
+    }
+    setActiveTaskLedger(null);
+  };
+
+  const handleEmergencyStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (ledgerTimerRef.current) {
+      clearInterval(ledgerTimerRef.current);
+      ledgerTimerRef.current = null;
+    }
+    setActiveTaskLedger(null);
+    stopTurnTimer();
+    setIsBusy(false);
+    showToast("Execution loop stopped by user.");
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        role: "agent-badge",
+        stepText: "Emergency Stop triggered: Halting multi-process execution loop immediately",
+        isSuccess: false,
+      },
+      {
+        role: "assistant",
+        text: "🛑 **Execution Halted:** User invoked Emergency Stop. All background loops and actions were cleanly cancelled.",
+      },
+    ]);
+  };
+
+  // Keyboard shortcut listener: Esc triggers emergency stop when running
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && (isBusy || activeTaskLedger?.visible)) {
+        handleEmergencyStop();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isBusy, activeTaskLedger]);
+
   useEffect(() => {
     return () => {
       if (turnTimerRef.current) clearInterval(turnTimerRef.current);
+      if (ledgerTimerRef.current) clearInterval(ledgerTimerRef.current);
     };
   }, []);
 
@@ -1999,12 +2101,27 @@ export default function App() {
 
     // High-Grade Scenario: Multi-step CDP automation workflow
     if (promptLower.includes("dispatch") || promptLower.includes("automation") || promptLower.includes("workflow") || promptLower.includes("cdp")) {
-      updateTurnAction("Analyzing interactive DOM tree...", "Scanning 45 interactive controls", 2);
-      await new Promise((r) => setTimeout(r, 220));
       const searchBox = currentPage.elements?.find((e) => e.role.includes("input") || e.role.includes("link"));
       const actionBtn = currentPage.elements?.find((e) => e.role.includes("button") && !e.label.toLowerCase().includes("submit"));
 
+      startLedger(promptText, [
+        { title: "Scan interactive DOM and extract candidates", status: "completed" },
+        { title: `Focus target element [${searchBox?.label || "Search Input"}]`, status: "active" },
+        { title: `Dispatch hardware action to [${actionBtn?.label || "Action Control"}]`, status: "pending" },
+        { title: "Verify viewport mutation & detach JIT debugger", status: "pending" }
+      ], "Analyzing interactive controls in active tab and preparing sequential dispatch…");
+
+      updateTurnAction("Analyzing interactive DOM tree...", "Scanning 45 interactive controls", 2);
+      await new Promise((r) => setTimeout(r, 260));
+
       if (searchBox) {
+        updateLedger(1, [
+          { title: "Scan interactive DOM and extract candidates", status: "completed" },
+          { title: `Focus target element [${searchBox.label}]`, status: "active" },
+          { title: `Dispatch hardware action to [${actionBtn?.label || "Action Control"}]`, status: "pending" },
+          { title: "Verify viewport mutation & detach JIT debugger", status: "pending" }
+        ], `Dispatching native mouse focus to [#${searchBox.id}] "${searchBox.label}" at (${searchBox.x}, ${searchBox.y})…`);
+
         updateTurnAction(`Focusing [#${searchBox.id}] "${searchBox.label}"...`, `Coordinates (${searchBox.x}, ${searchBox.y})`, 3);
         await triggerSimulatedCDPAction(`Focus target: ${searchBox.label}`, searchBox.x, searchBox.y);
         if (currentPage.id === "ecommerce-demo") setSearchInputValue("Wireless Studio Headphones");
@@ -2012,10 +2129,17 @@ export default function App() {
           ...prev,
           { role: "agent-badge", stepText: `Step 1: Dispatched native mouse click to [#${searchBox.id}] "${searchBox.label}" [CDP Trusted]`, isSuccess: true }
         ]);
-        await new Promise((r) => setTimeout(r, 340));
+        await new Promise((r) => setTimeout(r, 380));
       }
 
       if (actionBtn) {
+        updateLedger(2, [
+          { title: "Scan interactive DOM and extract candidates", status: "completed" },
+          { title: `Focus target element [${searchBox?.label || "Search Input"}]`, status: "completed" },
+          { title: `Dispatch hardware action to [${actionBtn.label}]`, status: "active" },
+          { title: "Verify viewport mutation & detach JIT debugger", status: "pending" }
+        ], `Dispatching native OS click sequence to "${actionBtn.label}" at (${actionBtn.x}, ${actionBtn.y})…`);
+
         updateTurnAction(`Dispatching hardware click to "${actionBtn.label}"...`, `Coordinates (${actionBtn.x}, ${actionBtn.y})`, 3);
         await triggerSimulatedCDPAction(`Activate: ${actionBtn.label}`, actionBtn.x, actionBtn.y);
         if (currentPage.id === "ecommerce-demo") setCartCount((c) => c + 1);
@@ -2023,7 +2147,15 @@ export default function App() {
           ...prev,
           { role: "agent-badge", stepText: `Step 2: Dispatched native hardware event to "${actionBtn.label}" at (${actionBtn.x}, ${actionBtn.y}) [CDP Trusted]`, isSuccess: true }
         ]);
+        await new Promise((r) => setTimeout(r, 300));
       }
+
+      updateLedger(3, [
+        { title: "Scan interactive DOM and extract candidates", status: "completed" },
+        { title: `Focus target element [${searchBox?.label || "Search Input"}]`, status: "completed" },
+        { title: `Dispatch hardware action to [${actionBtn?.label || "Action Control"}]`, status: "completed" },
+        { title: "Verify viewport mutation & detach JIT debugger", status: "completed" }
+      ], "All sub-goals verified. JIT debugger detached cleanly with 0 lingering banners.");
 
       updateTurnAction("Ephemeral JIT detached...", "Workflow completed in 38ms", 4);
       setChatMessages((prev) => [
@@ -2647,6 +2779,18 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                     <Sliders className={`w-4 h-4 transition-all ${showSettings ? "drop-shadow-[0_0_10px_rgba(56,189,248,0.7)]" : "drop-shadow-[0_1px_3px_rgba(255,255,255,0.25)] group-hover:drop-shadow-[0_0_8px_rgba(255,255,255,0.6)]"}`} />
                   </button>
 
+                  {(isBusy || activeTaskLedger?.visible) && (
+                    <button
+                      type="button"
+                      onClick={handleEmergencyStop}
+                      className="border border-rose-500/40 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 px-2 py-0.5 rounded-full text-[10px] font-mono flex items-center gap-1.5 transition-all shadow-[0_0_10px_rgba(244,63,94,0.35)] animate-pulse"
+                      title="Emergency Stop Loop [Esc]"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                      <span>Stop [Esc]</span>
+                    </button>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => setShowHelpModal(true)}
@@ -2819,6 +2963,70 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                       .
                     </p>
                   </div>
+                )}
+
+                {/* Continuous Process Active Task Ledger & Live Checklist */}
+                {activeTaskLedger?.visible && (
+                  <section className="mb-4 p-3.5 rounded-xl bg-white/[0.03] border border-sky-500/30 backdrop-blur-md shadow-[0_4px_20px_rgba(0,0,0,0.4)] animate-in fade-in duration-200 shrink-0">
+                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-white/[0.06]">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-sky-400 shadow-[0_0_8px_rgba(56,189,248,0.8)] animate-pulse" />
+                        <span className="text-[11px] font-mono uppercase tracking-wider text-sky-300 font-semibold">Autonomous Process</span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-sky-500/10 text-sky-300 border border-sky-500/20">
+                          Step {activeTaskLedger.stepNumber}
+                        </span>
+                        <span className="text-[10px] font-mono text-white/50">
+                          {activeTaskLedger.timerSeconds.toFixed(1)}s
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleEmergencyStop}
+                        className="px-2 py-0.5 rounded text-[10px] font-mono bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 transition-all hover:bg-rose-500/30"
+                        title="Emergency Stop Loop [Esc]"
+                      >
+                        Stop [Esc]
+                      </button>
+                    </div>
+                    <div className="text-xs text-white/90 font-medium mb-2.5 truncate">
+                      <span className="text-white/40 font-mono text-[11px]">Objective: </span>
+                      {activeTaskLedger.objective}
+                    </div>
+                    {activeTaskLedger.checklist.length > 0 && (
+                      <div className="space-y-1.5 mb-2.5 pl-0.5">
+                        {activeTaskLedger.checklist.map((item, idx) => (
+                          <div
+                            key={idx}
+                            className={`flex items-start gap-2 text-xs transition-colors ${
+                              item.status === "completed"
+                                ? "text-white/40 line-through"
+                                : item.status === "active"
+                                ? "text-sky-200 font-medium"
+                                : "text-white/30"
+                            }`}
+                          >
+                            {item.status === "completed" ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                            ) : item.status === "active" ? (
+                              <span className="w-3.5 h-3.5 rounded-full border-2 border-sky-400 border-t-transparent animate-spin shrink-0 mt-0.5" />
+                            ) : (
+                              <span className="w-3.5 h-3.5 rounded-full border border-white/20 shrink-0 mt-0.5" />
+                            )}
+                            <span>{item.title}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <details className="pt-2 border-t border-white/[0.06] text-xs" open>
+                      <summary className="cursor-pointer text-[11px] text-white/60 hover:text-white/80 flex items-center justify-between select-none">
+                        <span>Cognitive Reasoning &amp; DOM State</span>
+                        <span className="text-[9px] font-mono text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded">live</span>
+                      </summary>
+                      <div className="mt-1.5 p-2 rounded-lg bg-black/40 border-l-2 border-sky-400 text-[11px] text-white/80 leading-relaxed font-sans">
+                        {activeTaskLedger.situationalThought}
+                      </div>
+                    </details>
+                  </section>
                 )}
 
                 {/* Messages List */}

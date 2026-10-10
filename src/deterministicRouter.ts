@@ -112,6 +112,17 @@ export function resolveEpistemicScope(
   const p = (prompt || "").trim();
   const pLower = p.toLowerCase();
 
+  // 0. Conversational greetings and assistant identity/capability queries are strictly off-screen
+  const isGreeting = GREETING_PATTERNS.some((pat) => pat.test(pLower));
+  const isCapability = ASSISTANT_CAPABILITY_PATTERNS.some((pat) => pat.test(pLower));
+  if (isGreeting || isCapability) {
+    return {
+      scope: "off_screen",
+      isDeicticOrShorthand: false,
+      isGeneralKnowledge: true,
+    };
+  }
+
   // 1. Shorthand or colloquial page queries (Claude-style shared screen binding)
   const isShorthand = SHORTHAND_PAGE_PATTERNS.some((pat) => pat.test(pLower));
   const isDeictic = DEICTIC_ANCHOR_PATTERNS.some((pat) => pat.test(pLower));
