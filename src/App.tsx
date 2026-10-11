@@ -10,10 +10,6 @@ import {
   Copy,
   Check,
   ExternalLink,
-  Code2,
-  Monitor,
-  BookOpen,
-  Globe,
   Sliders,
   Clock,
   Plus,
@@ -26,36 +22,27 @@ import {
   ShieldAlert,
   Zap,
   Lock,
-  Eye,
   AlertTriangle,
   Layers,
   Terminal,
-  MousePointer,
-  Sparkles,
   Pencil,
-  RotateCcw,
   Volume2,
   VolumeX,
   Search,
   HelpCircle,
-  Table,
   FileText,
   Play,
   ArrowRight,
-  Filter,
   CheckCircle2,
-  List
 } from "lucide-react";
 import { SLASH_COMMANDS, matchSlashCommand, SlashCommandDef } from "./slashCommands";
 import {
   ADVERSARIAL_GROUNDING_TESTS,
-  GROUNDING_SYSTEM_POLICY,
   validateAndEnforceGrounding,
   AdversarialTestCase,
   AtomicClaim
 } from "./groundingEngine";
 import { routeUserRequest } from "./deterministicRouter";
-import { retrieveAdaptiveEvidence } from "./adaptiveEvidenceRetriever";
 import { GalaxyStarSystem } from "./GalaxyStarSystem";
 
 // Option B Manifest & Background Script constants for code viewer and zip generator
@@ -428,79 +415,11 @@ interface AssistantResponseData {
   };
 }
 
-// Rolls-Royce Starlight Headliner optical fibers - 3D True Deep Depth Replica
-// Tiny pinpricks (0.45px - 1.05px) with multi-plane depth layering. NO pulses, NO scaling.
-interface StarFiber {
-  x: number;
-  y: number;
-  size: number;
-  opacity: number;
-  delay: string;
-  depth: "deep" | "mid" | "near";
-}
-
-const RR_STARS: StarFiber[] = [
-  // Deep Background Layer (0.35px - 0.45px pinpricks, distant celestial depth)
-  { x: 4, y: 18, size: 0.4, opacity: 0.22, delay: "0.4s", depth: "deep" },
-  { x: 11, y: 42, size: 0.35, opacity: 0.18, delay: "1.8s", depth: "deep" },
-  { x: 17, y: 84, size: 0.45, opacity: 0.25, delay: "3.2s", depth: "deep" },
-  { x: 23, y: 15, size: 0.35, opacity: 0.19, delay: "0.9s", depth: "deep" },
-  { x: 29, y: 68, size: 0.4, opacity: 0.24, delay: "4.5s", depth: "deep" },
-  { x: 36, y: 32, size: 0.35, opacity: 0.18, delay: "2.1s", depth: "deep" },
-  { x: 43, y: 92, size: 0.45, opacity: 0.28, delay: "5.4s", depth: "deep" },
-  { x: 50, y: 22, size: 0.35, opacity: 0.2, delay: "1.3s", depth: "deep" },
-  { x: 58, y: 64, size: 0.4, opacity: 0.22, delay: "3.7s", depth: "deep" },
-  { x: 65, y: 38, size: 0.35, opacity: 0.16, delay: "0.6s", depth: "deep" },
-  { x: 73, y: 88, size: 0.45, opacity: 0.26, delay: "4.8s", depth: "deep" },
-  { x: 81, y: 16, size: 0.4, opacity: 0.21, delay: "2.5s", depth: "deep" },
-  { x: 87, y: 58, size: 0.35, opacity: 0.18, delay: "1.1s", depth: "deep" },
-  { x: 94, y: 28, size: 0.4, opacity: 0.24, delay: "5.1s", depth: "deep" },
-  { x: 8, y: 72, size: 0.35, opacity: 0.19, delay: "3.9s", depth: "deep" },
-  { x: 26, y: 48, size: 0.4, opacity: 0.22, delay: "1.7s", depth: "deep" },
-  { x: 39, y: 78, size: 0.35, opacity: 0.18, delay: "4.2s", depth: "deep" },
-  { x: 53, y: 82, size: 0.45, opacity: 0.27, delay: "2.8s", depth: "deep" },
-  { x: 69, y: 52, size: 0.35, opacity: 0.2, delay: "0.2s", depth: "deep" },
-  { x: 84, y: 74, size: 0.4, opacity: 0.24, delay: "3.4s", depth: "deep" },
-  { x: 92, y: 92, size: 0.35, opacity: 0.18, delay: "1.5s", depth: "deep" },
-
-  // Midground Layer (0.48px - 0.6px pinpricks, serene calm starlight)
-  { x: 7, y: 32, size: 0.52, opacity: 0.45, delay: "1.2s", depth: "mid" },
-  { x: 14, y: 62, size: 0.56, opacity: 0.48, delay: "3.6s", depth: "mid" },
-  { x: 21, y: 25, size: 0.48, opacity: 0.4, delay: "0.7s", depth: "mid" },
-  { x: 33, y: 85, size: 0.6, opacity: 0.52, delay: "4.1s", depth: "mid" },
-  { x: 40, y: 18, size: 0.52, opacity: 0.42, delay: "2.3s", depth: "mid" },
-  { x: 47, y: 56, size: 0.56, opacity: 0.46, delay: "5.0s", depth: "mid" },
-  { x: 55, y: 35, size: 0.48, opacity: 0.38, delay: "1.6s", depth: "mid" },
-  { x: 62, y: 78, size: 0.6, opacity: 0.5, delay: "3.1s", depth: "mid" },
-  { x: 70, y: 22, size: 0.52, opacity: 0.44, delay: "0.5s", depth: "mid" },
-  { x: 78, y: 62, size: 0.56, opacity: 0.46, delay: "4.4s", depth: "mid" },
-  { x: 86, y: 38, size: 0.48, opacity: 0.4, delay: "2.0s", depth: "mid" },
-  { x: 93, y: 76, size: 0.6, opacity: 0.52, delay: "5.7s", depth: "mid" },
-  { x: 19, y: 48, size: 0.52, opacity: 0.42, delay: "2.9s", depth: "mid" },
-  { x: 31, y: 12, size: 0.48, opacity: 0.38, delay: "1.4s", depth: "mid" },
-  { x: 60, y: 15, size: 0.56, opacity: 0.45, delay: "4.7s", depth: "mid" },
-  { x: 76, y: 45, size: 0.52, opacity: 0.4, delay: "0.8s", depth: "mid" },
-
-  // Near Foreground Layer (0.65px - 0.75px razor-sharp optical fiber tips)
-  { x: 9, y: 88, size: 0.72, opacity: 0.75, delay: "1.9s", depth: "near" },
-  { x: 16, y: 12, size: 0.68, opacity: 0.7, delay: "4.3s", depth: "near" },
-  { x: 27, y: 72, size: 0.75, opacity: 0.8, delay: "0.3s", depth: "near" },
-  { x: 37, y: 44, size: 0.7, opacity: 0.72, delay: "3.5s", depth: "near" },
-  { x: 48, y: 14, size: 0.68, opacity: 0.68, delay: "2.6s", depth: "near" },
-  { x: 54, y: 95, size: 0.75, opacity: 0.78, delay: "5.2s", depth: "near" },
-  { x: 66, y: 28, size: 0.7, opacity: 0.74, delay: "1.0s", depth: "near" },
-  { x: 75, y: 70, size: 0.68, opacity: 0.7, delay: "3.8s", depth: "near" },
-  { x: 83, y: 92, size: 0.75, opacity: 0.82, delay: "0.1s", depth: "near" },
-  { x: 89, y: 20, size: 0.7, opacity: 0.75, delay: "4.6s", depth: "near" },
-  { x: 96, y: 60, size: 0.68, opacity: 0.68, delay: "2.4s", depth: "near" },
-  { x: 45, y: 68, size: 0.72, opacity: 0.76, delay: "1.5s", depth: "near" }
-];
-
 function GalaxyStarlightCeiling() {
   return (
     <GalaxyStarSystem
-      heightPercent={54}
-      starCount={22000}
+      heightPercent={52}
+      starCount={24000}
       interactiveParallax={true}
       nebulaIntensity={0.88}
     />
@@ -519,15 +438,11 @@ function AssistantWordmark({
   hasCollapsed,
   effectIndex = 0,
   onStartEditing,
-  onTriggerEffect,
-  compact = false,
 }: {
   customName: string;
   hasCollapsed: boolean;
   effectIndex?: number;
   onStartEditing?: () => void;
-  onTriggerEffect?: (idx: number) => void;
-  compact?: boolean;
 }) {
   const currentEffect = EFFECT_META[effectIndex % EFFECT_META.length];
 
@@ -634,13 +549,8 @@ export default function App() {
 
   // Simulated Page State
   const [activePageId, setActivePageId] = useState<string>("transformer-paper");
-  const [highlightedText, setHighlightedText] = useState("");
-  const [inPageHighlight, setInPageHighlight] = useState<string | null>(null);
-  const [actionIndicator, setActionIndicator] = useState<{ x: number; y: number; label: string } | null>(null);
-  const [jitBanner, setJitBanner] = useState<{ message: string; visible: boolean }>({ message: "", visible: false });
 
   // Store simulation states
-  const [searchInputValue, setSearchInputValue] = useState("");
   const [cartCount, setCartCount] = useState(0);
 
   // Side Panel State
@@ -682,7 +592,6 @@ export default function App() {
   const [inputValue, setInputValue] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [activeFollowUps, setActiveFollowUps] = useState<string[]>([]);
-  const [showEnclaveInspector, setShowEnclaveInspector] = useState(false);
 
   // True-to-Action Real-time Turn State & Instrumentation
   const [currentTurnAction, setCurrentTurnAction] = useState<{
@@ -801,11 +710,7 @@ export default function App() {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-    if (ledgerTimerRef.current) {
-      clearInterval(ledgerTimerRef.current);
-      ledgerTimerRef.current = null;
-    }
-    setActiveTaskLedger(null);
+    stopLedger();
     stopTurnTimer();
     setIsBusy(false);
     showToast("Execution loop stopped by user.");
@@ -904,16 +809,8 @@ export default function App() {
     setIsEditingName(false);
   };
 
-  const handleTriggerEffect = (idx: number) => {
-    setEffectIndex(idx);
-    setHasCollapsed(false);
-    setTimeout(() => {
-      setHasCollapsed(true);
-    }, 3200);
-  };
-
   // Slash Commands & Advanced Modals State
-  const [activeSlashTier, setActiveSlashTier] = useState<number | "all">("all");
+  const [activeSlashTier] = useState<number | "all">("all");
   const [selectedSlashIndex, setSelectedSlashIndex] = useState(0);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [helpSearch, setHelpSearch] = useState("");
@@ -1042,7 +939,6 @@ export default function App() {
     } else {
       setTabReadState(tabEnabled ? "ready" : "off");
     }
-    setHighlightedText("");
     setActiveSelectionQuote("");
   }, [activePageId, tabEnabled]);
 
@@ -1087,10 +983,8 @@ export default function App() {
     const needle = quote.toLowerCase().trim();
 
     if (pageText.includes(needle) || (needle.length > 25 && pageText.includes(needle.slice(0, 25)))) {
-      setInPageHighlight(quote);
       setCitationStatus((prev) => ({ ...prev, [key]: "Located in page ✓" }));
       setTimeout(() => {
-        setInPageHighlight(null);
         setCitationStatus((prev) => ({ ...prev, [key]: "Scroll to passage ↗" }));
       }, 2500);
     } else {
@@ -1099,23 +993,8 @@ export default function App() {
   };
 
   // Visual simulation of JIT CDP Action
-  const triggerSimulatedCDPAction = async (actionDesc: string, x: number, y: number): Promise<boolean> => {
-    // 1. Show JIT ephemeral attach toast
-    setJitBanner({
-      message: `chrome.debugger.attach({ tabId }) -> Input.dispatchMouseEvent at (${x}, ${y}) -> chrome.debugger.detach() [0.038s]`,
-      visible: true
-    });
-
-    // 2. Pulse action indicator dot on page
-    setActionIndicator({ x, y, label: actionDesc });
-
+  const triggerSimulatedCDPAction = async (_actionDesc: string, _x: number, _y: number): Promise<boolean> => {
     await new Promise((r) => setTimeout(r, 600));
-    setActionIndicator(null);
-
-    setTimeout(() => {
-      setJitBanner((prev) => ({ ...prev, visible: false }));
-    }, 1200);
-
     return true;
   };
 
@@ -1430,7 +1309,6 @@ export default function App() {
       const ty = inputEl ? inputEl.y : 110;
 
       await triggerSimulatedCDPAction(`Focus ${fieldName}`, tx, ty);
-      setSearchInputValue(fieldVal);
 
       setChatMessages((prev) => [
         ...prev,
@@ -1740,7 +1618,6 @@ export default function App() {
     if (["/quiz", "/testme", "/flashcards"].includes(cmdToken)) {
       const lines = (currentPage.content || "").split("\n").map((l) => l.trim().replace(/^[-•*]\s*/, "")).filter((l) => l.length >= 25);
       const q1Fact = lines[0] || currentPage.title;
-      const q2Fact = lines[1] || currentPage.domain;
       setChatMessages((prev) => [
         ...prev,
         {
@@ -1973,7 +1850,6 @@ export default function App() {
           const { text: txt = "", x = 180, y = 110 } = call.args || {};
           updateTurnAction(`Typing "${txt}"...`, `CDP hardware keystrokes at (${x}, ${y})`, 3);
           await triggerSimulatedCDPAction(`Type text: "${txt}"`, x, y);
-          setSearchInputValue(txt);
           updateTurnAction("Input updated...", "Keystrokes dispatched", 4);
           setChatMessages((p) => [
             ...p,
@@ -2070,7 +1946,7 @@ export default function App() {
     // High-Grade Scenario: Cryptographic security enclave audit
     if (promptLower.includes("audit") || promptLower.includes("enclave") || promptLower.includes("sanitization")) {
       updateTurnAction("Auditing DOM TreeWalker & UUID boundaries...", "Checking PII redactions", 2);
-      setShowEnclaveInspector(true);
+      setShowAuditModal(true);
       await new Promise((r) => setTimeout(r, 260));
       updateTurnAction("Enclave cryptographic hash verified...", "DOM scrubbed", 4);
       setChatMessages((prev) => [
@@ -2124,7 +2000,6 @@ export default function App() {
 
         updateTurnAction(`Focusing [#${searchBox.id}] "${searchBox.label}"...`, `Coordinates (${searchBox.x}, ${searchBox.y})`, 3);
         await triggerSimulatedCDPAction(`Focus target: ${searchBox.label}`, searchBox.x, searchBox.y);
-        if (currentPage.id === "ecommerce-demo") setSearchInputValue("Wireless Studio Headphones");
         setChatMessages((prev) => [
           ...prev,
           { role: "agent-badge", stepText: `Step 1: Dispatched native mouse click to [#${searchBox.id}] "${searchBox.label}" [CDP Trusted]`, isSuccess: true }
@@ -2239,7 +2114,6 @@ export default function App() {
       if (searchBox) {
         updateTurnAction("Focusing input & typing text...", "Dispatched hardware key events", 3);
         await triggerSimulatedCDPAction("Focus Search Input", searchBox.x, searchBox.y);
-        setSearchInputValue("Wireless Studio Headphones");
         setChatMessages((prev) => [
           ...prev,
           { role: "agent-badge", stepText: `Step 1: Typed "Wireless Studio Headphones" into input [#${searchBox.id}] [CDP Trusted]`, isSuccess: true }
@@ -2654,11 +2528,11 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
       <main className="flex-1 flex justify-center items-center h-full w-full bg-[#07080b] relative overflow-hidden">
         {/* Vast 3D Galaxy Star System Background for Upper Half Only */}
         <GalaxyStarSystem
-          heightPercent={54}
+          heightPercent={52}
           starCount={24000}
           className="opacity-45 pointer-events-none"
           interactiveParallax={true}
-          nebulaIntensity={0.85}
+          nebulaIntensity={0.88}
         />
 
         {/* ================= PURE SIDEKICK EXTENSION ================= */}
@@ -2733,7 +2607,6 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                       setNameInputValue(customName || (hasCollapsed ? "Sⁱ" : "Super Intelligence"));
                       setIsEditingName(true);
                     }}
-                    onTriggerEffect={handleTriggerEffect}
                   />
                 )}
 

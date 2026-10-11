@@ -5,7 +5,7 @@ import path from "path";
 async function packExtension() {
   const zip = new JSZip();
 
-  const rootFiles = [
+  const extensionFiles = [
     "manifest.json",
     "background.js",
     "content.js",
@@ -16,28 +16,31 @@ async function packExtension() {
     "privacy.html",
   ];
 
-  for (const file of rootFiles) {
-    if (fs.existsSync(file)) {
-      zip.file(file, fs.readFileSync(file));
+  for (const file of extensionFiles) {
+    const fullPath = path.join("public", file);
+    if (fs.existsSync(fullPath)) {
+      zip.file(file, fs.readFileSync(fullPath));
     }
   }
 
   // agents folder
   const agentsFolder = zip.folder("agents");
-  const agentFiles = fs.readdirSync("agents");
-  for (const af of agentFiles) {
-    const fullPath = path.join("agents", af);
-    if (fs.statSync(fullPath).isFile()) {
-      agentsFolder?.file(af, fs.readFileSync(fullPath));
+  if (fs.existsSync("public/agents")) {
+    const agentFiles = fs.readdirSync("public/agents");
+    for (const af of agentFiles) {
+      const fullPath = path.join("public/agents", af);
+      if (fs.statSync(fullPath).isFile()) {
+        agentsFolder?.file(af, fs.readFileSync(fullPath));
+      }
     }
   }
 
   // icons folder
   const iconsFolder = zip.folder("icons");
-  if (fs.existsSync("icons")) {
-    const iconFiles = fs.readdirSync("icons");
+  if (fs.existsSync("public/icons")) {
+    const iconFiles = fs.readdirSync("public/icons");
     for (const icon of iconFiles) {
-      const fullPath = path.join("icons", icon);
+      const fullPath = path.join("public/icons", icon);
       if (fs.statSync(fullPath).isFile()) {
         iconsFolder?.file(icon, fs.readFileSync(fullPath));
       }
@@ -46,10 +49,10 @@ async function packExtension() {
 
   // fonts folder
   const fontsFolder = zip.folder("fonts");
-  if (fs.existsSync("fonts")) {
-    const fontFiles = fs.readdirSync("fonts");
+  if (fs.existsSync("public/fonts")) {
+    const fontFiles = fs.readdirSync("public/fonts");
     for (const font of fontFiles) {
-      const fullPath = path.join("fonts", font);
+      const fullPath = path.join("public/fonts", font);
       if (fs.statSync(fullPath).isFile()) {
         fontsFolder?.file(font, fs.readFileSync(fullPath));
       }

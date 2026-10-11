@@ -11,10 +11,9 @@ import { createRequire } from "module";
 import fs from "fs";
 const require = createRequire(import.meta.url);
 
-const { SidekickApiClient } = require("../agents/apiClient.js");
-const { SidekickWorkers } = require("../agents/workers.js");
-const { SidekickGate } = require("../agents/gate.js");
-const { SidekickRouter } = require("../agents/router.js");
+const { SidekickApiClient } = require("../public/agents/apiClient.js");
+const { SidekickWorkers } = require("../public/agents/workers.js");
+const { SidekickGate } = require("../public/agents/gate.js");
 
 class MockApiClient {
   mockResponseData: any;
@@ -206,18 +205,10 @@ async function runTests() {
   );
 
   // TEST SUITE 4: Tab Group Permission & Scope Isolation
-  console.log("\n--- TEST SUITE 4: TAB GROUP ISOLATION & MANIFEST PERMISSIONS ---");
-
-  const manifest = JSON.parse(fs.readFileSync("manifest.json", "utf-8"));
+  const manifest = JSON.parse(fs.readFileSync("public/manifest.json", "utf-8"));
   assert(
     manifest.permissions.includes("tabGroups"),
     "Manifest declares 'tabGroups' permission required for Chrome Tab Group management"
-  );
-
-  const publicManifest = JSON.parse(fs.readFileSync("public/manifest.json", "utf-8"));
-  assert(
-    publicManifest.permissions.includes("tabGroups"),
-    "Public manifest declares 'tabGroups' permission"
   );
 
   // Simulation of background.js tab group isolation check

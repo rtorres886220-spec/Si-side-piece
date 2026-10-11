@@ -33,7 +33,6 @@ import {
   validateAndEnforceGrounding,
   verifyQuoteInSource,
   FinishTaskPayload,
-  StructuredEvidenceItem,
 } from "../src/groundingEngine.ts";
 
 export interface BenchmarkCase {
@@ -446,11 +445,10 @@ export async function runComprehensiveBenchmark(): Promise<{
 
   for (let i = 0; i < BENCHMARK_SUITE.length; i++) {
     const tc = BENCHMARK_SUITE[i];
-    const t0 = performance.now();
 
     // 1. Measure Extraction / Parsing
     const tExtract0 = performance.now();
-    const evidenceItems = parseSourceDocumentIntoEvidence(tc.sourceText);
+    parseSourceDocumentIntoEvidence(tc.sourceText);
     const extractDuration = performance.now() - tExtract0;
     totalExtractionMs += extractDuration;
 

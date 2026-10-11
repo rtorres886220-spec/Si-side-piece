@@ -1,6 +1,0 @@
-{
-  "summary":  "Architectural and product evaluation of integrating Google AI Studio Scientific Skills into the Sidekick Chrome Extension browser companion. Analyzes fit vs divergence, proposes an on-demand Scientific Research Intelligence module (biomedical paper grounding, live entity resolution, and public database querying), and details UX flows, technical architecture, and implementation strategy.",
-  "updatedAt":  "2026-10-10T01:42:17.788784709Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

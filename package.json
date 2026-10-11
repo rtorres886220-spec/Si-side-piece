@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build:cosmos": "esbuild src/cosmosEngine.ts --bundle --minify --format=iife --outfile=cosmos.bundle.js && cp cosmos.bundle.js public/cosmos.bundle.js",
+    "build:cosmos": "esbuild src/cosmosEngine.ts --bundle --minify --format=iife --outfile=public/cosmos.bundle.js",
     "pack:extension": "npm run build:cosmos && tsx scripts/pack-extension.ts",
     "build": "npm run build:cosmos && vite build",
     "start": "node server.ts",
@@ -15,7 +15,12 @@
     "test:grounding": "tsx scripts/test-grounding.ts",
     "test:benchmark": "tsx scripts/comprehensive-benchmark.ts",
     "test:tokens": "tsx scripts/test-token-optimization.ts",
-    "test": "npm run test:grounding && npm run test:benchmark && npm run test:tokens"
+    "test:audit": "tsx scripts/hard-validation-audit.ts",
+    "test:red-team": "tsx scripts/production-red-team.ts",
+    "test:multi-agent": "tsx scripts/benchmark-multi-agent.ts",
+    "test:tabgroups": "tsx scripts/test-tabgroup-actionworker.ts",
+    "test:scope": "tsx scripts/test-scope-resolution.ts",
+    "test": "npm run test:grounding && npm run test:benchmark && npm run test:tokens && npm run test:scope && npm run test:tabgroups && npm run test:multi-agent"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -23,7 +23,6 @@ export class RateLimitScheduler {
   private maxHistorySize = 100;
 
   // Configuration
-  private readonly rpmThreshold = 14; // Alert threshold near 15 RPM
   private readonly baseBackoffMs = 800;
   private readonly maxBackoffMs = 5000;
 
@@ -40,7 +39,7 @@ export class RateLimitScheduler {
   /**
    * Determine recommended backoff delay if throttled
    */
-  computeBackoffDelay(attempt: number, errorStatus?: number): number {
+  computeBackoffDelay(attempt: number, _errorStatus?: number): number {
     // If rate-limited (429) or overloaded (503), apply exponential backoff + jitter
     const exponent = Math.min(attempt, 4);
     const delay = this.baseBackoffMs * Math.pow(2, exponent - 1);

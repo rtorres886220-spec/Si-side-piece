@@ -49,7 +49,7 @@ for (let i = 0; i < totalCount; i++) {
     ],
   };
 
-  const flawedResult = validateAndEnforceGrounding(flawedPayload, testCase.sourceDocument);
+  validateAndEnforceGrounding(flawedPayload, testCase.sourceDocument);
 
   // 2. Evaluate grounded policy behavior
   const groundedPayload: FinishTaskPayload = {

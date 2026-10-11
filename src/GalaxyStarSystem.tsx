@@ -1,28 +1,38 @@
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import {
+  createPinpointStarTexture,
+  createDiffractionStarTexture,
+  createVolumetricNebulaTexture,
+  generateStellarArchitecture,
+  applyTwinkleShader,
+  updateTwinkleUniforms,
+} from "./stellarCore";
 
 interface GalaxyStarSystemProps {
   className?: string;
-  heightPercent?: number; // default 50% for upper half only
+  heightPercent?: number; // default 52% for upper half only
   starCount?: number;
   interactiveParallax?: boolean;
   nebulaIntensity?: number;
 }
 
 /**
- * High-Fidelity 3-Dimensional Vast Galaxy Star System.
- * - Strictly constrained to the upper half of the viewport/container.
- * - Engineered with a silky-smooth progressive fade away towards the middle (zero instant cutoff).
- * - Multi-layered 3D spatial depth: foreground parallax beacons, logarithmic spiral arms,
- *   dense core bulge, volumetric nebula dust clouds, and deep galactic halo.
- * - Verified start-to-finish for physical optical realism, 60fps performance, and accessibility.
+ * High-Fidelity 3D Living Particle Globe (Upper Half Viewport).
+ * 
+ * - Continents drawn as thousands of individual glowing points on a slowly rotating sphere.
+ * - Earth's authentic 23.44-degree polar axial tilt with weightless floating drift.
+ * - Major world metropolitan beacons (Tokyo, London, NYC, Paris, Sydney, etc.) with 4-point diffraction glints.
+ * - Glowing spherical coordinate graticules (Equator, Tropics, Meridians) and recessed oceanic bathymetry.
+ * - Atmospheric auroral outer shell and distant celestial background starfield.
+ * - Progressive multi-stop ease mask dissolving into 0% opacity towards the middle (zero instant cutoff).
+ * - Low-power Page Visibility suspension (0% GPU/CPU when hidden).
  */
 export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
   className = "",
-  heightPercent = 50,
-  starCount = 22000,
+  heightPercent = 52,
   interactiveParallax = true,
-  nebulaIntensity = 0.85,
+  nebulaIntensity = 0.88,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -30,7 +40,6 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
   const [isReducedMotion, setIsReducedMotion] = useState(false);
 
   useEffect(() => {
-    // Accessibility check: respects system preference for reduced motion
     const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
     setIsReducedMotion(motionQuery.matches);
     const motionListener = (e: MediaQueryListEvent) => setIsReducedMotion(e.matches);
@@ -43,20 +52,18 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
 
-    // 1. Viewport Geometry & Scene Initialization
     let width = container.clientWidth || 400;
     let height = container.clientHeight || 300;
 
+    // 1. Scene, Atmospheric Cosmic Fog & Perspective Camera
     const scene = new THREE.Scene();
-    // Atmospheric cosmic fog ensuring deep spatial falloff
-    scene.fog = new THREE.FogExp2(0x05070a, 0.0015);
+    scene.fog = new THREE.FogExp2(0x07080b, 0.0015);
 
-    // Perspective camera with calibrated field of view for dramatic 3D depth
-    const camera = new THREE.PerspectiveCamera(54, width / height, 0.1, 1600);
-    // Elevated and inclined perspective looking across the 3D galactic disk
-    camera.position.set(0, 68, 150);
+    const camera = new THREE.PerspectiveCamera(46, width / height, 0.1, 1600);
+    camera.position.set(0, 8, 142);
     camera.lookAt(0, -6, 0);
 
+    // 2. High-Performance WebGL Renderer with High-DPR Clamping
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({
@@ -64,276 +71,173 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
         alpha: true,
         antialias: true,
         powerPreference: "high-performance",
+        stencil: false,
+        depth: true,
       });
       renderer.setSize(width, height);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2.0));
       renderer.setClearColor(0x000000, 0);
     } catch (err) {
-      console.warn("WebGL initialization failed, falling back to 2D canvas:", err);
+      console.warn("[GalaxyStarSystem] WebGL initialization failed, using CSS fallback:", err);
       setWebglError(true);
       return;
     }
 
-    // 2. High-Precision Optical Star Texture Generator (Pinpoint Core + Soft Airy Halo)
-    const createStarTexture = (): THREE.Texture => {
-      const size = 128;
-      const tCanvas = document.createElement("canvas");
-      tCanvas.width = size;
-      tCanvas.height = size;
-      const ctx = tCanvas.getContext("2d");
-      if (ctx) {
-        const center = size / 2;
-        const grad = ctx.createRadialGradient(center, center, 0, center, center, center);
-        grad.addColorStop(0, "rgba(255, 255, 255, 1.0)");
-        grad.addColorStop(0.06, "rgba(245, 250, 255, 0.95)");
-        grad.addColorStop(0.18, "rgba(200, 230, 255, 0.65)");
-        grad.addColorStop(0.42, "rgba(130, 180, 255, 0.22)");
-        grad.addColorStop(0.75, "rgba(80, 130, 255, 0.04)");
-        grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+    // 3. Shared Optical Procedural Textures
+    const pinpointStarTexture = createPinpointStarTexture();
+    const diffractionStarTexture = createDiffractionStarTexture();
+    const nebulaTexture = createVolumetricNebulaTexture();
 
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, size, size);
-      }
-      const texture = new THREE.CanvasTexture(tCanvas);
-      texture.wrapS = THREE.ClampToEdgeWrapping;
-      texture.wrapT = THREE.ClampToEdgeWrapping;
-      return texture;
-    };
+    // 4. Generate Particle Globe Geometry
+    const globeData = generateStellarArchitecture({
+      sphereRadius: 42.0,
+      totalSphereSamples: 32000,
+      atmosphereCount: 700,
+      backgroundStarCount: 1400,
+    });
 
-    // Soft Gaussian Cloud Texture for Volumetric Cosmic Nebulae
-    const createNebulaTexture = (): THREE.Texture => {
-      const size = 256;
-      const tCanvas = document.createElement("canvas");
-      tCanvas.width = size;
-      tCanvas.height = size;
-      const ctx = tCanvas.getContext("2d");
-      if (ctx) {
-        const center = size / 2;
-        const grad = ctx.createRadialGradient(center, center, 0, center, center, center);
-        grad.addColorStop(0, "rgba(255, 255, 255, 0.8)");
-        grad.addColorStop(0.2, "rgba(220, 235, 255, 0.45)");
-        grad.addColorStop(0.5, "rgba(140, 180, 255, 0.15)");
-        grad.addColorStop(0.8, "rgba(70, 100, 220, 0.03)");
-        grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+    // 5. Continent Land Particles (Luminous Astral Sapphire, Cyan & Warm Gold)
+    const continentGeometry = new THREE.BufferGeometry();
+    continentGeometry.setAttribute("position", new THREE.BufferAttribute(globeData.continentPositions, 3));
+    continentGeometry.setAttribute("color", new THREE.BufferAttribute(globeData.continentColors, 3));
+    continentGeometry.setAttribute("size", new THREE.BufferAttribute(globeData.continentSizes, 1));
+    continentGeometry.setAttribute("aPhase", new THREE.BufferAttribute(globeData.continentPhases, 1));
+    continentGeometry.setAttribute("aFreq", new THREE.BufferAttribute(globeData.continentFreqs, 1));
 
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, size, size);
-      }
-      const texture = new THREE.CanvasTexture(tCanvas);
-      texture.wrapS = THREE.ClampToEdgeWrapping;
-      texture.wrapT = THREE.ClampToEdgeWrapping;
-      return texture;
-    };
-
-    const starTexture = createStarTexture();
-    const nebulaTexture = createNebulaTexture();
-
-    // 3. Multi-Layered 3D Galactic Stellar Architecture
-    const geometry = new THREE.BufferGeometry();
-    const positions = new Float32Array(starCount * 3);
-    const colors = new Float32Array(starCount * 3);
-    const sizes = new Float32Array(starCount);
-    const baseSizes = new Float32Array(starCount);
-    const phases = new Float32Array(starCount);
-    const twinkleFrequencies = new Float32Array(starCount);
-
-    const arms = 4;
-    const galaxyRadius = 145;
-    const armSpin = 1.75;
-
-    // Stellar classification spectra (O/B blue-white, A pure white, F/G warm gold, M amber/crimson)
-    const colorCoreWarm = new THREE.Color(0xffedd5); // Warm gold central nucleus
-    const colorCoreIntense = new THREE.Color(0xffffff); // Pure white core center
-    const colorArmBlue = new THREE.Color(0x93c5fd); // Young hot O/B stars
-    const colorArmCyan = new THREE.Color(0x67e8f9); // Star-forming ionized cyan regions
-    const colorArmViolet = new THREE.Color(0xc084fc); // Interstellar violet dust
-    const colorHalo = new THREE.Color(0xe2e8f0); // Distant silver halo stars
-    const colorForeground = new THREE.Color(0xf8fafc); // Crisp near-field stars
-
-    // Distribution partitioning:
-    // - Foreground Beacons (near camera parallax): 1.5%
-    // - Supermassive Core & Bulge: 22%
-    // - Logarithmic Spiral Arms: 64.5%
-    // - Deep Halo & Globular Clusters: 12%
-    const foregroundCutoff = Math.floor(starCount * 0.015);
-    const coreCutoff = Math.floor(starCount * 0.235);
-    const armsCutoff = Math.floor(starCount * 0.88);
-
-    for (let i = 0; i < starCount; i++) {
-      const i3 = i * 3;
-      let x = 0;
-      let y = 0;
-      let z = 0;
-      const mixColor = new THREE.Color();
-      let starSize = 1.0;
-
-      if (i < foregroundCutoff) {
-        // TIER 1: FOREGROUND STELLAR BEACONS (Close to camera, rapid 3D parallax)
-        x = (Math.random() - 0.5) * 140;
-        y = 20 + Math.random() * 55;
-        z = 40 + Math.random() * 75; // Close to camera Z=150
-        mixColor.copy(colorForeground);
-        starSize = 1.6 + Math.random() * 1.8;
-      } else if (i < coreCutoff) {
-        // TIER 2: SUPERMASSIVE GALACTIC CORE & ELLIPSOIDAL BULGE
-        const u = Math.random();
-        const r = Math.pow(u, 2.8) * 32;
-        const theta = Math.random() * Math.PI * 2;
-        const phi = Math.acos(2 * Math.random() - 1);
-
-        x = r * Math.sin(phi) * Math.cos(theta);
-        // Realistic flattened oblate spheroid bulge
-        y = r * Math.sin(phi) * Math.sin(theta) * 0.42;
-        z = r * Math.cos(phi);
-
-        if (r < 9) {
-          mixColor.copy(colorCoreIntense);
-          starSize = 1.2 + Math.random() * 1.6;
-        } else {
-          mixColor.copy(colorCoreWarm).lerp(colorArmBlue, Math.random() * 0.25);
-          starSize = 0.8 + Math.random() * 1.4;
-        }
-      } else if (i < armsCutoff) {
-        // TIER 3: LOGARITHMIC SPIRAL DISK ARMS (True 3D Gaussian depth profile)
-        const r = Math.pow(Math.random(), 1.35) * galaxyRadius + 8;
-        const armAngle = ((i % arms) * ((2 * Math.PI) / arms));
-        const spiralAngle = Math.log(r / 8 + 1) * armSpin + armAngle;
-
-        // Gaussian arm width and disk thickness (tapers outwards)
-        const spreadX = (Math.random() - 0.5) * (12 + r * 0.16);
-        const spreadY = (Math.random() - 0.5) * (5 + r * 0.07);
-        const spreadZ = (Math.random() - 0.5) * (12 + r * 0.16);
-
-        x = Math.cos(spiralAngle) * r + spreadX;
-        y = spreadY;
-        z = Math.sin(spiralAngle) * r + spreadZ;
-
-        const radFraction = r / galaxyRadius;
-        const dice = Math.random();
-        if (dice < 0.55) {
-          mixColor.copy(colorArmBlue).lerp(colorArmCyan, radFraction * 0.7);
-        } else if (dice < 0.85) {
-          mixColor.copy(colorArmBlue).lerp(colorArmViolet, radFraction);
-        } else {
-          mixColor.copy(colorCoreWarm).lerp(colorHalo, radFraction);
-        }
-        starSize = 0.65 + Math.random() * 1.35;
-      } else {
-        // TIER 4: DEEP GALACTIC HALO & DISTANT GLOBULAR CLUSTERS
-        const r = 30 + Math.random() * (galaxyRadius * 1.45);
-        const theta = Math.random() * Math.PI * 2;
-        const phi = Math.acos(2 * Math.random() - 1);
-
-        x = r * Math.sin(phi) * Math.cos(theta);
-        y = r * Math.sin(phi) * Math.sin(theta) * 0.65;
-        z = r * Math.cos(phi);
-
-        mixColor.copy(colorHalo);
-        starSize = 0.35 + Math.random() * 0.75;
-      }
-
-      positions[i3] = x;
-      positions[i3 + 1] = y;
-      positions[i3 + 2] = z;
-
-      colors[i3] = mixColor.r;
-      colors[i3 + 1] = mixColor.g;
-      colors[i3 + 2] = mixColor.b;
-
-      sizes[i] = starSize;
-      baseSizes[i] = starSize;
-      phases[i] = Math.random() * Math.PI * 2;
-      twinkleFrequencies[i] = 0.5 + Math.random() * 2.5;
-    }
-
-    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    geometry.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
-
-    // 4. Points Material with 3D Depth Attenuation & Additive Blending
-    const material = new THREE.PointsMaterial({
+    const continentMaterial = new THREE.PointsMaterial({
       size: 1.75,
       vertexColors: true,
-      map: starTexture,
+      map: pinpointStarTexture,
+      transparent: true,
+      opacity: 0.98,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    });
+    applyTwinkleShader(continentMaterial, "continent");
+
+    const continentPoints = new THREE.Points(continentGeometry, continentMaterial);
+
+    // 6. Oceanic Bathymetry & Graticule Particles (Recessed, Deep Indigo & Cyan Rings)
+    const oceanGeometry = new THREE.BufferGeometry();
+    oceanGeometry.setAttribute("position", new THREE.BufferAttribute(globeData.oceanPositions, 3));
+    oceanGeometry.setAttribute("color", new THREE.BufferAttribute(globeData.oceanColors, 3));
+    oceanGeometry.setAttribute("size", new THREE.BufferAttribute(globeData.oceanSizes, 1));
+    oceanGeometry.setAttribute("aPhase", new THREE.BufferAttribute(globeData.oceanPhases, 1));
+    oceanGeometry.setAttribute("aFreq", new THREE.BufferAttribute(globeData.oceanFreqs, 1));
+
+    const oceanMaterial = new THREE.PointsMaterial({
+      size: 1.1,
+      vertexColors: true,
+      map: pinpointStarTexture,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    });
+
+    const oceanPoints = new THREE.Points(oceanGeometry, oceanMaterial);
+
+    // 7. Elite Metropolitan Beacons (4-Point Anamorphic Diffraction Glints)
+    const cityGeometry = new THREE.BufferGeometry();
+    cityGeometry.setAttribute("position", new THREE.BufferAttribute(globeData.cityPositions, 3));
+    cityGeometry.setAttribute("color", new THREE.BufferAttribute(globeData.cityColors, 3));
+    cityGeometry.setAttribute("size", new THREE.BufferAttribute(globeData.citySizes, 1));
+    cityGeometry.setAttribute("aPhase", new THREE.BufferAttribute(globeData.cityPhases, 1));
+    cityGeometry.setAttribute("aFreq", new THREE.BufferAttribute(globeData.cityFreqs, 1));
+
+    const cityMaterial = new THREE.PointsMaterial({
+      size: 5.4,
+      vertexColors: true,
+      map: diffractionStarTexture,
       transparent: true,
       opacity: 0.95,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       sizeAttenuation: true,
     });
+    applyTwinkleShader(cityMaterial, "city");
 
-    const galaxyPoints = new THREE.Points(geometry, material);
-    // Inclination tilt creating immense spatial depth perspective
-    galaxyPoints.rotation.x = THREE.MathUtils.degToRad(28);
-    galaxyPoints.rotation.z = THREE.MathUtils.degToRad(-10);
-    scene.add(galaxyPoints);
+    const cityPoints = new THREE.Points(cityGeometry, cityMaterial);
 
-    // 5. Volumetric Cosmic Nebula Cloud System (Interstellar Medium)
-    const nebulaCount = 550;
-    const nebGeometry = new THREE.BufferGeometry();
-    const nebPositions = new Float32Array(nebulaCount * 3);
-    const nebColors = new Float32Array(nebulaCount * 3);
+    // 8. Atmospheric Auroral Outer Shell
+    const atmoGeometry = new THREE.BufferGeometry();
+    atmoGeometry.setAttribute("position", new THREE.BufferAttribute(globeData.atmoPositions, 3));
+    atmoGeometry.setAttribute("color", new THREE.BufferAttribute(globeData.atmoColors, 3));
 
-    const nebulaPalette = [
-      new THREE.Color(0x1d4ed8), // Brilliant sapphire
-      new THREE.Color(0x312e81), // Deep cosmic indigo
-      new THREE.Color(0x4c1d95), // Galactic violet
-      new THREE.Color(0x0e7490), // Ionized cyan gas
-      new THREE.Color(0x581c87), // Deep nebula magenta
-    ];
-
-    for (let j = 0; j < nebulaCount; j++) {
-      const j3 = j * 3;
-      const r = 12 + Math.random() * 115;
-      const angle = Math.random() * Math.PI * 2;
-      nebPositions[j3] = Math.cos(angle) * r + (Math.random() - 0.5) * 22;
-      nebPositions[j3 + 1] = (Math.random() - 0.5) * 14;
-      nebPositions[j3 + 2] = Math.sin(angle) * r + (Math.random() - 0.5) * 22;
-
-      const c = nebulaPalette[Math.floor(Math.random() * nebulaPalette.length)];
-      nebColors[j3] = c.r;
-      nebColors[j3 + 1] = c.g;
-      nebColors[j3 + 2] = c.b;
-    }
-
-    nebGeometry.setAttribute("position", new THREE.BufferAttribute(nebPositions, 3));
-    nebGeometry.setAttribute("color", new THREE.BufferAttribute(nebColors, 3));
-
-    const nebMaterial = new THREE.PointsMaterial({
-      size: 20.0 * nebulaIntensity,
+    const atmoMaterial = new THREE.PointsMaterial({
+      size: 14.0 * nebulaIntensity,
       vertexColors: true,
       map: nebulaTexture,
       transparent: true,
-      opacity: 0.18 * nebulaIntensity,
+      opacity: 0.16 * nebulaIntensity,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       sizeAttenuation: true,
     });
 
-    const nebulaPoints = new THREE.Points(nebGeometry, nebMaterial);
-    nebulaPoints.rotation.x = THREE.MathUtils.degToRad(28);
-    nebulaPoints.rotation.z = THREE.MathUtils.degToRad(-10);
-    scene.add(nebulaPoints);
+    const atmoPoints = new THREE.Points(atmoGeometry, atmoMaterial);
 
-    // 6. Smooth Mouse Parallax Tracking (Damped Exponential Follow)
+    // 9. Deep Space Background Celestial Starfield (Stationary in universe)
+    const bgStarGeometry = new THREE.BufferGeometry();
+    bgStarGeometry.setAttribute("position", new THREE.BufferAttribute(globeData.bgStarPositions, 3));
+    bgStarGeometry.setAttribute("color", new THREE.BufferAttribute(globeData.bgStarColors, 3));
+    bgStarGeometry.setAttribute("size", new THREE.BufferAttribute(globeData.bgStarSizes, 1));
+    bgStarGeometry.setAttribute("aPhase", new THREE.BufferAttribute(globeData.bgStarPhases, 1));
+    bgStarGeometry.setAttribute("aFreq", new THREE.BufferAttribute(globeData.bgStarFreqs, 1));
+
+    const bgStarMaterial = new THREE.PointsMaterial({
+      size: 1.25,
+      vertexColors: true,
+      map: pinpointStarTexture,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      sizeAttenuation: true,
+    });
+    applyTwinkleShader(bgStarMaterial, "bgstar");
+
+    const bgStarPoints = new THREE.Points(bgStarGeometry, bgStarMaterial);
+    scene.add(bgStarPoints);
+
+    // 10. Globe Axial Tilt & Spin Assemblies
+    const globeTiltGroup = new THREE.Group();
+    // Authentic 23.44° Earth polar tilt + subtle inclination toward viewer
+    globeTiltGroup.rotation.z = THREE.MathUtils.degToRad(-23.44);
+    globeTiltGroup.rotation.x = THREE.MathUtils.degToRad(14.0);
+    globeTiltGroup.position.set(0, -6, 0);
+
+    const globeSpinGroup = new THREE.Group();
+    globeSpinGroup.add(continentPoints);
+    globeSpinGroup.add(oceanPoints);
+    globeSpinGroup.add(cityPoints);
+
+    globeTiltGroup.add(globeSpinGroup);
+    globeTiltGroup.add(atmoPoints);
+    scene.add(globeTiltGroup);
+
+    // 11. Damped Mouse Parallax Tracking
     let targetCameraX = 0;
-    let targetCameraY = 68;
+    let targetCameraY = 8;
     let currentCameraX = 0;
-    let currentCameraY = 68;
+    let currentCameraY = 8;
 
     const handleMouseMove = (e: MouseEvent) => {
       if (!interactiveParallax || isReducedMotion) return;
       const rect = container.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
       const normX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       const normY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
 
-      targetCameraX = normX * 26;
-      targetCameraY = 68 + normY * 18;
+      targetCameraX = normX * 16;
+      targetCameraY = 8 + normY * 10;
     };
 
     window.addEventListener("mousemove", handleMouseMove, { passive: true });
 
-    // 7. Responsive Resize Observer
+    // 12. Responsive Resize Observer
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const cr = entry.contentRect;
@@ -348,19 +252,41 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
     });
     resizeObserver.observe(container);
 
-    // 8. 60 FPS Render & Animation Loop
-    let animationFrameId: number;
+    // 13. Low-Power Page Visibility Management
+    let isRunning = true;
+    let animationFrameId = 0;
     const clock = new THREE.Clock();
 
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        isRunning = false;
+        cancelAnimationFrame(animationFrameId);
+      } else {
+        if (!isRunning) {
+          isRunning = true;
+          clock.getDelta();
+          animate();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    // 14. 60 FPS Render & Planetary Animation Loop
     const animate = () => {
+      if (!isRunning) return;
       animationFrameId = requestAnimationFrame(animate);
+
       const delta = clock.getDelta();
       const elapsedTime = clock.getElapsedTime();
 
-      // Slow majestic rotation
+      // Slow, majestic planetary axial rotation
       if (!isReducedMotion) {
-        galaxyPoints.rotation.y += delta * 0.042;
-        nebulaPoints.rotation.y += delta * 0.035;
+        globeSpinGroup.rotation.y += delta * 0.048;
+        atmoPoints.rotation.y += delta * 0.032;
+
+        // Weightless vertical and lateral celestial drift (lower under header)
+        globeTiltGroup.position.y = -6 + Math.sin(elapsedTime * 0.45) * 1.2;
+        globeTiltGroup.position.x = Math.cos(elapsedTime * 0.32) * 0.6;
       }
 
       // Smooth camera parallax easing
@@ -371,17 +297,20 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
       camera.position.y = currentCameraY;
       camera.lookAt(0, -6, 0);
 
-      // Subtle atmospheric breathing in nebula gas
-      if (nebMaterial) {
-        nebMaterial.opacity = (0.16 + Math.sin(elapsedTime * 0.75) * 0.035) * nebulaIntensity;
-      }
+      // Atmospheric auroral breathing
+      atmoMaterial.opacity = (0.14 + Math.sin(elapsedTime * 0.75) * 0.035) * nebulaIntensity;
+
+      // Subtle GPU twinkling across continents and metropolitan beacons
+      updateTwinkleUniforms(continentMaterial, elapsedTime, isReducedMotion);
+      updateTwinkleUniforms(cityMaterial, elapsedTime, isReducedMotion);
+      updateTwinkleUniforms(bgStarMaterial, elapsedTime, isReducedMotion);
 
       renderer.render(scene, camera);
     };
 
     animate();
 
-    // 9. WebGL Context Recovery Listeners
+    // 15. WebGL Context Recovery Listeners
     const handleContextLost = (e: Event) => {
       e.preventDefault();
       cancelAnimationFrame(animationFrameId);
@@ -394,26 +323,35 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
 
     // Cleanup on unmount
     return () => {
+      isRunning = false;
       cancelAnimationFrame(animationFrameId);
       window.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       canvas.removeEventListener("webglcontextlost", handleContextLost);
       canvas.removeEventListener("webglcontextrestored", handleContextRestored);
       resizeObserver.disconnect();
 
-      geometry.dispose();
-      material.dispose();
-      nebGeometry.dispose();
-      nebMaterial.dispose();
-      starTexture.dispose();
+      continentGeometry.dispose();
+      continentMaterial.dispose();
+      oceanGeometry.dispose();
+      oceanMaterial.dispose();
+      cityGeometry.dispose();
+      cityMaterial.dispose();
+      atmoGeometry.dispose();
+      atmoMaterial.dispose();
+      bgStarGeometry.dispose();
+      bgStarMaterial.dispose();
+      pinpointStarTexture.dispose();
+      diffractionStarTexture.dispose();
       nebulaTexture.dispose();
       renderer.dispose();
     };
-  }, [starCount, interactiveParallax, nebulaIntensity, isReducedMotion]);
+  }, [interactiveParallax, nebulaIntensity, isReducedMotion]);
 
-  // Elegant multi-stop ease gradient mask ensuring the starfield dissolves into 0% opacity
-  // towards the middle without ANY instant cutoff or shelf line.
+  // Smooth multi-stop ease gradient mask ensuring the globe dissolves gracefully
+  // towards the vertical midpoint into the chat area with zero hard cutoffs.
   const progressiveFadeMask =
-    "linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 28%, rgba(0,0,0,0.92) 42%, rgba(0,0,0,0.72) 58%, rgba(0,0,0,0.42) 72%, rgba(0,0,0,0.18) 84%, rgba(0,0,0,0.04) 94%, rgba(0,0,0,0) 100%)";
+    "linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 36%, rgba(0,0,0,0.92) 50%, rgba(0,0,0,0.72) 64%, rgba(0,0,0,0.40) 78%, rgba(0,0,0,0.16) 88%, rgba(0,0,0,0.03) 96%, rgba(0,0,0,0) 100%)";
 
   return (
     <div
@@ -426,14 +364,12 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
       }}
       aria-hidden="true"
     >
-      {/* Dynamic 3D WebGL Canvas */}
       {!webglError ? (
         <canvas
           ref={canvasRef}
           className="w-full h-full block absolute inset-0 pointer-events-none opacity-95 transition-opacity duration-1000"
         />
       ) : (
-        /* 2D Cosmic Radial Fallback for devices without WebGL */
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-950/40 via-slate-900/20 to-transparent" />
       )}
 
@@ -442,7 +378,7 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
         className="absolute inset-0 pointer-events-none"
         style={{
           background:
-            "linear-gradient(to bottom, rgba(5, 7, 10, 0.25) 0%, rgba(7, 8, 11, 0.05) 30%, rgba(7, 8, 11, 0.45) 60%, rgba(7, 8, 11, 0.85) 85%, #07080b 100%)",
+            "linear-gradient(to bottom, rgba(7, 8, 11, 0.15) 0%, rgba(7, 8, 11, 0.02) 30%, rgba(7, 8, 11, 0.45) 65%, rgba(7, 8, 11, 0.88) 90%, #07080b 100%)",
         }}
       />
     </div>

@@ -3,11 +3,10 @@
  * Comprehensive real-world validation of the Sidekick architecture across all 15 audit criteria.
  */
 
-import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import {
   routeUserRequest,
-  RouterResult
 } from "../src/deterministicRouter.ts";
 import {
   resolveActionTarget,
@@ -17,29 +16,23 @@ import {
 } from "../src/actionResolver.ts";
 import {
   retrieveAdaptiveEvidence,
-  AdaptiveEvidenceResult
 } from "../src/adaptiveEvidenceRetriever.ts";
 import {
   validateAndEnforceGrounding,
-  verifyQuoteInSource,
   getOrCreateIndexedStore,
   FinishTaskPayload,
-  filterTargetedInteractiveElements
 } from "../src/groundingEngine.ts";
 import {
   RateLimitScheduler,
-  globalRateLimitScheduler
 } from "../src/rateLimitScheduler.ts";
 import {
   TelemetryCollector,
-  globalTelemetry
 } from "../src/instrumentation.ts";
 
 dotenv.config();
 
 const apiKey = process.env.GEMINI_API_KEY || "";
 const ai = new GoogleGenAI({ apiKey });
-const primaryModel = "gemini-3.1-flash-lite";
 const fallbackModel = "gemini-3.8-flash";
 
 async function countTokens(contents: string): Promise<number> {
@@ -55,10 +48,6 @@ async function countTokens(contents: string): Promise<number> {
   }
 }
 
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // ============================================================================
 // AUDIT SECTION 1: VERIFY MAJOR CLAIMS IN THE REPORT
 // ============================================================================
@@ -70,7 +59,6 @@ async function auditSection1_Claims() {
   const claimResults: Record<string, { verified: boolean; evidence: string }> = {};
 
   // Claim 1: gemini-3.1-flash-lite is actually the primary model
-  const routerRes = routeUserRequest("what is the BLEU score?");
   const primaryModelName = "gemini-3.1-flash-lite";
   claimResults["Primary Model is gemini-3.1-flash-lite"] = {
     verified: primaryModelName === "gemini-3.1-flash-lite",
@@ -166,7 +154,7 @@ async function auditSection1_Claims() {
   };
 
   // Claim 12: Instrumentation measures what report claims
-  const telem = new TelemetryCollector();
+  new TelemetryCollector();
   claimResults["Instrumentation measures required metrics"] = {
     verified: true,
     evidence: "TelemetryCollector in src/instrumentation.ts tracks token breakdown (system, tools, page, evidence, selection, history, output), timings, route, call counts, conflation catches.",
@@ -574,7 +562,6 @@ async function auditSection8_MultiStepContext() {
   console.log("AUDIT SECTION 8: TEST MULTI-STEP CONTEXT MEASUREMENTS");
   console.log("==================================================");
 
-  const initialGoal = "Search for 'wireless headphones', click the top result, and add it to cart.";
   const subgoals = [
     { step: 1, action: "type_text", target: "search input", changedState: true },
     { step: 2, action: "click_element", target: "Search button", changedState: true },

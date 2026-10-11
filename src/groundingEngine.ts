@@ -450,9 +450,6 @@ export function getEvidenceAwareWindow(
   }
 ): EvidenceWindowResult {
   const rawBody = (rawBodyText || "").trim();
-  const title = options?.title || "";
-  const author = options?.author || "";
-  const date = options?.date || "";
   const selectedText = (options?.selectedText || "").trim();
 
   // If document is empty, return empty
@@ -634,7 +631,6 @@ export function filterTargetedInteractiveElements(
     return elements.slice(0, 15);
   }
 
-  const candidates: any[] = [];
   const candidateIndices = new Set<number>();
 
   elements.forEach((el, idx) => {
@@ -1236,7 +1232,6 @@ export function validateAndEnforceGrounding(
       ) {
         const clauses = sentence.split(/\band\b|\bwhile\b/i);
         if (clauses.length >= 2) {
-          const c0Nums = extractNumbersWithContext(clauses[0]);
           const c1Nums = extractNumbersWithContext(clauses[1]);
           const c1NumsInSource = c1Nums.length > 0 && c1Nums.every(n => store.normSource.includes(n.rawString.toLowerCase()));
           const c1HasUngroundedNumber = c1Nums.length > 0 && !c1NumsInSource;

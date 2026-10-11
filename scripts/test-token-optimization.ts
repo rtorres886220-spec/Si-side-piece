@@ -20,7 +20,6 @@ import {
   getEvidenceAwareWindow,
   filterTargetedInteractiveElements,
   compactHistoryForModel,
-  GROUNDING_SYSTEM_POLICY,
 } from "../src/groundingEngine.ts";
 
 dotenv.config();
@@ -271,7 +270,7 @@ async function runBenchmark() {
     const beforeTotal = unoptimizedSysTokens + unoptimizedToolsTokens + rawPageTokens + rawElementsTokens + promptTokens;
 
     // AFTER: Conversational bypass -> 0 tools, 0 DOM, 0 elements, minimal instruction
-    const intent = classifyUserRequestIntent(prompt);
+    classifyUserRequestIntent(prompt);
     const optSys = "You are Sidekick, an elite browser companion. Respond naturally, politely, concisely, and helpfully. Do not invent page facts or cite unseen documents.";
     const optSysTokens = await countTokens(optSys);
     const afterTotal = optSysTokens + promptTokens;

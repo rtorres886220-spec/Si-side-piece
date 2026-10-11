@@ -12,9 +12,9 @@
 
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
-const { SidekickGate } = require("../agents/gate.js");
-const { SidekickRetriever } = require("../agents/retriever.js");
-const { SidekickRouter } = require("../agents/router.js");
+const { SidekickGate } = require("../public/agents/gate.js");
+const { SidekickRetriever } = require("../public/agents/retriever.js");
+const { SidekickRouter } = require("../public/agents/router.js");
 
 interface GoldenTestCase {
   id: string;
@@ -218,7 +218,7 @@ Format: Online live lectures with mentor office hours.
 Pre-requisites: Basic Python knowledge.`,
     userPrompt: "Is this bootcamp worth it? Summarize the pros and cons in 3 bullet points.",
     expectedIntent: "transform",
-    testInvariants: (testContext) => {
+    testInvariants: (_testContext) => {
       // In the old system, this got routed to evidence worker and refused with "cannot verify"
       // In the new system, TransformWorker outputs open synthesis
       const sampleTransform = {

@@ -3,19 +3,17 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Type, FunctionDeclaration, GenerateContentConfig, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
+import type { FunctionDeclaration, GenerateContentConfig } from '@google/genai';
 import { setGlobalDispatcher, Agent } from 'undici';
 import {
   GROUNDING_SYSTEM_POLICY,
   validateAndEnforceGrounding,
-  classifyUserRequestIntent,
   filterTargetedInteractiveElements
 } from './src/groundingEngine.ts';
-import { routeUserRequest, resolveEpistemicScope } from './src/deterministicRouter.ts';
+import { routeUserRequest } from './src/deterministicRouter.ts';
 import { resolveActionTarget, validateModelActionSelection } from './src/actionResolver.ts';
 import { retrieveAdaptiveEvidence } from './src/adaptiveEvidenceRetriever.ts';
-import { globalRateLimitScheduler } from './src/rateLimitScheduler.ts';
-import { globalTelemetry } from './src/instrumentation.ts';
 
 dotenv.config();
 
@@ -41,7 +39,7 @@ async function startServer() {
   app.use(express.json({ limit: '10mb' }));
 
   // Status & Health endpoint
-  app.get('/api/health', (req, res) => {
+  app.get('/api/health', (_req, res) => {
     res.json({
       status: 'ok',
       hasApiKey: !!process.env.GEMINI_API_KEY,
@@ -52,7 +50,7 @@ async function startServer() {
   });
 
   // Hosted Privacy Policy Page (Required for Chrome Web Store compliance)
-  app.get('/privacy', (req, res) => {
+  app.get('/privacy', (_req, res) => {
     res.sendFile(path.resolve(__dirname, isProd ? 'dist/privacy.html' : 'public/privacy.html'));
   });
 
@@ -746,7 +744,7 @@ ${GROUNDING_SYSTEM_POLICY}`;
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   }

@@ -4637,8 +4637,8 @@ function initRollsRoyceStarlight() {
       window.initLivingCosmos({
         canvasId: "galaxyCanvas",
         containerId: "rrStarlightCeiling",
-        starCount: 26000,
-        nebulaCount: 650
+        starCount: 24000,
+        nebulaIntensity: 0.88
       });
       return;
     } catch (e) {
