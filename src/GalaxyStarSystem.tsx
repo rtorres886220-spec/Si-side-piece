@@ -105,11 +105,11 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
     continentGeometry.setAttribute("aFreq", new THREE.BufferAttribute(globeData.continentFreqs, 1));
 
     const continentMaterial = new THREE.PointsMaterial({
-      size: 1.75,
+      size: 2.15,
       vertexColors: true,
       map: pinpointStarTexture,
       transparent: true,
-      opacity: 0.98,
+      opacity: 1.0,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       sizeAttenuation: true,

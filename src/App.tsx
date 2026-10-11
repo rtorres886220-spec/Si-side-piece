@@ -2407,17 +2407,41 @@ export default function App() {
   const handleDownloadZip = async () => {
     try {
       setIsZipping(true);
+      const t = Date.now();
+
+      // First try to download pre-packaged extension zip with all compiled bundles
+      try {
+        const prebuiltRes = await fetch(`/sidekick-extension.zip?t=${t}`);
+        if (prebuiltRes.ok) {
+          const blob = await prebuiltRes.blob();
+          if (blob.size > 10000) {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "sidekick-chrome-extension.zip";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            showToast("Extension package downloaded");
+            return;
+          }
+        }
+      } catch (e) {
+        console.debug("Prebuilt extension download fallback:", e);
+      }
+
       const zip = new JSZip();
 
-      // Read current files with cache-busting to ensure latest code
-      const t = Date.now();
-      const [manifestRes, bgRes, htmlRes, cssRes, jsRes, contentRes] = await Promise.all([
+      // Read current files with cache-busting to ensure latest code including 3D cosmos engine bundle
+      const [manifestRes, bgRes, htmlRes, cssRes, jsRes, contentRes, cosmosRes] = await Promise.all([
         fetch(`/manifest.json?t=${t}`).then((r) => r.text()).catch(() => MANIFEST_CONTENT),
         fetch(`/background.js?t=${t}`).then((r) => r.text()).catch(() => BACKGROUND_CONTENT),
         fetch(`/sidepanel.html?t=${t}`).then((r) => r.text()).catch(() => ""),
         fetch(`/sidepanel.css?t=${t}`).then((r) => r.text()).catch(() => ""),
         fetch(`/sidepanel.js?t=${t}`).then((r) => r.text()).catch(() => ""),
         fetch(`/content.js?t=${t}`).then((r) => r.text()).catch(() => ""),
+        fetch(`/cosmos.bundle.js?t=${t}`).then((r) => r.text()).catch(() => ""),
       ]);
 
       zip.file("manifest.json", manifestRes);
@@ -2426,6 +2450,9 @@ export default function App() {
       zip.file("sidepanel.css", cssRes);
       zip.file("sidepanel.js", jsRes);
       zip.file("content.js", contentRes);
+      if (cosmosRes) {
+        zip.file("cosmos.bundle.js", cosmosRes);
+      }
 
       // Multi-Agent Pipeline modules
       const agentsFolder = zip.folder("agents");
@@ -2526,7 +2553,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
 
       {/* Main Extension Viewport - Clean, Centered, Native Extension Side Panel Layout (No Fake Browser) */}
       <main className="flex-1 flex justify-center items-center h-full w-full bg-[#07080b] relative overflow-hidden">
-        {/* Vast 3D Galaxy Star System Background for Upper Half Only */}
+        {/* Vast 3D Living Particle Globe Background for Upper Half Only */}
         <GalaxyStarSystem
           heightPercent={52}
           starCount={24000}
@@ -2553,7 +2580,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                 }}
               />
 
-              {/* Vast 3-Dimensional Galaxy Star System on Upper Half Only */}
+              {/* Vast 3D Living Particle Globe on Upper Half Only */}
               <GalaxyStarlightCeiling />
 
               {/* Minimal Header - Frosted Glass Glassmorphism, Color-Free & Ultra-Transparent for Star System */}

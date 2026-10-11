@@ -498,12 +498,11 @@ async function init() {
  * Toggle First-Run Onboarding Card vs Suggested Prompts
  */
 function updateOnboardingVisibility() {
+  elements.promptSuggestions?.classList.remove("hidden");
   if (!state.apiKey) {
     elements.onboardingCard?.classList.remove("hidden");
-    elements.promptSuggestions?.classList.add("hidden");
   } else {
     elements.onboardingCard?.classList.add("hidden");
-    elements.promptSuggestions?.classList.remove("hidden");
   }
 }
 
@@ -4632,20 +4631,53 @@ function initWordmarkAndRenaming() {
 }
 
 function initRollsRoyceStarlight() {
-  if (typeof window.initLivingCosmos === "function") {
-    try {
-      window.initLivingCosmos({
-        canvasId: "galaxyCanvas",
-        containerId: "rrStarlightCeiling",
-        starCount: 24000,
-        nebulaIntensity: 0.88
-      });
-      return;
-    } catch (e) {
-      console.warn("[Sidekick] Failed to initialize 3D Living Cosmos, falling back to 2D:", e);
-    }
-  }
+  let is3DActive = false;
 
+  const tryInit3D = () => {
+    if (typeof window.initLivingCosmos === "function") {
+      try {
+        const instance = window.initLivingCosmos({
+          canvasId: "galaxyCanvas",
+          containerId: "rrStarlightCeiling",
+          nebulaIntensity: 0.88
+        });
+        if (instance) {
+          is3DActive = true;
+          console.log("[Sidekick] 3D Living Particle Globe active via cosmos.bundle.js");
+          return true;
+        }
+      } catch (e) {
+        console.warn("[Sidekick] 3D Living Cosmos initialization error:", e);
+      }
+    }
+    return false;
+  };
+
+  if (tryInit3D()) return;
+
+  // Poll briefly for bundle script execution in Chrome extension side panel
+  let retries = 0;
+  const pollTimer = setInterval(() => {
+    retries++;
+    if (tryInit3D()) {
+      clearInterval(pollTimer);
+    } else if (retries >= 15) {
+      clearInterval(pollTimer);
+      if (!is3DActive) {
+        console.log("[Sidekick] Falling back to 2D Living Particle Globe engine");
+        init2DParticleGlobe();
+      }
+    }
+  }, 60);
+}
+
+/**
+ * 2D Canvas Living Particle Globe Engine (Fallback)
+ * Guarantees that whether 3D WebGL or 2D Canvas is used, the user ALWAYS sees
+ * the Living Particle Globe (Earth's continents, 23.44° polar tilt, metropolitan beacons)
+ * and never an obsolete spiral star system.
+ */
+function init2DParticleGlobe() {
   const canvas = document.getElementById("galaxyCanvas");
   const ceiling = document.getElementById("rrStarlightCeiling");
   if (!canvas || !ceiling) return;
@@ -4660,73 +4692,121 @@ function initRollsRoyceStarlight() {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
 
-  // 3-Dimensional Logarithmic Galaxy Star Distribution
-  const STAR_COUNT = 3200;
-  const ARMS = 3;
-  const GALAXY_RADIUS = 130;
-  const ARM_SPIN = 1.6;
+  // Globe parameters
+  const GLOBE_RADIUS = 52;
+  const RAD = Math.PI / 180;
+  const AXIAL_TILT = -23.44 * RAD;
+  const VIEW_INCLINE = 14 * RAD;
 
-  const stars = [];
-  for (let i = 0; i < STAR_COUNT; i++) {
-    let x, y, z, color, size;
-    const rnd = Math.random();
+  // Metropolitan Beacons [lat, lon, name]
+  const CITIES = [
+    [35.68, 139.77],   // Tokyo
+    [40.71, -74.01],   // New York
+    [51.51, -0.13],    // London
+    [48.86, 2.35],     // Paris
+    [37.77, -122.42],  // San Francisco
+    [34.05, -118.24],  // Los Angeles
+    [1.35, 103.82],    // Singapore
+    [25.20, 55.27],    // Dubai
+    [-33.87, 151.21],  // Sydney
+    [-23.55, -46.63],  // São Paulo
+    [30.04, 31.24],    // Cairo
+    [19.08, 72.88],    // Mumbai
+    [39.90, 116.40],   // Beijing
+    [37.57, 126.98],   // Seoul
+    [52.52, 13.40],    // Berlin
+    [28.61, 77.21],    // New Delhi
+    [41.90, 12.50],    // Rome
+    [43.65, -79.38],   // Toronto
+    [-37.81, 144.96],  // Melbourne
+    [22.32, 114.17],   // Hong Kong
+  ];
 
-    if (rnd < 0.25) {
-      // Galactic Central Core Bulge
-      const r = Math.pow(Math.random(), 2.2) * 26;
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      x = r * Math.sin(phi) * Math.cos(theta);
-      y = r * Math.sin(phi) * Math.sin(theta) * 0.45;
-      z = r * Math.cos(phi);
-      color = Math.random() > 0.4 ? "rgba(255, 247, 230, " : "rgba(200, 225, 255, ";
-      size = 0.8 + Math.random() * 1.6;
-    } else if (rnd < 0.88) {
-      // Logarithmic Spiral Arms
-      const r = Math.pow(Math.random(), 1.3) * GALAXY_RADIUS + 8;
-      const armAngle = (i % ARMS) * ((2 * Math.PI) / ARMS);
-      const spiralAngle = Math.log(r / 8 + 1) * ARM_SPIN + armAngle;
+  // Continental Land Bounding Regions for fast point classification
+  const CONTINENTS = [
+    { minLat: 15, maxLat: 72, minLon: -168, maxLon: -55 },  // North America
+    { minLat: -55, maxLat: 12, minLon: -82, maxLon: -34 },  // South America
+    { minLat: 36, maxLat: 71, minLon: -10, maxLon: 45 },    // Europe
+    { minLat: 10, maxLat: 75, minLon: 45, maxLon: 175 },    // Asia
+    { minLat: -35, maxLat: 37, minLon: -18, maxLon: 52 },   // Africa
+    { minLat: -44, maxLat: -10, minLon: 112, maxLon: 154 }, // Australia
+    { minLat: -85, maxLat: -65, minLon: -180, maxLon: 180 },// Antarctica
+    { minLat: 60, maxLat: 83, minLon: -55, maxLon: -20 },   // Greenland
+  ];
 
-      const spreadX = (Math.random() - 0.5) * (12 + r * 0.16);
-      const spreadY = (Math.random() - 0.5) * (6 + r * 0.08);
-      const spreadZ = (Math.random() - 0.5) * (12 + r * 0.16);
-
-      x = Math.cos(spiralAngle) * r + spreadX;
-      y = spreadY;
-      z = Math.sin(spiralAngle) * r + spreadZ;
-
-      if (Math.random() > 0.6) {
-        color = "rgba(165, 201, 255, "; // Hot stellar blue
-      } else if (Math.random() > 0.3) {
-        color = "rgba(196, 181, 253, "; // Soft cosmic violet
-      } else {
-        color = "rgba(226, 232, 240, "; // Neutral silver
+  function isLand(lat, lon) {
+    for (let c of CONTINENTS) {
+      if (lat >= c.minLat && lat <= c.maxLat && lon >= c.minLon && lon <= c.maxLon) {
+        return true;
       }
-      size = 0.5 + Math.random() * 1.3;
-    } else {
-      // Outer Halo & Field Stars
-      const r = 20 + Math.random() * GALAXY_RADIUS * 1.3;
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      x = r * Math.sin(phi) * Math.cos(theta);
-      y = r * Math.sin(phi) * Math.sin(theta) * 0.6;
-      z = r * Math.cos(phi);
-      color = "rgba(241, 245, 249, ";
-      size = 0.4 + Math.random() * 0.8;
     }
+    return false;
+  }
 
-    stars.push({
-      x, y, z,
-      baseColor: color,
-      baseAlpha: 0.3 + Math.random() * 0.65,
-      size,
+  // Generate Fibonacci Sphere Particles
+  const TOTAL_POINTS = 3600;
+  const particles = [];
+  const goldenRatio = (1 + Math.sqrt(5)) / 2;
+
+  for (let i = 0; i < TOTAL_POINTS; i++) {
+    const y = 1 - (i / (TOTAL_POINTS - 1)) * 2; // -1 to 1
+    const radiusAtY = Math.sqrt(Math.max(0, 1 - y * y));
+    const theta = (2 * Math.PI * i) / goldenRatio;
+
+    const lat = Math.asin(y) * (180 / Math.PI);
+    const lon = ((theta % (2 * Math.PI)) * (180 / Math.PI)) - 180;
+
+    const land = isLand(lat, lon);
+    const r = GLOBE_RADIUS * (land ? 1.025 : 0.985);
+
+    const x = Math.cos(theta) * radiusAtY * r;
+    const py = y * r;
+    const z = Math.sin(theta) * radiusAtY * r;
+
+    particles.push({
+      x, y: py, z,
+      lat, lon,
+      isLand: land,
+      color: land
+        ? (Math.random() > 0.4 ? "rgba(56, 189, 248, " : "rgba(253, 224, 71, ") // Astral Sapphire or Solar Gold
+        : "rgba(30, 58, 138, ", // Recessed Deep Indigo Ocean
+      size: land ? (1.1 + Math.random() * 0.9) : 0.65,
       phase: Math.random() * Math.PI * 2,
-      speed: 0.8 + Math.random() * 2.0,
+      freq: 1.2 + Math.random() * 2.2,
+      baseAlpha: land ? (0.65 + Math.random() * 0.35) : 0.28
     });
   }
 
-  // 3D Perspective Projection Matrix & Rotation
-  let angle = 0;
+  // City Beacon Points
+  const cityParticles = CITIES.map(([lat, lon]) => {
+    const phi = (90 - lat) * RAD;
+    const theta = (lon + 180) * RAD;
+    const r = GLOBE_RADIUS * 1.035;
+    return {
+      x: -r * Math.sin(phi) * Math.cos(theta),
+      y: r * Math.cos(phi),
+      z: r * Math.sin(phi) * Math.sin(theta),
+      phase: Math.random() * Math.PI * 2,
+      freq: 2.5 + Math.random() * 2.0
+    };
+  });
+
+  // Distant Background Starfield
+  const bgStars = [];
+  for (let i = 0; i < 450; i++) {
+    bgStars.push({
+      x: (Math.random() - 0.5) * 500,
+      y: (Math.random() - 0.5) * 320,
+      z: -120 + Math.random() * 80,
+      size: 0.45 + Math.random() * 0.85,
+      alpha: 0.2 + Math.random() * 0.65,
+      phase: Math.random() * Math.PI * 2,
+      freq: 0.8 + Math.random() * 1.8
+    });
+  }
+
+  // Animation & Mouse Parallax
+  let rotationAngle = 0;
   let mouseX = 0;
   let mouseY = 0;
   let curMouseX = 0;
@@ -4735,7 +4815,7 @@ function initRollsRoyceStarlight() {
   window.addEventListener("mousemove", (e) => {
     if (isReducedMotion) return;
     const rect = ceiling.getBoundingClientRect();
-    if (rect.width > 0) {
+    if (rect.width > 0 && rect.height > 0) {
       mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouseY = ((e.clientY - rect.top) / rect.height) * 2 - 1;
     }
@@ -4755,54 +4835,117 @@ function initRollsRoyceStarlight() {
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
-    if (!isReducedMotion) {
-      angle += 0.0018;
-      curMouseX += (mouseX - curMouseX) * 0.05;
-      curMouseY += (mouseY - curMouseY) * 0.05;
-    }
-
-    const cosA = Math.cos(angle);
-    const sinA = Math.sin(angle);
-
-    // 28-degree inclination tilt looking across the galactic disk
-    const tilt = 0.48 + curMouseY * 0.12;
-    const cosT = Math.cos(tilt);
-    const sinT = Math.sin(tilt);
-
-    const fov = 260;
-    const centerX = width / 2 + curMouseX * 18;
-    const centerY = height * 0.46;
-
     const time = Date.now() * 0.001;
 
-    for (let i = 0; i < stars.length; i++) {
-      const s = stars[i];
+    if (!isReducedMotion) {
+      rotationAngle += 0.0032;
+      curMouseX += (mouseX - curMouseX) * 0.045;
+      curMouseY += (mouseY - curMouseY) * 0.045;
+    }
 
-      // Rotate around galactic Y-axis
-      const rx = s.x * cosA - s.z * sinA;
-      const rz = s.x * sinA + s.z * cosA;
-      const ry = s.y;
+    const cosR = Math.cos(rotationAngle);
+    const sinR = Math.sin(rotationAngle);
 
-      // Incline tilt around X-axis
-      const yTilted = ry * cosT - rz * sinT;
-      const zTilted = ry * sinT + rz * cosT + 175; // camera distance
+    // Center coordinates: positioned lower underneath header
+    const centerX = width / 2 + curMouseX * 14;
+    const centerY = height * 0.44 + Math.sin(time * 0.45) * 3.5 + curMouseY * 8;
+    const fov = 320;
 
-      if (zTilted <= 10) continue;
-
-      const scale = fov / zTilted;
-      const projX = centerX + rx * scale;
-      const projY = centerY + yTilted * scale;
-
-      // Scintillation / twinkle
-      const twinkle = 0.8 + 0.2 * Math.sin(time * s.speed + s.phase);
-      const alpha = Math.min(1.0, s.baseAlpha * twinkle * (scale * 0.7));
-
-      if (projX >= -5 && projX <= width + 5 && projY >= -5 && projY <= height + 5 && alpha > 0.04) {
-        ctx.fillStyle = `${s.baseColor}${alpha.toFixed(3)})`;
+    // 1. Draw Background Stars
+    for (let s of bgStars) {
+      const twinkle = 0.75 + 0.25 * Math.sin(time * s.freq + s.phase);
+      const a = s.alpha * twinkle;
+      const px = width / 2 + s.x + curMouseX * 4;
+      const py = height / 2 + s.y + curMouseY * 4;
+      if (px >= 0 && px <= width && py >= 0 && py <= height) {
+        ctx.fillStyle = `rgba(224, 242, 254, ${a.toFixed(3)})`;
         ctx.beginPath();
-        ctx.arc(projX, projY, Math.max(0.4, s.size * scale * 0.75), 0, Math.PI * 2);
+        ctx.arc(px, py, s.size, 0, Math.PI * 2);
         ctx.fill();
       }
+    }
+
+    // 2. Draw Rotating Living Particle Globe
+    const cosTilt = Math.cos(AXIAL_TILT);
+    const sinTilt = Math.sin(AXIAL_TILT);
+    const cosInc = Math.cos(VIEW_INCLINE);
+    const sinInc = Math.sin(VIEW_INCLINE);
+
+    for (let p of particles) {
+      // Axial Spin around Y-axis
+      const rx = p.x * cosR - p.z * sinR;
+      const rz = p.x * sinR + p.z * cosR;
+      const ry = p.y;
+
+      // Axial Tilt on Z
+      const tx = rx * cosTilt - ry * sinTilt;
+      const ty = rx * sinTilt + ry * cosTilt;
+      const tz = rz;
+
+      // Viewer Inclination on X
+      const finalY = ty * cosInc - tz * sinInc;
+      const finalZ = ty * sinInc + tz * cosInc;
+      const finalX = tx;
+
+      // Skip backfacing points (behind globe hemisphere)
+      if (finalZ < -10) continue;
+
+      const depth = finalZ + 180;
+      const scale = fov / depth;
+      const px = centerX + finalX * scale;
+      const py = centerY + finalY * scale;
+
+      const twinkle = 0.82 + 0.18 * Math.sin(time * p.freq + p.phase);
+      const depthFade = Math.max(0.15, (finalZ + 20) / (GLOBE_RADIUS + 20));
+      const alpha = Math.min(1.0, p.baseAlpha * twinkle * depthFade);
+
+      if (px >= -5 && px <= width + 5 && py >= -5 && py <= height + 5 && alpha > 0.05) {
+        ctx.fillStyle = `${p.color}${alpha.toFixed(3)})`;
+        ctx.beginPath();
+        ctx.arc(px, py, Math.max(0.4, p.size * scale * 0.8), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // 3. Draw Metropolitan Beacon Sparkles (4-Point Diffraction Glints)
+    for (let c of cityParticles) {
+      const rx = c.x * cosR - c.z * sinR;
+      const rz = c.x * sinR + c.z * cosR;
+      const ry = c.y;
+
+      const tx = rx * cosTilt - ry * sinTilt;
+      const ty = rx * sinTilt + ry * cosTilt;
+      const tz = rz;
+
+      const finalY = ty * cosInc - tz * sinInc;
+      const finalZ = ty * sinInc + tz * cosInc;
+      const finalX = tx;
+
+      if (finalZ < 2) continue; // Only front hemisphere
+
+      const depth = finalZ + 180;
+      const scale = fov / depth;
+      const px = centerX + finalX * scale;
+      const py = centerY + finalY * scale;
+
+      const glint = 0.75 + 0.25 * Math.sin(time * c.freq + c.phase);
+      const spikeLen = Math.max(2.5, 5.0 * glint * scale);
+
+      ctx.save();
+      ctx.strokeStyle = `rgba(255, 255, 255, ${(0.85 * glint).toFixed(3)})`;
+      ctx.lineWidth = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(px - spikeLen, py);
+      ctx.lineTo(px + spikeLen, py);
+      ctx.moveTo(px, py - spikeLen);
+      ctx.lineTo(px, py + spikeLen);
+      ctx.stroke();
+
+      ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+      ctx.beginPath();
+      ctx.arc(px, py, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
     }
 
     ctx.restore();

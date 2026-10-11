@@ -711,32 +711,42 @@ export function applyTwinkleShader(material: THREE.PointsMaterial, cacheKeySuffi
   material.customProgramCacheKey = () => `twinkle_points_${cacheKeySuffix}`;
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = { value: 0 };
-    shader.vertexShader = `
-      uniform float uTime;
-      attribute float aPhase;
-      attribute float aFreq;
-      varying float vFlicker;
-      ${shader.vertexShader}
-    `.replace(
-      "#include <project_vertex>",
-      `
-      #include <project_vertex>
-      // Subtle multi-harmonic twinkle flicker per individual star/continent point
-      float flicker = 0.82 + 0.18 * sin(uTime * aFreq + aPhase) + 0.07 * sin(uTime * (aFreq * 2.19) + aPhase * 1.63);
-      vFlicker = clamp(flicker, 0.40, 1.15);
-      gl_PointSize *= clamp(0.88 + (vFlicker - 0.82) * 0.35, 0.70, 1.30);
-      `
-    );
-    shader.fragmentShader = `
-      varying float vFlicker;
-      ${shader.fragmentShader}
-    `.replace(
-      "#include <color_fragment>",
-      `
-      #include <color_fragment>
-      diffuseColor.a *= vFlicker;
-      `
-    );
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+        uniform float uTime;
+        attribute float aPhase;
+        attribute float aFreq;
+        varying float vFlicker;
+        `
+      )
+      .replace(
+        "#include <project_vertex>",
+        `
+        #include <project_vertex>
+        // Subtle multi-harmonic twinkle flicker per individual star/continent point
+        float flicker = 0.82 + 0.18 * sin(uTime * aFreq + aPhase) + 0.07 * sin(uTime * (aFreq * 2.19) + aPhase * 1.63);
+        vFlicker = clamp(flicker, 0.40, 1.15);
+        gl_PointSize *= clamp(0.88 + (vFlicker - 0.82) * 0.35, 0.70, 1.30);
+        `
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+        varying float vFlicker;
+        `
+      )
+      .replace(
+        "#include <color_fragment>",
+        `
+        #include <color_fragment>
+        diffuseColor.a *= vFlicker;
+        `
+      );
+
     material.userData.shader = shader;
   };
 }

@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Si</title>
+  <title>Gemini Sidekick - Chrome Extension</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@100;200;300;400&family=Geist+Mono:wght@200;300;400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
@@ -11,13 +14,10 @@
     <!-- Deep Vibrant Midnight Blue Ambient Glow -->
     <div class="ambient-glow" aria-hidden="true"></div>
 
-    <!-- Vast 3D Galaxy Star System on Upper Half Only -->
+    <!-- Vast 3D Living Particle Globe on Upper Half Only -->
     <div id="rrStarlightCeiling" class="rr-starlight-ceiling" aria-hidden="true">
       <canvas id="galaxyCanvas" class="galaxy-canvas"></canvas>
       <div class="rr-starlight-scrim"></div>
-      <div class="rr-shooting-star-track">
-        <div class="rr-shooting-star"></div>
-      </div>
     </div>
 
     <!-- Minimal Header Pushed Right Up to Top Edge -->
@@ -25,7 +25,7 @@
       <div id="wordmarkWrapper" class="wordmark-wrapper" title="Click to rename">
         <span id="wordmarkS">S</span><span id="wordmarkUper" class="wordmark-foldable">uper </span><span id="wordmarkI">I</span><span id="wordmarkNtelligence" class="wordmark-foldable">ntelligence</span>
       </div>
-      <input type="text" id="renameInput" class="rename-input hidden" placeholder="Name..." />
+      <input type="text" id="renameInput" class="rename-input hidden" placeholder="Name (e.g. Sⁱ, Bernard)..." />
 
       <div class="header-actions">
         <button id="newChatBtn" class="icon-btn" title="New chat" aria-label="New chat">
@@ -69,8 +69,8 @@
       </div>
     </header>
 
-    <!-- Dedicated Chrome Tab Group Workgroup Bar -->
-    <div id="tabGroupBar" class="tab-group-bar">
+    <!-- Dedicated Chrome Tab Group Workgroup Bar (Hidden until bound) -->
+    <div id="tabGroupBar" class="tab-group-bar hidden">
       <div class="tab-group-info">
         <button id="groupBadgeBtn" class="tab-group-chip" title="Manage Sidekick Tab Group" type="button">
           <span id="groupColorDot" class="group-dot purple"></span>
@@ -201,6 +201,16 @@
     <main id="threadContainer" class="thread-container">
       <!-- Empty State (Left-aligned, bottom of thread) -->
       <div id="emptyState" class="empty-state">
+        <div id="promptSuggestions" class="prompt-suggestions">
+          <h1 class="empty-headline">
+            What should we<br>
+            <span class="headline-mute">do with this page?</span>
+          </h1>
+          <p class="empty-subline">
+            Try <button type="button" class="empty-action-btn" data-prompt="Run Agent Behavior Audit">Agent Behavior Audit</button>, <button type="button" class="empty-action-btn" data-prompt="/sludge-audit">Consumer Defense</button>, or <button type="button" class="empty-action-btn" data-prompt="Audit cryptographic security enclave">audit security enclave</button>.
+          </p>
+        </div>
+
         <!-- First-Run Onboarding Card (Shown when API key is missing) -->
         <div id="onboardingCard" class="onboarding-card hidden">
           <div class="onboarding-badge">First-Time Setup</div>
@@ -214,16 +224,6 @@
             <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" class="onboarding-link">Get a free key in Google AI Studio ↗</a>
             <span id="onboardingStatus" class="onboarding-status"></span>
           </div>
-        </div>
-
-        <div id="promptSuggestions" class="prompt-suggestions">
-          <h1 class="empty-headline">
-            What should we<br>
-            <span class="headline-mute">do with this page?</span>
-          </h1>
-          <p class="empty-subline">
-            Try <button type="button" class="empty-action-btn" data-prompt="Run Agent Behavior Audit">Agent Behavior Audit</button>, <button type="button" class="empty-action-btn" data-prompt="/sludge-audit">Consumer Defense</button>, or <button type="button" class="empty-action-btn" data-prompt="Audit cryptographic security enclave">audit security enclave</button>.
-          </p>
         </div>
       </div>
 
