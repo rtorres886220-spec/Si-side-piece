@@ -147,8 +147,8 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
-// High-Risk Action Keywords (Word-bounded matching to prevent false positives)
-const HIGH_RISK_REGEX = /\b(cancel|delete|destroy|drop|remove|unsubscribe|pay|payment|submit|confirm|proceed|continue|finish|apply|buy|checkout|purchase|order|place\s*order|transfer|wire|withdraw|publish|sign\s*out|log\s*out|logout|reset|deactivate|terminate|close\s*account|send|post|tweet|authorize|allow\s*access|approve|grant\s*access|merge|subscribe|accept|agree|enviar|payer|acheter|supprimer)\b/i;
+// High-Risk Action Keywords (Word-bounded matching to prevent false positives like dropdown or border)
+const HIGH_RISK_REGEX = /\b(cancel|delete|destroy|drop\s+(?:table|database|account)|remove|unsubscribe|pay|payment|submit|confirm|proceed|continue|finish|apply|buy|checkout|purchase|order|place\s*order|transfer|wire|withdraw|publish|sign\s*out|log\s*out|logout|reset|deactivate|terminate|close\s*account|send|post|tweet|authorize|allow\s*access|approve|grant\s*access|merge|subscribe|accept|agree|enviar|payer|acheter|supprimer)\b/i;
 
 const HIGH_RISK_KEYWORDS = [
   "cancel", "delete", "destroy", "drop", "remove", "unsubscribe", "pay", "payment",
@@ -178,6 +178,7 @@ const state = {
     interactiveElements: []
   },
   conversation: [],
+  currentSessionId: null,
   isBusy: false,
   abortController: null,
   pendingSafetyApproval: null,
@@ -621,6 +622,7 @@ function bindEvents() {
   // New chat
   elements.newChatBtn?.addEventListener("click", () => {
     if (state.isBusy) stopRequest();
+    state.currentSessionId = null;
     state.conversation = [];
     elements.messagesList.innerHTML = "";
     elements.emptyState.style.display = "flex";
@@ -1173,19 +1175,10 @@ async function extractContext(explicitTabId = null) {
         return state.pageContext;
       }
 
-      // Check Domain Deny-List with strict hostname matching
-      if (!checkDomainAllowed(state.activeTabUrl)) {
-        state.pageContext = {
-          title: activeTab.title || "Protected Domain",
-          url: state.activeTabUrl || "",
-          selectedText: "",
-          bodyText: "",
-          charCount: 0,
-          interactiveElements: []
-        };
-        setTabReadState("off");
-        renderNotice("Security Lock: Automation disabled on protected domain.");
-        return state.pageContext;
+      // Allow reading sanitized text on all domains, but flag if automation is restricted
+      const isAutomationProtected = !checkDomainAllowed(state.activeTabUrl);
+      if (isAutomationProtected) {
+        renderNotice("Security Policy: Page reading active (automation locked on protected domain).");
       }
 
       // Message content.js and await the response with a safety timeout
@@ -1196,7 +1189,7 @@ async function extractContext(explicitTabId = null) {
             finished = true;
             resolve(null);
           }
-        }, 1800);
+        }, 4000);
 
         chrome.tabs.sendMessage(activeTab.id, { action: "extractContext" }, { frameId: 0 }, (res) => {
           const err = chrome.runtime.lastError;
@@ -2543,6 +2536,7 @@ async function handleSlashCommand(fullCommand) {
 
   // Tier 1: /clear (aliases: /reset, /new)
   if (commandId === "clear") {
+    state.currentSessionId = null;
     state.conversation = [];
     if (elements.messagesList) elements.messagesList.innerHTML = "";
     if (elements.emptyState) elements.emptyState.style.display = "flex";
@@ -3026,7 +3020,7 @@ function renderMarkdownToHtml(markdownText) {
   // 1. Code blocks
   const codeBlocks = [];
   text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    const id = `__CODE_BLOCK_${codeBlocks.length}__`;
+    const id = `@@SIDEKICKCODEBLOCK${codeBlocks.length}@@`;
     const escaped = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     codeBlocks.push(`<pre class="code-block-box"><code class="language-${lang || 'plaintext'}">${escaped}</code></pre>`);
     return id;
@@ -3068,7 +3062,7 @@ function renderMarkdownToHtml(markdownText) {
 
   // 10. Restore code blocks
   codeBlocks.forEach((block, idx) => {
-    text = text.replace(`__CODE_BLOCK_${idx}__`, block);
+    text = text.replace(`@@SIDEKICKCODEBLOCK${idx}@@`, block);
   });
 
   return text;
@@ -3657,12 +3651,6 @@ function checkHighRiskAction(toolName, args = {}, targetLabel = "") {
     return true;
   }
 
-  for (const keyword of HIGH_RISK_KEYWORDS) {
-    if (textToCheck.includes(keyword)) {
-      return true;
-    }
-  }
-
   if (toolName === "upload_file" || toolName === "navigate_to") {
     return true;
   }
@@ -3729,6 +3717,9 @@ function resolveElementCoordinates(args, elements) {
  */
 async function executeJITAction(toolName, args) {
   if (!state.activeTabId) throw new Error("No active tab connected");
+  if (!checkDomainAllowed(state.activeTabUrl)) {
+    throw new Error(`Security Exception: Automation is strictly prohibited on sensitive platform (${state.activeTabUrl.split("/")[2] || "protected domain"}).`);
+  }
   state.hasExecutedPhysicalAction = true;
 
   // Smart Coordinate & Element Resolution if coordinates are missing or invalid
@@ -3990,13 +3981,33 @@ function renderUserMessage(text) {
  * Render Assistant Structured Response (16px, blur-to-sharp animation, citations)
  */
 async function renderAssistantResponse(data) {
+  if (typeof data === "string") {
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed && typeof parsed === "object" && (parsed.paragraphs || parsed.text)) {
+        data = parsed;
+      }
+    } catch {}
+  }
+
+  // If still a plain string, render as markdown assistant bubble
+  if (typeof data === "string") {
+    renderAssistantPlainMessage(data);
+    return;
+  }
+
   const entry = document.createElement("div");
   entry.className = "message-entry assistant";
 
   const container = document.createElement("div");
   container.className = "assistant-text";
 
-  const paragraphs = data.paragraphs || [];
+  let paragraphs = data?.paragraphs;
+  if (!paragraphs && data?.text) {
+    paragraphs = [{ text: data.text }];
+  } else if (!paragraphs) {
+    paragraphs = [];
+  }
 
   for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
     const item = paragraphs[pIdx];
@@ -4480,14 +4491,26 @@ async function saveSession() {
   const sessions = (await storage.get({ [STORAGE_KEY_SESSIONS]: [] }))[STORAGE_KEY_SESSIONS] || [];
   const firstUser = state.conversation.find(c => c.role === "user")?.text || "Conversation";
 
-  const newSession = {
-    id: Date.now(),
+  if (!state.currentSessionId) {
+    state.currentSessionId = Date.now();
+  }
+
+  const sessionData = {
+    id: state.currentSessionId,
     title: firstUser.slice(0, 45),
     date: new Date().toLocaleDateString(),
     conversation: state.conversation
   };
 
-  const updated = [newSession, ...sessions.slice(0, 15)];
+  const existingIdx = sessions.findIndex(s => s.id === state.currentSessionId);
+  let updated;
+  if (existingIdx >= 0) {
+    updated = [...sessions];
+    updated[existingIdx] = sessionData;
+  } else {
+    updated = [sessionData, ...sessions.slice(0, 14)];
+  }
+
   await storage.set({ [STORAGE_KEY_SESSIONS]: updated });
 }
 
@@ -4506,6 +4529,7 @@ async function loadHistoryList() {
     clearBtn.dataset.bound = "true";
     clearBtn.addEventListener("click", async () => {
       await storage.set({ [STORAGE_KEY_SESSIONS]: [] });
+      state.currentSessionId = null;
       state.conversation = [];
       if (elements.messagesList) elements.messagesList.innerHTML = "";
       if (elements.emptyState) elements.emptyState.style.display = "";
@@ -4521,6 +4545,7 @@ async function loadHistoryList() {
     btn.className = "history-item";
     btn.textContent = sess.title;
     btn.addEventListener("click", () => {
+      state.currentSessionId = sess.id;
       state.conversation = sess.conversation;
       elements.messagesList.innerHTML = "";
       elements.emptyState.style.display = "none";

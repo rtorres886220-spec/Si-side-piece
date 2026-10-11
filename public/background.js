@@ -113,10 +113,13 @@ function checkDomainAllowed(urlStr) {
   return true;
 }
 
-// Sensitive payment keywords to block at background service level
+// Sensitive payment keywords to block at background service level (word-bounded to avoid false positives on .striped-row etc.)
 const PAYMENT_PATTERNS = [
-  "stripe", "paypal", "braintree", "credit-card", "cardnumber", "card_number", "card-number",
-  "ccnum", "cvv", "cvc", "exp-date", "exp-month", "exp-year", "cc-number", "payment-widget"
+  /\b(?:stripe[-_ ]*element|stripe[-_ ]*card|stripe[-_ ]*checkout|stripe[-_ ]*frame)\b/i,
+  /\b(?:paypal[-_ ]*button|paypal[-_ ]*checkout|braintree)\b/i,
+  /\b(?:credit[-_ ]*card|card[-_ ]*number|card_number|card-number|cardnumber|ccnum|cc[-_ ]*number)\b/i,
+  /\b(?:cvv|cvc|cvv2|security[-_ ]*code)\b/i,
+  /\b(?:exp[-_ ]*date|exp[-_ ]*month|exp[-_ ]*year|payment[-_ ]*widget)\b/i
 ];
 
 // Tab Group Management State & Functions
@@ -366,7 +369,7 @@ async function handleCDPAction({ tabId, action, params }) {
   // Explicit Payment Widget Lockout across selector, element description, and label
   const descToCheck = `${params?.selector || ""} ${params?.element_description || ""} ${params?.label || ""}`.toLowerCase();
   for (const pat of PAYMENT_PATTERNS) {
-    if (descToCheck.includes(pat)) {
+    if (pat.test(descToCheck)) {
       throw new Error("Security Exception: Automated interaction with payment widgets or checkout card elements is strictly blocked.");
     }
   }

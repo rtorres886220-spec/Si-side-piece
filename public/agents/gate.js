@@ -11,10 +11,10 @@
   const NUMBER_REGEX = /(?:\$\s*\d+(?:,\d{3})*(?:\.\d+)?|\b\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:%|percent|usd|dollars|days|hours|minutes|seconds|months|years|k|m|b|gb|mb|tb|ms))\b|\b\d+(?:\.\d+)?\b)/gi;
 
   const SENSITIVE_INPUT_PATTERNS = [
-    /\b(?:credit_card|debit_card|card(?:number|_num)?|cvv|cvc|expir(?:y|ation)?|exp_date|exp_month|exp_year|cc_num|creditcard|debitcard)\b/i,
-    /\b(?:stripe|braintree|square|paypal|checkout_card)\b/i,
-    /\b(?:password|passwd|pwd|passcode|secret|pin_code|pin_number)\b/i,
-    /\b(?:ssn|social_security|tax_id)\b/i,
+    /\b(?:credit[-_ ]*card|debit[-_ ]*card|card[-_ ]*number|card_num|cc_num|cc[-_ ]*number|cvv|cvc|cvv2|security[-_ ]*code|expir(?:y|ation)[-_ ]*date|exp[-_ ]*date|exp[-_ ]*month|exp[-_ ]*year)\b/i,
+    /\b(?:stripe[-_ ]*element|braintree|checkout[-_ ]*card)\b/i,
+    /\b(?:password|passwd|pwd|passcode|pin[-_ ]*code|pin[-_ ]*number|secret[-_ ]*key|client[-_ ]*secret)\b/i,
+    /\b(?:ssn|social[-_ ]*security[-_ ]*number|tax[-_ ]*id)\b/i,
   ];
 
   class SidekickGate {
@@ -159,15 +159,29 @@
         }
 
         // Sensitive Payment & Password Field Lockout
-        const elDesc = `${matched.label || ""} ${matched.selector || ""} ${matched.role || ""}`.toLowerCase();
-        for (const pattern of SENSITIVE_INPUT_PATTERNS) {
-          if (pattern.test(elDesc)) {
-            return {
-              passed: false,
-              reason: `Security Enclave Lockout: Targeted element [#${target_id}] matches protected payment/sensitive input (${matched.label}).`,
-              code: "payment_lockout",
-              isSecurityViolation: true,
-            };
+        const elLabel = (matched.label || "").toLowerCase();
+        const elSelector = (matched.selector || "").toLowerCase();
+        const elRole = (matched.role || "").toLowerCase();
+        const isTyping = action === "type";
+        const isInputRole = elRole === "input" || elRole === "textbox" || elRole === "searchbox" || Boolean(matched.isInput);
+
+        // Allow harmless navigation links like "Forgot password?", "Gift card", "Terms & expiration"
+        const isHarmlessLink = (elRole === "link" || elRole === "a") &&
+          (elLabel.includes("forgot") || elLabel.includes("help") || elLabel.includes("learn") || elLabel.includes("terms") || elLabel.includes("gift"));
+
+        if (!isHarmlessLink) {
+          const elDesc = `${elLabel} ${elSelector} ${elRole}`;
+          for (const pattern of SENSITIVE_INPUT_PATTERNS) {
+            if (pattern.test(elDesc)) {
+              if (isTyping || isInputRole || /card[-_ ]*number|cvv|cvc|security[-_ ]*code|pin/i.test(elDesc)) {
+                return {
+                  passed: false,
+                  reason: `Security Enclave Lockout: Targeted element [#${target_id}] matches protected payment/sensitive input (${matched.label}).`,
+                  code: "payment_lockout",
+                  isSecurityViolation: true,
+                };
+              }
+            }
           }
         }
 

@@ -1,9 +1,29 @@
-/* ==========================================================================
-   Si Chrome Extension Stylesheet
-   Deep Vibrant Midnight Blue Aesthetic with Rolls-Royce Starlight Ceiling & Choreographic Edge
-   ========================================================================== */
+/* 1. Local Geist Variable & Static Typography (Self-hosted offline fonts) */
+@font-face {
+  font-family: "Geist";
+  font-weight: 100 900;
+  font-style: normal;
+  src: url("fonts/Geist-VariableFont.woff2") format("woff2-variations"),
+       url("fonts/Geist-VariableFont.woff2") format("woff2");
+  font-display: swap;
+}
 
-/* 1. Local & Web Geist Typography */
+@font-face {
+  font-family: "Geist";
+  font-weight: 100;
+  font-style: normal;
+  src: url("fonts/Geist-100.woff2") format("woff2");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist";
+  font-weight: 200;
+  font-style: normal;
+  src: url("fonts/Geist-200.woff2") format("woff2");
+  font-display: swap;
+}
+
 @font-face {
   font-family: "Geist";
   font-weight: 300;
@@ -22,24 +42,42 @@
 
 @font-face {
   font-family: "Geist Mono";
+  font-weight: 100 900;
+  font-style: normal;
+  src: url("fonts/GeistMono-VariableFont.woff2") format("woff2-variations"),
+       url("fonts/GeistMono-VariableFont.woff2") format("woff2");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-weight: 200;
+  font-style: normal;
+  src: url("fonts/GeistMono-VariableFont.woff2") format("woff2");
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Geist Mono";
   font-weight: 300;
   font-style: normal;
   src: url("fonts/GeistMono-300.woff2") format("woff2");
   font-display: swap;
 }
 
-/* 2. Color Tokens: Deep vibrant midnight blue */
+/* 2. Color Tokens: Deep vibrant midnight blue with reduced text brightness */
 :root {
   --bg: #07080b;
-  --ink: #eceef4;
-  --mute: #777c8a;
-  --soft: rgba(255, 255, 255, 0.05);
+  --ink: #9aa1b2; /* Reduced brightness: refined low-luminance graphite silver */
+  --ink-dim: #82899a;
+  --mute: #585e6d; /* Reduced brightness: darker muted slate */
+  --soft: rgba(255, 255, 255, 0.04);
   --glow: #2563eb;
   --glow2: #0e2154;
   --midnight: #0a1638;
   --sapphire: #1e40af;
   --sky: #38bdf8;
-  --field: rgba(255, 255, 255, 0.04);
+  --field: rgba(255, 255, 255, 0.03);
 
   --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -57,12 +95,19 @@
   display: none !important;
 }
 
+/* Tab Group Bar and Slash Button Completely Removed */
+.tab-group-bar,
+.slash-btn {
+  display: none !important;
+}
+
 /* Reset */
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 html {
@@ -76,7 +121,7 @@ body {
   font-family: var(--font-sans);
   font-weight: 200;
   letter-spacing: 0.055em;
-  line-height: 1.6;
+  line-height: 1.85;
   background-color: var(--bg);
   color: var(--ink);
   height: 100vh;
@@ -89,7 +134,25 @@ body {
   box-sizing: border-box;
 }
 
-/* Panel Layout */
+/* Universal Text Rules: Lighter weight thinner (200), reduced brightness (--ink), expanded line spacing (1.85) */
+body, button, input, textarea, select, h1, h2, h3, h4, h5, h6, p, span, div, a, label, li, code, pre, summary {
+  font-family: var(--font-sans);
+  font-weight: 200;
+  color: var(--ink);
+  line-height: 1.85;
+  letter-spacing: 0.05em;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 100;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+strong, b, .font-semibold, .font-medium {
+  font-weight: 200;
+  color: var(--ink);
+}
 .sidekick-panel {
   position: relative;
   display: flex;
@@ -268,9 +331,10 @@ body {
 .wordmark-wrapper {
   font-family: var(--font-sans);
   font-size: 13.5px;
-  font-weight: 300;
-  letter-spacing: 0.03em;
-  color: rgba(255, 255, 255, 0.95);
+  font-weight: 200;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  line-height: 1.85;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -281,7 +345,6 @@ body {
   transition: opacity 0.15s ease;
   flex-shrink: 0;
   white-space: nowrap;
-  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.25);
 }
 
 .wordmark-wrapper:hover {
@@ -293,7 +356,7 @@ body {
   white-space: nowrap;
   max-width: 100px;
   opacity: 0.85;
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--ink);
   overflow: hidden;
   transition: all 0.7s cubic-bezier(0.16, 1, 0.3, 1);
   padding: 0 1px;
@@ -309,16 +372,14 @@ body {
 }
 
 #wordmarkS {
-  color: #ffffff;
-  font-weight: 300;
-  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.4);
+  color: var(--ink);
+  font-weight: 200;
 }
 
 #wordmarkI {
   display: inline-block;
-  color: #ffffff;
-  font-weight: 300;
-  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.4);
+  color: var(--ink);
+  font-weight: 200;
   transition: all 0.7s cubic-bezier(0.16, 1, 0.3, 1);
   transform: translateY(0);
   font-size: 13.5px;
@@ -446,8 +507,9 @@ body {
   padding: 2px 8px;
   font-size: 12px;
   font-family: var(--font-sans);
-  font-weight: 300;
+  font-weight: 200;
   color: var(--ink);
+  line-height: 1.8;
   outline: none;
   max-width: 130px;
   flex: 0 1 auto;
@@ -465,23 +527,21 @@ body {
   border: none;
   outline: none;
   box-shadow: none;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--mute);
   width: 24px;
   height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: color 0.15s ease, transform 0.15s ease, filter 0.15s ease;
-  filter: drop-shadow(0 1px 3px rgba(255, 255, 255, 0.2));
+  transition: color 0.15s ease, transform 0.15s ease;
 }
 
 .icon-btn:hover {
-  color: #ffffff;
+  color: var(--ink);
   background: transparent;
   border: none;
   transform: scale(1.1);
-  filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.6));
 }
 
 .icon-btn:active {
@@ -520,8 +580,9 @@ body {
 
 .drawer-title {
   font-size: 12.5px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--ink);
+  line-height: 1.7;
 }
 
 .drawer-close {
@@ -547,11 +608,12 @@ body {
 .field-label {
   font-size: 11.5px;
   font-family: var(--font-mono);
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  line-height: 1.8;
 }
 
 .subtle-link {
@@ -580,9 +642,10 @@ body {
   outline: none;
   font-family: var(--font-sans);
   font-size: 12.5px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--ink);
   padding: 7px 4px;
+  line-height: 1.8;
 }
 
 .flat-select {
@@ -602,7 +665,7 @@ body {
   border: none;
   font-family: var(--font-mono);
   font-size: 10.5px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
   cursor: pointer;
   padding: 4px;
@@ -611,8 +674,9 @@ body {
 .field-caption {
   font-size: 10.5px;
   font-family: var(--font-mono);
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
+  line-height: 1.8;
 }
 
 .drawer-actions {
@@ -628,11 +692,12 @@ body {
   border: none;
   font-family: var(--font-sans);
   font-size: 12px;
-  font-weight: 400;
+  font-weight: 200;
   padding: 5px 12px;
   border-radius: 7px;
   cursor: pointer;
   transition: opacity 0.15s ease;
+  line-height: 1.7;
 }
 
 .action-btn:hover {
@@ -642,8 +707,9 @@ body {
 .save-indicator {
   font-size: 11px;
   font-family: var(--font-mono);
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
+  line-height: 1.7;
 }
 
 .history-list {
@@ -659,12 +725,14 @@ body {
   border: none;
   text-align: left;
   font-size: 12px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
   padding: 6px 8px;
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  line-height: 1.8;
+}
   overflow: hidden;
   text-overflow: ellipsis;
   transition: color 0.15s, background-color 0.15s;
@@ -722,8 +790,8 @@ body {
 
 .empty-headline {
   font-size: 26px;
-  font-weight: 200;
-  line-height: 1.25;
+  font-weight: 100;
+  line-height: 1.5;
   letter-spacing: 0.035em;
   color: var(--ink);
   margin-bottom: 2px;
@@ -738,9 +806,9 @@ body {
 
 .empty-subline {
   font-size: 13px;
-  font-weight: 200;
+  font-weight: 100;
   color: var(--mute);
-  line-height: 1.65;
+  line-height: 1.85;
   letter-spacing: 0.035em;
   max-width: 100%;
   word-break: break-word;
@@ -757,6 +825,7 @@ body {
   cursor: pointer;
   position: relative;
   padding: 0;
+  line-height: 1.85;
 }
 
 .empty-action-btn::after {
@@ -788,16 +857,16 @@ body {
 .user-text {
   font-family: var(--font-mono);
   font-size: 12.5px;
-  font-weight: 300;
-  color: #eceef4;
+  font-weight: 200;
+  color: var(--ink);
   text-align: left;
   max-width: 85%;
-  line-height: 1.5;
+  line-height: 1.85;
   white-space: pre-wrap;
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 18px;
   padding: 10px 14px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
@@ -808,16 +877,16 @@ body {
 }
 
 .assistant-text {
-  font-size: 15.5px;
-  font-weight: 300;
+  font-size: 14.5px;
+  font-weight: 200;
   color: var(--ink);
-  line-height: 1.65;
+  line-height: 1.85;
   max-width: 100%;
   width: 100%;
   background: rgba(9, 11, 16, 0.65);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 18px;
   padding: 14px 16px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
@@ -826,6 +895,7 @@ body {
 .assistant-paragraph {
   margin-bottom: 12px;
   position: relative;
+  line-height: 1.85;
 }
 
 .assistant-paragraph:last-child {
@@ -839,7 +909,7 @@ body {
   justify-content: center;
   font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
   background: var(--soft);
   border: none;
@@ -856,7 +926,7 @@ body {
 
 .citation-ref:hover,
 .citation-ref.active {
-  color: #ffffff;
+  color: var(--ink);
   background: #2563eb;
 }
 
@@ -879,17 +949,18 @@ body {
 .citation-label {
   font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  line-height: 1.8;
 }
 
 .citation-quote {
   font-size: 12px;
   color: var(--ink);
   font-style: italic;
-  line-height: 1.4;
+  line-height: 1.85;
 }
 
 .citation-action-btn {
@@ -897,12 +968,13 @@ body {
   border: none;
   font-family: var(--font-mono);
   font-size: 10.5px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
   cursor: pointer;
   text-align: left;
   padding: 0;
   margin-top: 2px;
+  line-height: 1.8;
 }
 
 .citation-action-btn:hover {
@@ -917,6 +989,7 @@ body {
   gap: 6px;
   font-family: var(--font-mono);
   font-size: 11px;
+  font-weight: 200;
   color: #38bdf8;
   padding: 4px 8px;
   background: rgba(30, 64, 175, 0.15);
@@ -924,6 +997,7 @@ body {
   border-radius: 6px;
   margin-bottom: 4px;
   align-self: flex-start;
+  line-height: 1.7;
 }
 
 /* Follow-ups */
@@ -941,12 +1015,13 @@ body {
   border: none;
   font-family: var(--font-sans);
   font-size: 12.5px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
   text-align: left;
   cursor: pointer;
   padding: 0;
   transition: color 0.15s ease;
+  line-height: 1.85;
 }
 
 .followup-btn:hover {
@@ -971,6 +1046,7 @@ body {
   font-size: 11px;
   width: 100%;
   overflow: hidden;
+  line-height: 1.8;
 }
 
 .selection-quote {
@@ -981,8 +1057,9 @@ body {
   padding: 0 4px;
   font-family: var(--font-mono);
   font-size: 10.5px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
+  line-height: 1.8;
 }
 
 .selection-quote.hidden {
@@ -995,6 +1072,7 @@ body {
   text-overflow: ellipsis;
   max-width: 90%;
   font-style: italic;
+  line-height: 1.8;
 }
 
 .selection-quote-close {
@@ -1034,23 +1112,25 @@ body {
 .safety-gate-badge {
   font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 400;
+  font-weight: 200;
   text-transform: uppercase;
   color: #f59e0b;
+  line-height: 1.7;
 }
 
 .safety-step-count {
   font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--mute);
+  line-height: 1.7;
 }
 
 .safety-gate-desc {
   font-size: 12px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--ink);
-  line-height: 1.4;
+  line-height: 1.85;
 }
 
 .safety-gate-actions {
@@ -1067,17 +1147,19 @@ body {
   padding: 5px 12px;
   border-radius: 6px;
   cursor: pointer;
+  line-height: 1.7;
 }
 
 .safety-btn.approve {
   background: #f59e0b;
   color: #07080b;
-  font-weight: 400;
+  font-weight: 200;
 }
 
 .safety-btn.deny {
   background: transparent;
   color: var(--mute);
+  font-weight: 200;
 }
 
 /* Rounded Composer Container (Radius 26px) */
@@ -1192,7 +1274,7 @@ body {
   font-size: 13.5px;
   font-weight: 200;
   letter-spacing: 0.045em;
-  line-height: 1.6;
+  line-height: 1.85;
   color: var(--ink);
   resize: none;
   min-height: 24px;
@@ -1219,9 +1301,9 @@ body {
 
 /* Refined Translucent Midnight Glass Arrow Button (NO harsh bulky white) */
 .send-btn {
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(236, 238, 244, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+  border: 1px solid rgba(255, 255, 255, 0.06);
   width: 28px;
   height: 28px;
   border-radius: 50%;
@@ -1233,8 +1315,8 @@ body {
 }
 
 .send-btn:hover {
-  background: rgba(255, 255, 255, 0.14);
-  color: #ffffff;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--ink);
   border-color: rgba(56, 189, 248, 0.35);
   transform: scale(1.05);
 }
@@ -1315,8 +1397,8 @@ body {
 
 .slash-tier-tab.active {
   background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-  font-weight: 500;
+  color: var(--ink);
+  font-weight: 200;
 }
 
 .slash-link {
@@ -1362,13 +1444,13 @@ body {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--ink);
-  font-weight: 500;
+  font-weight: 200;
 }
 
 .slash-item-syntax {
   font-family: var(--font-mono);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 200;
   color: #38bdf8;
   opacity: 0.9;
   transition: color 0.15s ease, opacity 0.15s ease;
@@ -1382,8 +1464,10 @@ body {
 
 .slash-item-desc {
   font-size: 11.5px;
-  color: #94a3b8;
-  line-height: 1.35;
+  color: var(--mute);
+  line-height: 1.8;
+  transition: color 0.15s ease;
+}
   transition: color 0.15s ease;
 }
 
@@ -1456,9 +1540,11 @@ body {
 .speech-stop-btn {
   background: rgba(56, 189, 248, 0.2);
   border: 1px solid rgba(56, 189, 248, 0.35);
-  color: #fff;
+  color: var(--ink);
   font-family: var(--font-mono);
   font-size: 10px;
+  font-weight: 200;
+  line-height: 1.7;
   padding: 2px 8px;
   border-radius: 6px;
   cursor: pointer;
@@ -1500,9 +1586,10 @@ body {
 
 .modal-title {
   font-size: 13.5px;
-  font-weight: 300;
+  font-weight: 200;
   color: var(--ink);
   letter-spacing: 0.04em;
+  line-height: 1.6;
 }
 
 .modal-close-btn {
@@ -1514,7 +1601,7 @@ body {
 }
 
 .modal-close-btn:hover {
-  color: #fff;
+  color: var(--ink);
 }
 
 .modal-search-row {
@@ -1678,15 +1765,16 @@ body {
 
 .onboarding-title {
   font-size: 16px;
-  font-weight: 500;
-  color: #fff;
+  font-weight: 200;
+  color: var(--ink);
   margin-bottom: 6px;
+  line-height: 1.6;
 }
 
 .onboarding-desc {
   font-size: 12px;
-  color: #94a3b8;
-  line-height: 1.5;
+  color: var(--mute);
+  line-height: 1.85;
   margin-bottom: 14px;
 }
 
@@ -1702,11 +1790,13 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
   padding: 8px 12px;
-  color: #fff;
+  color: var(--ink);
   font-size: 12px;
   font-family: var(--font-mono);
+  font-weight: 200;
   outline: none;
   transition: border-color 0.15s ease;
+  line-height: 1.8;
 }
 
 .onboarding-input:focus {
@@ -1716,7 +1806,7 @@ body {
 .onboarding-btn {
   background: var(--sky);
   color: #07080b;
-  font-weight: 500;
+  font-weight: 200;
   font-size: 11.5px;
   padding: 0 14px;
   border: none;
@@ -1891,10 +1981,11 @@ body {
   font-size: 10.5px;
   padding: 2.5px 7px;
   border-radius: 5px;
-  font-weight: 400;
+  font-weight: 200;
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  line-height: 1.7;
 }
 
 .error-badge.warning {
@@ -2132,17 +2223,20 @@ body {
 }
 
 .group-title {
-  font-weight: 400;
+  font-weight: 200;
   max-width: 130px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.7;
 }
 
 .group-count {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--mute);
+  font-weight: 200;
+  line-height: 1.7;
 }
 
 .group-chevron {
@@ -2161,15 +2255,16 @@ body {
   color: #93c5fd;
   font-size: 10.5px;
   font-family: var(--font-sans);
-  font-weight: 300;
+  font-weight: 200;
   cursor: pointer;
   transition: all 0.15s ease;
+  line-height: 1.7;
 }
 
 .pill-action-btn:hover {
   background: rgba(37, 99, 235, 0.25);
   border-color: rgba(37, 99, 235, 0.6);
-  color: #fff;
+  color: var(--ink);
 }
 
 /* Tab Group Drawer */
@@ -2202,8 +2297,9 @@ body {
 
 .group-drawer-title {
   font-size: 12px;
-  font-weight: 400;
-  color: #e9d5ff;
+  font-weight: 200;
+  color: #c4b5fd;
+  line-height: 1.7;
 }
 
 .isolation-toggle-row {
@@ -2225,8 +2321,9 @@ body {
 
 .isolation-label {
   font-size: 11.5px;
-  font-weight: 400;
+  font-weight: 200;
   color: var(--ink);
+  line-height: 1.7;
 }
 
 .isolation-desc {
@@ -2414,7 +2511,7 @@ input:checked + .slider:before {
   background: #f59e0b;
   color: #000;
   border: none;
-  font-weight: 500;
+  font-weight: 200;
 }
 
 .banner-btn.secondary {
@@ -2433,7 +2530,7 @@ input:checked + .slider:before {
   color: #fca5a5;
   font-family: var(--font-mono);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 200;
   padding: 3px 8px;
   border-radius: 6px;
   cursor: pointer;
@@ -2500,21 +2597,26 @@ input:checked + .slider:before {
 .ledger-badge-label {
   font-family: var(--font-mono);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 200;
   color: #38bdf8;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+  line-height: 1.7;
 }
 
 .ledger-step-badge {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.65);
+  font-weight: 200;
+  color: var(--mute);
+  line-height: 1.7;
 }
 
 .ledger-timer {
   font-size: 11px;
+  font-weight: 200;
   color: #fbbf24;
+  line-height: 1.7;
 }
 
 .ledger-stop-action-btn {
@@ -2523,23 +2625,25 @@ input:checked + .slider:before {
   color: #fca5a5;
   font-family: var(--font-mono);
   font-size: 10.5px;
+  font-weight: 200;
   padding: 3px 8px;
   border-radius: 5px;
   cursor: pointer;
   transition: all 0.15s ease;
+  line-height: 1.7;
 }
 
 .ledger-stop-action-btn:hover {
   background: rgba(239, 68, 68, 0.3);
-  color: #fff;
+  color: var(--ink);
   border-color: #ef4444;
 }
 
 .ledger-objective {
   font-size: 12.5px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.95);
-  line-height: 1.4;
+  font-weight: 200;
+  color: var(--ink);
+  line-height: 1.85;
   padding-bottom: 4px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
@@ -2555,21 +2659,22 @@ input:checked + .slider:before {
   align-items: flex-start;
   gap: 8px;
   font-size: 12px;
-  line-height: 1.4;
+  font-weight: 200;
+  line-height: 1.85;
   transition: all 0.15s ease;
 }
 
 .checklist-item.completed {
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--mute);
 }
 
 .checklist-item.active {
-  color: #f0f9ff;
-  font-weight: 500;
+  color: var(--ink);
+  font-weight: 200;
 }
 
 .checklist-item.pending {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--mute);
 }
 
 .checklist-icon {
@@ -2599,16 +2704,18 @@ input:checked + .slider:before {
 
 .ledger-thoughts-summary {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.6);
+  font-weight: 200;
+  color: var(--mute);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: space-between;
   user-select: none;
+  line-height: 1.8;
 }
 
 .ledger-thoughts-summary:hover {
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--ink);
 }
 
 .summary-hint {
@@ -2621,12 +2728,13 @@ input:checked + .slider:before {
 
 .ledger-thoughts-text {
   font-size: 11.5px;
-  color: rgba(224, 231, 255, 0.85);
+  font-weight: 200;
+  color: var(--ink);
   background: rgba(0, 0, 0, 0.25);
   border-radius: 6px;
   padding: 8px 10px;
   margin-top: 6px;
-  line-height: 1.45;
+  line-height: 1.85;
   border-left: 2px solid #38bdf8;
 }
 

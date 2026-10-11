@@ -453,32 +453,32 @@ function AssistantWordmark({
       title={onStartEditing ? `Click to rename • Active Engine: ${currentEffect.name}` : `Active Engine: ${currentEffect.name}`}
     >
       {customName ? (
-        <span className="font-extralight text-[13.5px] tracking-[0.07em] text-white/95 font-['Geist'] drop-shadow-[0_1px_3px_rgba(255,255,255,0.3)]">
+        <span className="font-thin text-[13.5px] tracking-[0.07em] text-[#9aa1b2] font-['Geist']">
           {customName}
         </span>
       ) : (
         <div
-          className={`flex items-center text-[13.5px] select-none font-extralight font-['Geist'] ${currentEffect.className} ${
+          className={`flex items-center text-[13.5px] select-none font-thin font-['Geist'] ${currentEffect.className} ${
             hasCollapsed ? "wm-collapsed" : ""
           }`}
         >
           {/* 'S' */}
-          <span className="text-white font-light drop-shadow-[0_1px_3px_rgba(255,255,255,0.4)]">
+          <span className="text-[#9aa1b2] font-thin">
             S
           </span>
 
           {/* 'uper ' foldable syllable */}
-          <span className="wm-fold text-white/75 drop-shadow-[0_1px_2px_rgba(255,255,255,0.25)]">
+          <span className="wm-fold text-[#82899a]">
             uper&nbsp;
           </span>
 
           {/* 'i' / 'I' - smoothly transforms to superscript matching 'S' in color and glow */}
-          <span className="wm-letter-i">
+          <span className="wm-letter-i text-[#9aa1b2] font-thin">
             {hasCollapsed ? "i" : "I"}
           </span>
 
           {/* 'ntelligence' foldable syllable */}
-          <span className="wm-fold text-white/75 drop-shadow-[0_1px_2px_rgba(255,255,255,0.25)]">
+          <span className="wm-fold text-[#82899a]">
             ntelligence
           </span>
         </div>
@@ -2474,9 +2474,17 @@ export default function App() {
         }
       }
 
-      // Fonts folder
+      // Fonts folder (Self-hosted offline fonts)
       const fontsFolder = zip.folder("fonts");
-      const fontFiles = ["Geist-300.woff2", "Geist-400.woff2", "GeistMono-300.woff2"];
+      const fontFiles = [
+        "Geist-100.woff2",
+        "Geist-200.woff2",
+        "Geist-300.woff2",
+        "Geist-400.woff2",
+        "Geist-VariableFont.woff2",
+        "GeistMono-300.woff2",
+        "GeistMono-VariableFont.woff2"
+      ];
       for (const font of fontFiles) {
         try {
           const fontBlob = await fetch(`/fonts/${font}`).then((r) => r.blob());
@@ -2543,7 +2551,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
   };
 
   return (
-    <div className="flex flex-col h-screen h-[100dvh] max-h-screen bg-[#07080b] text-[#eceef4] font-sans antialiased overflow-hidden select-none">
+    <div className="flex flex-col h-screen h-[100dvh] max-h-screen bg-[#07080b] text-[#9aa1b2] font-sans font-extralight leading-[1.85] antialiased overflow-hidden select-none">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl bg-black/80 border border-white/10 text-xs font-mono text-white shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-150">
@@ -2822,47 +2830,47 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                 {chatMessages.length === 0 && (
                   <div className="mt-auto mb-7 flex flex-col items-start text-left gap-3.5">
                     <h1
-                      className="text-[28px] text-[#eceef4] leading-[1.28]"
+                      className="text-[28px] text-[#9aa1b2] leading-[1.5]"
                       style={{ fontFamily: "'Geist', sans-serif", fontWeight: 100, letterSpacing: "0.06em" }}
                     >
                       What should we
-                      <span className="block mt-1 text-[#777c8a]" style={{ fontWeight: 100 }}>
+                      <span className="block mt-1 text-[#585e6d]" style={{ fontWeight: 100 }}>
                         do with this page?
                       </span>
                     </h1>
                     <p
-                      className="text-[13px] text-[#777c8a] leading-[1.7] max-w-[340px]"
+                      className="text-[13px] text-[#585e6d] leading-[1.85] max-w-[340px]"
                       style={{ fontFamily: "'Geist', sans-serif", fontWeight: 200, letterSpacing: "0.05em" }}
                     >
                       Try{" "}
                       <button
                         type="button"
                         onClick={() => handleSubmitPrompt("Run Agent Behavior Audit")}
-                        className="inline text-[#eceef4] relative group font-extralight"
+                        className="inline text-[#9aa1b2] relative group font-thin"
                         style={{ fontWeight: 200 }}
                       >
                         Agent Behavior Audit
-                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#eceef4] transition-all duration-200 group-hover:w-full" />
+                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#9aa1b2] transition-all duration-200 group-hover:w-full" />
                       </button>
                       ,{" "}
                       <button
                         type="button"
                         onClick={() => handleSubmitPrompt("/sludge-audit")}
-                        className="inline text-[#eceef4] relative group font-extralight"
+                        className="inline text-[#9aa1b2] relative group font-thin"
                         style={{ fontWeight: 200 }}
                       >
                         Consumer Defense
-                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#eceef4] transition-all duration-200 group-hover:w-full" />
+                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#9aa1b2] transition-all duration-200 group-hover:w-full" />
                       </button>
                       , or{" "}
                       <button
                         type="button"
                         onClick={() => handleSubmitPrompt("Audit cryptographic security enclave")}
-                        className="inline text-[#eceef4] relative group font-extralight"
+                        className="inline text-[#9aa1b2] relative group font-thin"
                         style={{ fontWeight: 200 }}
                       >
                         audit security enclave
-                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#eceef4] transition-all duration-200 group-hover:w-full" />
+                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#9aa1b2] transition-all duration-200 group-hover:w-full" />
                       </button>
                       .
                     </p>
@@ -2949,7 +2957,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                         {msg.role === "user" ? (
                           <div className="flex flex-col items-end w-full group">
                             <div className="max-w-[85%] rounded-[18px] bg-white/[0.07] backdrop-blur-md border border-white/[0.09] px-3.5 py-2.5 shadow-[0_4px_20px_rgba(0,0,0,0.35)]">
-                              <div className="font-mono text-[12.5px] text-[#eceef4] text-left leading-relaxed whitespace-pre-wrap">
+                              <div className="font-mono text-[12.5px] text-[#9aa1b2] font-thin text-left leading-[1.85] whitespace-pre-wrap">
                                 {msg.text}
                               </div>
                             </div>
@@ -3006,7 +3014,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                           </button>
                         </div>
                       ) : msg.data ? (
-                        <div className="w-full rounded-[18px] bg-[#090b10]/65 backdrop-blur-md border border-white/[0.08] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.4)] text-[15px] font-extralight text-[#eceef4] leading-relaxed tracking-[0.045em] font-['Geist']">
+                        <div className="w-full rounded-[18px] bg-[#090b10]/65 backdrop-blur-md border border-white/[0.08] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.4)] text-[14.5px] font-thin text-[#9aa1b2] leading-[1.85] tracking-[0.045em] font-['Geist']">
                           {msg.data.paragraphs.map((p, pIdx) => (
                             <div key={pIdx} className="mb-3.5 relative last:mb-0">
                               <p className="inline font-extralight">
@@ -3099,7 +3107,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                           </div>
                         </div>
                       ) : (
-                        <div className="w-full rounded-[18px] bg-[#090b10]/65 backdrop-blur-md border border-white/[0.08] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.4)] text-[13.5px] font-extralight text-[#eceef4]/90 leading-relaxed tracking-[0.045em]">
+                        <div className="w-full rounded-[18px] bg-[#090b10]/65 backdrop-blur-md border border-white/[0.08] p-4 shadow-[0_4px_24px_rgba(0,0,0,0.4)] text-[13.5px] font-thin text-[#9aa1b2] leading-[1.85] tracking-[0.045em]">
                           <div className="whitespace-pre-wrap">{msg.text}</div>
                           {/* Quick Message Actions */}
                           <div className="flex items-center gap-2 pt-1.5 opacity-60 hover:opacity-100 transition-opacity">
@@ -3357,7 +3365,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                       }}
                       placeholder="Ask, automate, or type / for commands…"
                       rows={1}
-                      className="w-full bg-transparent border-none outline-none font-sans text-[13.5px] font-extralight text-[#eceef4] placeholder-[#777c8a]/70 resize-none leading-relaxed tracking-[0.045em] px-1"
+                      className="w-full bg-transparent border-none outline-none font-sans text-[13.5px] font-thin text-[#9aa1b2] placeholder-[#585e6d]/70 resize-none leading-[1.85] tracking-[0.045em] px-1"
                     />
 
                     {/* Clean Minimal Bottom Row: Send / Stop Button Right-Aligned */}

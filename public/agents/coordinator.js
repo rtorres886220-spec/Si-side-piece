@@ -170,6 +170,16 @@
             gateResult,
           };
         }
+
+        // Successfully repaired: update gateResult to passed
+        if (repair.repaired && workerPayload) {
+          gateResult = {
+            ...gateResult,
+            passed: true,
+            repaired: true,
+            reason: "Action invariants successfully repaired by Critic."
+          };
+        }
       }
 
       telemetry.totalMs = Math.round(performance.now() - tStart);

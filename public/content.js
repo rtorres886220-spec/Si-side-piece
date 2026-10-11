@@ -4,15 +4,18 @@
  */
 
 (function () {
-  if (typeof window !== "undefined" && window.__SIDEKICK_CONTENT_INITIALIZED__) {
-    return;
+  // If re-injected after extension reload, unbind stale listener if any
+  if (typeof window !== "undefined" && window.__SIDEKICK_MESSAGE_LISTENER__) {
+    try {
+      chrome.runtime.onMessage.removeListener(window.__SIDEKICK_MESSAGE_LISTENER__);
+    } catch {}
   }
   if (typeof window !== "undefined") {
     window.__SIDEKICK_CONTENT_INITIALIZED__ = true;
   }
 
   // Message Dispatcher
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const messageHandler = (message, sender, sendResponse) => {
     // A1: Strict top-level frame restriction - never allow subframes to impersonate top page
     if (window.top !== window.self) {
       if (message.action === "extractContext") {
@@ -169,7 +172,12 @@
       }
       return false;
     }
-  });
+  };
+
+  if (typeof window !== "undefined") {
+    window.__SIDEKICK_MESSAGE_LISTENER__ = messageHandler;
+  }
+  chrome.runtime.onMessage.addListener(messageHandler);
 
   // Cache & Mutation Tracking for Zero-Staleness Instant Extraction
   let cachedContext = null;
@@ -232,6 +240,7 @@
    * 1. Invisible & Off-Screen DOM Stripper + Structured Evidence Extraction + PII Redaction
    */
   function extractVisibleSanitizedContext() {
+    effectiveBgCache = new WeakMap();
     const startTime = typeof performance !== "undefined" ? performance.now() : Date.now();
     const selection = window.getSelection() ? window.getSelection().toString().trim() : "";
 
@@ -298,19 +307,56 @@
   }
 
   /**
-   * Helper to determine effective background color for contrast/white-on-white detection
+   * Helper to determine effective background color for contrast/white-on-white detection.
+   * Uses WeakMap memoization and detects dark-mode color-scheme canvas defaults.
    */
+  let effectiveBgCache = new WeakMap();
+
   function getEffectiveBackgroundColor(el) {
-    let current = el;
-    while (current && current !== document) {
-      const style = window.getComputedStyle(current);
-      const bg = style.backgroundColor;
-      if (bg && bg !== "transparent" && bg !== "rgba(0, 0, 0, 0)") {
-        return bg;
-      }
-      current = current.parentElement;
+    if (!el || el === document) {
+      return { color: "rgb(255, 255, 255)", isExplicit: false };
     }
-    return "rgb(255, 255, 255)"; // Default browser canvas is white
+    if (effectiveBgCache.has(el)) {
+      return effectiveBgCache.get(el);
+    }
+
+    let current = el;
+    let depth = 0;
+    let foundBg = null;
+
+    while (current && current !== document && depth < 8) {
+      if (effectiveBgCache.has(current)) {
+        foundBg = effectiveBgCache.get(current);
+        break;
+      }
+      try {
+        const style = window.getComputedStyle(current);
+        const bg = style.backgroundColor;
+        if (bg && bg !== "transparent" && bg !== "rgba(0, 0, 0, 0)") {
+          foundBg = { color: bg, isExplicit: true };
+          break;
+        }
+      } catch {}
+      current = current.parentElement;
+      depth++;
+    }
+
+    if (!foundBg) {
+      let isDark = false;
+      try {
+        const htmlStyle = window.getComputedStyle(document.documentElement);
+        const colorScheme = htmlStyle.colorScheme || "";
+        isDark = colorScheme.includes("dark") ||
+          (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      } catch {}
+      foundBg = {
+        color: isDark ? "rgb(0, 0, 0)" : "rgb(255, 255, 255)",
+        isExplicit: false
+      };
+    }
+
+    effectiveBgCache.set(el, foundBg);
+    return foundBg;
   }
 
   /**
@@ -375,15 +421,19 @@
       return false;
     }
 
-    // White-on-white & Zero-contrast check
+    // White-on-white & Zero-contrast check (only if background was explicitly defined)
     const textColor = style.color ? style.color.replace(/\s+/g, "") : "";
-    const effectiveBg = getEffectiveBackgroundColor(el).replace(/\s+/g, "");
-    if (textColor === effectiveBg && textColor !== "") {
-      return false;
-    }
-    if ((textColor === "rgb(255,255,255)" || textColor === "#fff" || textColor === "#ffffff") &&
-        (effectiveBg === "rgb(255,255,255)" || effectiveBg === "#fff" || effectiveBg === "#ffffff")) {
-      return false;
+    const bgInfo = getEffectiveBackgroundColor(el);
+    const effectiveBg = (bgInfo.color || "").replace(/\s+/g, "");
+
+    if (bgInfo.isExplicit) {
+      if (textColor === effectiveBg && textColor !== "") {
+        return false;
+      }
+      if ((textColor === "rgb(255,255,255)" || textColor === "#fff" || textColor === "#ffffff") &&
+          (effectiveBg === "rgb(255,255,255)" || effectiveBg === "#fff" || effectiveBg === "#ffffff")) {
+        return false;
+      }
     }
 
     return true;
@@ -690,8 +740,11 @@
     // 7. Emails
     cleaned = cleaned.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, "[REDACTED_EMAIL]");
 
-    // 8. US & International Phone Numbers
-    cleaned = cleaned.replace(/\b(?:\+?1[-. ]?)?\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}\b/g, "[REDACTED_PHONE]");
+    // 8. US & International Phone Numbers (requires formatting delimiters to prevent corrupting raw 10-digit order IDs)
+    cleaned = cleaned.replace(/(?:^|[^\w+])(?:\+?1[-. ]?)?(?:\(\d{3}\)[-. ]|\d{3}[-. ])\d{3}[-. ]\d{4}\b/g, (m) => {
+      const prefix = m.startsWith(" ") ? " " : "";
+      return `${prefix}[REDACTED_PHONE]`;
+    });
 
     // 9. US Social Security Numbers (dashed, spaced, dot, or unformatted 9-digit with SSN context)
     cleaned = cleaned.replace(/\b\d{3}[- \.]\d{2}[- \.]\d{4}\b/g, "[REDACTED_SSN]");
@@ -703,8 +756,10 @@
       return match;
     });
 
-    // 10. International Bank Account Numbers (IBAN)
-    cleaned = cleaned.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b/g, "[REDACTED_IBAN]");
+    // 10. International Bank Account Numbers (IBAN with ISO 7064 Mod-97 checksum validation)
+    cleaned = cleaned.replace(/\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b/g, (match) => {
+      return isIbanValid(match) ? "[REDACTED_IBAN]" : match;
+    });
 
     // 11. Standard 16-digit Credit Cards with Luhn validation
     cleaned = cleaned.replace(/\b(?:\d{4}[- ]?){3}\d{4}\b/g, (match) => {
@@ -739,6 +794,30 @@
       shouldDouble = !shouldDouble;
     }
     return sum % 10 === 0;
+  }
+
+  /**
+   * ISO 7064 Mod 97-10 checksum check for International Bank Account Numbers (IBAN)
+   */
+  function isIbanValid(ibanStr) {
+    const clean = String(ibanStr || "").replace(/[\s-]/g, "").toUpperCase();
+    if (clean.length < 15 || clean.length > 34) return false;
+    if (!/^[A-Z]{2}\d{2}[A-Z0-9]+$/.test(clean)) return false;
+    const rearranged = clean.slice(4) + clean.slice(0, 4);
+    let digits = "";
+    for (let i = 0; i < rearranged.length; i++) {
+      const code = rearranged.charCodeAt(i);
+      if (code >= 65 && code <= 90) {
+        digits += (code - 55).toString();
+      } else {
+        digits += rearranged[i];
+      }
+    }
+    let remainder = 0;
+    for (let i = 0; i < digits.length; i++) {
+      remainder = (remainder * 10 + parseInt(digits[i], 10)) % 97;
+    }
+    return remainder === 1;
   }
 
   /**
@@ -1063,18 +1142,25 @@
         targetEl.scrollIntoView({ behavior: "smooth", block: "center" });
         if (typeof targetEl.focus === "function") targetEl.focus();
 
-        // A10: Dispatch single click only
+        // Dispatch full trusted event sequence (pointerdown, mousedown, focus, pointerup, mouseup, click)
+        const evtInit = {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: params.x || 0,
+          clientY: params.y || 0,
+          buttons: 1
+        };
+        try { targetEl.dispatchEvent(new PointerEvent("pointerdown", evtInit)); } catch {}
+        try { targetEl.dispatchEvent(new MouseEvent("mousedown", evtInit)); } catch {}
+        if (typeof targetEl.focus === "function") targetEl.focus();
+        try { targetEl.dispatchEvent(new PointerEvent("pointerup", evtInit)); } catch {}
+        try { targetEl.dispatchEvent(new MouseEvent("mouseup", evtInit)); } catch {}
+
         if (typeof targetEl.click === "function") {
           targetEl.click();
         } else {
-          const clickEvt = new MouseEvent("click", {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: params.x || 0,
-            clientY: params.y || 0
-          });
-          targetEl.dispatchEvent(clickEvt);
+          targetEl.dispatchEvent(new MouseEvent("click", evtInit));
         }
         showActionIndicator(params.x || 100, params.y || 100, params.selector || targetEl.innerText || "clicked");
         return { clicked: true, domFallback: true };
@@ -1092,8 +1178,9 @@
         if (typeof targetEl.focus === "function") targetEl.focus();
         const txt = params.text || "";
         if ("value" in targetEl) {
-          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set ||
-                                Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+          const isTextarea = (typeof window.HTMLTextAreaElement !== "undefined" && targetEl instanceof window.HTMLTextAreaElement) || targetEl.tagName === "TEXTAREA";
+          const proto = isTextarea ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
           if (nativeSetter) {
             nativeSetter.call(targetEl, txt);
           } else {
@@ -1135,7 +1222,11 @@
       throw new Error("Missing URL for navigation fallback");
     }
 
-    throw new Error(`Unsupported DOM fallback action: ${cdpAction}`);
+    if (cdpAction === "upload_file" || cdpAction === "uploadFile") {
+      throw new Error(`CDP action "${cdpAction}" requires direct Chrome DevTools Protocol attachment. Please close Chrome DevTools on this tab so Sidekick can attach directly.`);
+    }
+
+    throw new Error(`Unsupported DOM fallback action: ${cdpAction}. Close DevTools to enable full Chrome DevTools Protocol.`);
   }
 
   // Shadow DOM Piercing Helper

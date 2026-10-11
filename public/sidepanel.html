@@ -4,9 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gemini Sidekick - Chrome Extension</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@100;200;300;400&family=Geist+Mono:wght@200;300;400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="sidepanel.css">
 </head>
 <body>
@@ -69,28 +66,35 @@
       </div>
     </header>
 
-    <!-- Dedicated Chrome Tab Group Workgroup Bar (Hidden until bound) -->
-    <div id="tabGroupBar" class="tab-group-bar hidden">
+    <!-- Tab Group Management Bar -->
+    <div id="tabGroupBar" class="tab-group-bar">
       <div class="tab-group-info">
-        <button id="groupBadgeBtn" class="tab-group-chip" title="Manage Sidekick Tab Group" type="button">
+        <button type="button" id="groupBadgeBtn" class="tab-group-chip" title="Manage Chrome Tab Group">
           <span id="groupColorDot" class="group-dot purple"></span>
           <span id="groupTitleLabel" class="group-title">Sidekick Workgroup</span>
           <span id="groupTabCount" class="group-count">0 tabs</span>
-          <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" class="group-chevron">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
         </button>
       </div>
+      <button type="button" id="newGroupTabBtn" class="pill-action-btn" title="Open new tab in this group">
+        + New Tab
+      </button>
+    </div>
 
-      <div class="tab-group-actions">
-        <button id="newGroupTabBtn" class="pill-action-btn" title="Open new tab in this Sidekick group" type="button">
-          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-          New Tab
-        </button>
-      </div>
+    <!-- Status & Context Tokens Bar -->
+    <div class="tokens-bar">
+      <button type="button" id="tabToken" class="mono-token reading" title="Click to toggle or refresh page reading">
+        <span id="tabTokenDot" class="token-dot"></span>
+        <span id="tabTokenLabel">This tab</span>
+      </button>
+
+      <button type="button" id="selectionToken" class="mono-token quote" title="Include highlighted page selection">
+        <span>”</span>
+        <span>Selection</span>
+      </button>
+
+      <button type="button" id="modelToken" class="mono-token" title="Switch active Gemini model">
+        <span id="modelTokenLabel">gemini-3.5-flash-lite</span>
+      </button>
     </div>
 
     <!-- Tab Group Details & Managed Tabs Popover Drawer -->
@@ -313,9 +317,11 @@
             maxlength="8000"
           ></textarea>
 
-          <!-- Minimal Bottom Row: Slash shortcut & Send Button -->
+          <!-- Bottom Row: Slash Shortcut & Send Button -->
           <div class="composer-bottom-row">
-            <button type="button" id="toggleSlashBtn" class="slash-btn" title="Quick slash commands">/</button>
+            <button type="button" id="toggleSlashBtn" class="slash-btn" title="Toggle slash commands menu (/)">
+              /
+            </button>
             <div class="send-wrapper">
               <button type="submit" id="sendBtn" class="send-btn" title="Send" aria-label="Send">
                 <svg id="sendIconSvg" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
