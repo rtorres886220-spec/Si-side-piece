@@ -189,7 +189,9 @@
       observer.observe(document.body, {
         childList: true,
         subtree: true,
-        characterData: true
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["class", "style", "hidden", "aria-hidden", "aria-expanded", "open", "disabled"]
       });
     };
     if (document.readyState === "loading") {
@@ -337,7 +339,7 @@
       style.color === "rgba(0, 0, 0, 0)" ||
       style.clip === "rect(0px, 0px, 0px, 0px)" ||
       style.clip === "rect(0, 0, 0, 0)" ||
-      (style.clipPath && (style.clipPath.includes("0px") || style.clipPath.includes("inset(50%)") || style.clipPath.includes("inset(100%)")))
+      (style.clipPath && (style.clipPath.includes("inset(100%)") || style.clipPath.includes("circle(0") || style.clipPath.includes("polygon(0px 0px, 0px 0px")))
     ) {
       return false;
     }
@@ -355,8 +357,8 @@
     // Bounds check for rendered boxes
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) {
-      // Allow inline text containers whose children carry text
-      if (style.display !== "inline" || el.childNodes.length === 0) {
+      // Allow display: contents and inline text containers whose children carry text
+      if (style.display !== "contents" && (style.display !== "inline" || el.childNodes.length === 0)) {
         return false;
       }
     }
@@ -745,9 +747,12 @@
    * A15: Masks password and sensitive input values from labels
    */
   function indexInteractiveElements() {
-    // Clear any pre-existing attacker-supplied data-sidekick-id
+    // Clear any pre-existing attacker-supplied data-sidekick-id (preserve active cancel targets)
     document.querySelectorAll("[data-sidekick-id]").forEach((el) => {
-      el.removeAttribute("data-sidekick-id");
+      const currentId = el.getAttribute("data-sidekick-id") || "";
+      if (!currentId.startsWith("sk-cancel-")) {
+        el.removeAttribute("data-sidekick-id");
+      }
     });
 
     const candidates = document.querySelectorAll(
@@ -762,8 +767,12 @@
     for (let i = 0; i < candidates.length; i++) {
       const el = candidates[i];
 
-      if (el.hidden || (el.offsetParent === null && el.style.position !== "fixed" && el.style.position !== "sticky")) {
-        continue;
+      if (el.hidden) continue;
+      if (el.offsetParent === null) {
+        const computedPos = window.getComputedStyle(el).position;
+        if (computedPos !== "fixed" && computedPos !== "sticky") {
+          continue;
+        }
       }
 
       // Check payment widget exclusion
@@ -801,6 +810,14 @@
       if (tag === "input") role = `${type || "text"} input`;
       else if (tag === "a") role = "link";
 
+      let inputValue = "";
+      if (tag === "input" || tag === "textarea" || tag === "select") {
+        if (el.type !== "password") {
+          inputValue = (el.value || "").slice(0, 50);
+        }
+      }
+      const isChecked = typeof el.checked === "boolean" ? el.checked : false;
+
       const centerX = Math.round(rect.left + rect.width / 2);
       const centerY = Math.round(rect.top + rect.height / 2);
 
@@ -813,6 +830,8 @@
         id: idCounter++,
         role: role,
         label: label || `Unnamed ${role}`,
+        value: inputValue,
+        checked: isChecked,
         x: centerX,
         y: centerY,
         selector: uniqueSelector
@@ -1073,7 +1092,13 @@
         if (typeof targetEl.focus === "function") targetEl.focus();
         const txt = params.text || "";
         if ("value" in targetEl) {
-          targetEl.value = txt;
+          const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set ||
+                                Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+          if (nativeSetter) {
+            nativeSetter.call(targetEl, txt);
+          } else {
+            targetEl.value = txt;
+          }
         } else {
           targetEl.innerText = txt;
         }
@@ -1132,7 +1157,7 @@
   class SludgeAuditor {
     static scanPrecheckedFees() {
       const findings = [];
-      const checkedInputs = getPiercedElements(document, 'input[type="checkbox"]:checked, input[type="radio"]:checked');
+      const checkedInputs = getPiercedElements(document, 'input[type="checkbox"]:checked');
       const feeRegex = /\b(fee|fees|protection|insurance|warranty|subscription|monthly|annually|premium|tip|donation)\b|\$\d+/i;
       const ignoreRegex = /\b(terms|conditions|privacy|policy|age|18\+|rules|agree|acknowledge)\b/i;
 
@@ -1251,7 +1276,7 @@
         const text = (btn.innerText || btn.value || btn.getAttribute('aria-label') || "").toLowerCase();
 
         if (cancelRegex.test(text) && !decoyRegex.test(text)) {
-          if (isPaymentWidgetOrSensitiveField(btn)) continue;
+          if (isPaymentWidgetOrSensitiveField(btn) || !isVisible(btn)) continue;
           const rect = btn.getBoundingClientRect();
           if (rect.width > 0 && rect.height > 0) {
             trueTarget = btn;

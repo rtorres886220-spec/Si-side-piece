@@ -7,7 +7,7 @@
 
 (function () {
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-  const PRIMARY_MODEL = "gemini-3.5-flash-lite";
+  const PRIMARY_MODEL = "gemini-3.6-flash";
   const TEMPORARY_FALLBACK_MODEL = "gemini-3.1-flash-lite";
 
   class SidekickApiClient {
@@ -101,10 +101,15 @@
           const status = res.status;
           let errorText = "";
           try {
-            const errJson = await res.json();
-            errorText = errJson?.error?.message || JSON.stringify(errJson);
+            const rawBody = await res.text();
+            try {
+              const errJson = JSON.parse(rawBody);
+              errorText = errJson?.error?.message || JSON.stringify(errJson);
+            } catch {
+              errorText = rawBody;
+            }
           } catch {
-            errorText = await res.text();
+            errorText = res.statusText || `HTTP ${status}`;
           }
 
           // Handle 429 Too Many Requests or 503 Service Unavailable
@@ -116,17 +121,19 @@
             await this._sleep(waitTime, signal);
             delayMs *= 2;
 
-            // If 503 persists on last retry attempt, try temporary fallback without persisting
-            if (status === 503 && attempt === maxRetries && currentModel === PRIMARY_MODEL) {
-              console.warn(`[ApiClient] 503 persisted. Testing temporary non-persisted fallback model: ${TEMPORARY_FALLBACK_MODEL}`);
+            // If 503 or 429 persists on last retry attempt, try temporary fallback without persisting
+            if (attempt === maxRetries && currentModel === PRIMARY_MODEL) {
+              console.warn(`[ApiClient] High load persisted. Testing temporary non-persisted fallback model: ${TEMPORARY_FALLBACK_MODEL}`);
               currentModel = TEMPORARY_FALLBACK_MODEL;
             }
             continue;
           }
 
-          throw new Error(`Gemini API error (${status}): ${errorText || res.statusText}`);
+          const nonRetryError = new Error(`Gemini API error (${status}): ${errorText || res.statusText}`);
+          nonRetryError.isNonRetryable = true;
+          throw nonRetryError;
         } catch (err) {
-          if (err.name === "AbortError") throw err;
+          if (err.name === "AbortError" || err.isNonRetryable) throw err;
 
           // Network or transient errors
           if (attempt <= maxRetries && !signal?.aborted) {

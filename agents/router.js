@@ -53,8 +53,11 @@ Respond with ONLY valid JSON:
   "reasoning": "brief 1-sentence explanation"
 }`;
 
+      const enclaveId = (options && options.enclaveId) || "router-enclave";
       const userContent = `PAGE SECTION CATALOG:
+<<<UNTRUSTED_CONTENT_${enclaveId}>>>
 ${sectionCatalog || "No section catalog available."}
+<<<END_UNTRUSTED_CONTENT_${enclaveId}>>>
 
 USER PROMPT: "${promptText}"`;
 

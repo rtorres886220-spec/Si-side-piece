@@ -363,8 +363,8 @@ async function handleCDPAction({ tabId, action, params }) {
     }
   }
 
-  // Explicit Payment Widget Lockout across selector, element description, and text
-  const descToCheck = `${params?.selector || ""} ${params?.element_description || ""} ${params?.label || ""} ${params?.text || ""}`.toLowerCase();
+  // Explicit Payment Widget Lockout across selector, element description, and label
+  const descToCheck = `${params?.selector || ""} ${params?.element_description || ""} ${params?.label || ""}`.toLowerCase();
   for (const pat of PAYMENT_PATTERNS) {
     if (descToCheck.includes(pat)) {
       throw new Error("Security Exception: Automated interaction with payment widgets or checkout card elements is strictly blocked.");
@@ -416,25 +416,27 @@ async function handleCDPAction({ tabId, action, params }) {
 
       case "type": {
         // Focus coordinates first, then dispatch trusted keyboard events
-        const { x, y, text, pressEnter } = params;
+        const { x, y } = params;
+        const text = params.text || "";
+        const pressEnter = Boolean(params.pressEnter || params.press_enter);
         if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) {
           return await dispatchDOMFallback(tabId, action, params);
         }
-          await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
-            type: "mousePressed",
-            x,
-            y,
-            button: "left",
-            clickCount: 1
-          });
-          await delay(10);
-          await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
-            type: "mouseReleased",
-            x,
-            y,
-            button: "left",
-            clickCount: 1
-          });
+        await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x,
+          y,
+          button: "left",
+          clickCount: 1
+        });
+        await delay(10);
+        await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x,
+          y,
+          button: "left",
+          clickCount: 1
+        });
 
         // Fast native CDP text insertion
         if (text) {
@@ -446,10 +448,12 @@ async function handleCDPAction({ tabId, action, params }) {
               await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
                 type: "keyDown",
                 text: char,
-                unmodifiedText: char
+                unmodifiedText: char,
+                key: char
               });
               await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
-                type: "keyUp"
+                type: "keyUp",
+                key: char
               });
             }
           }
@@ -602,10 +606,18 @@ async function dispatchDOMFallback(tabId, action, params) {
  * Capture high-fidelity visual screenshot for Multimodal Grounding
  */
 async function captureTabScreenshot(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab || !tab.url) throw new Error("Invalid tab for screenshot");
+  checkDomainAllowed(tab.url);
+
   const debugTarget = { tabId };
+  let isDebuggerAttached = false;
   try {
     await chrome.debugger.attach(debugTarget, "1.3");
-  } catch {}
+    isDebuggerAttached = true;
+  } catch (err) {
+    throw new Error(`Debugger attach failed: ${err.message}`);
+  }
 
   try {
     await sendCommand(debugTarget, "Page.enable", {});
@@ -615,9 +627,11 @@ async function captureTabScreenshot(tabId) {
     });
     return `data:image/jpeg;base64,${screenshot.data}`;
   } finally {
-    try {
-      await chrome.debugger.detach(debugTarget);
-    } catch {}
+    if (isDebuggerAttached) {
+      try {
+        await chrome.debugger.detach(debugTarget);
+      } catch {}
+    }
   }
 }
 

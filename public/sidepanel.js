@@ -9,7 +9,7 @@ const STORAGE_KEY_MODEL = "gemini_sidekick_model";
 const STORAGE_KEY_SESSIONS = "gemini_sidekick_sessions";
 
 // Configuration
-const DEFAULT_MODEL = "gemini-3.5-flash-lite";
+const DEFAULT_MODEL = "gemini-3.6-flash";
 const FALLBACK_MODEL = "gemini-3.1-flash-lite";
 const MAX_AGENT_STEPS = 5;
 
@@ -929,6 +929,11 @@ function bindEvents() {
 
   // Autonomous Multi-Process Engine: Emergency Stop Handlers
   elements.emergencyStopBtn?.addEventListener("click", () => {
+    if (state.pendingSafetyApproval) {
+      const resolve = state.pendingSafetyApproval.resolve;
+      hideSafetyModal();
+      resolve(false);
+    }
     if (state.abortController) {
       state.abortController.abort();
     }
@@ -939,6 +944,11 @@ function bindEvents() {
   });
 
   elements.ledgerStopBtn?.addEventListener("click", () => {
+    if (state.pendingSafetyApproval) {
+      const resolve = state.pendingSafetyApproval.resolve;
+      hideSafetyModal();
+      resolve(false);
+    }
     if (state.abortController) {
       state.abortController.abort();
     }
@@ -950,6 +960,11 @@ function bindEvents() {
 
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && state.isBusy) {
+      if (state.pendingSafetyApproval) {
+        const resolve = state.pendingSafetyApproval.resolve;
+        hideSafetyModal();
+        resolve(false);
+      }
       if (state.abortController) {
         state.abortController.abort();
       }
@@ -957,6 +972,14 @@ function bindEvents() {
       renderAssistantPlainMessage("🛑 **Emergency Stop:** Autonomous loop halted immediately by user [Esc].");
       hideActiveTaskLedger();
       setBusyState(false);
+    }
+  });
+
+  elements.denyActionBtn?.addEventListener("click", () => {
+    if (state.pendingSafetyApproval) {
+      const resolve = state.pendingSafetyApproval.resolve;
+      hideSafetyModal();
+      resolve(false);
     }
   });
 }
@@ -1137,13 +1160,33 @@ async function extractContext(explicitTabId = null) {
       }
       state.isInternalTab = false;
 
-      // Check Domain Deny-List
-      for (const denied of AUTOMATION_DENYLIST) {
-        if (state.activeTabUrl.toLowerCase().includes(denied)) {
-          setTabReadState("off");
-          renderNotice(`Security Lock: Automation disabled on protected domain (${denied}).`);
-          return state.pageContext;
-        }
+      // Check Tab Enabled ("Tab off" setting)
+      if (!state.tabEnabled) {
+        state.pageContext = {
+          title: activeTab.title || "Tab Off",
+          url: state.activeTabUrl || "",
+          selectedText: "",
+          bodyText: "",
+          charCount: 0,
+          interactiveElements: []
+        };
+        setTabReadState("off");
+        return state.pageContext;
+      }
+
+      // Check Domain Deny-List with strict hostname matching
+      if (!checkDomainAllowed(state.activeTabUrl)) {
+        state.pageContext = {
+          title: activeTab.title || "Protected Domain",
+          url: state.activeTabUrl || "",
+          selectedText: "",
+          bodyText: "",
+          charCount: 0,
+          interactiveElements: []
+        };
+        setTabReadState("off");
+        renderNotice("Security Lock: Automation disabled on protected domain.");
+        return state.pageContext;
       }
 
       // Message content.js and await the response with a safety timeout
@@ -2791,6 +2834,13 @@ async function handleSlashCommand(fullCommand) {
       renderAssistantPlainMessage(`Security Lock: Automated disinfection is disabled on sensitive domain.`);
       return;
     }
+    const approved = await requestSafetyApproval("click_element", {
+      element_description: "Neutralize pre-checked fee checkboxes in cart"
+    }, 1);
+    if (!approved) {
+      renderAssistantPlainMessage("Disinfection stopped by user.");
+      return;
+    }
     renderAssistantPlainMessage("🛡️ Disinfecting cart... unchecking unconsented fees and add-ons.", "system");
     
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
@@ -2820,26 +2870,34 @@ async function handleSlashCommand(fullCommand) {
       renderAssistantPlainMessage(`Security Lock: Autonomous cancellation is strictly prohibited on sensitive domain.`);
       return;
     }
+    if (state.tabGroup?.isConfigured && state.tabGroup?.isolationEnabled && !state.tabGroup?.isCurrentTabInGroup) {
+      renderAssistantPlainMessage(`🔒 **Tab Group Isolation Active:** Autonomous cancellation is strictly locked to tabs inside your managed workgroup.`);
+      return;
+    }
+    state.abortController = new AbortController();
+    setBusyState(true);
     renderAssistantPlainMessage("🤖 Initiating Autonomous Click-to-Cancel Engine...", "system");
     
     let stepsTaken = 0;
     let stuckRetries = 0;
     const maxSteps = 8;
     const maxRetries = 3;
+    const targetTabId = state.activeTabId;
 
     function runCancelLoop() {
       if (state.abortController?.signal.aborted) {
         renderAssistantPlainMessage("🛑 Cancellation flow stopped by user.", "system");
+        setBusyState(false);
         return;
       }
       if (stepsTaken >= maxSteps) {
         renderAssistantPlainMessage("⚠️ Halting: Reached maximum steps. Maze requires manual intervention.", "system");
+        setBusyState(false);
         return;
       }
 
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        const tab = (tabs && tabs[0]) || (state.activeTabId ? { id: state.activeTabId } : null);
-        if (!tab || !tab.id) {
+      chrome.tabs.get(targetTabId, (tab) => {
+        if (chrome.runtime.lastError || !tab || !tab.id) {
           renderAssistantPlainMessage("⏳ Waiting for page navigation to complete...", "system");
           setTimeout(runCancelLoop, 2000);
           return;
@@ -2853,6 +2911,7 @@ async function handleSlashCommand(fullCommand) {
           }
           
           if (response.status === "complete") {
+            setBusyState(false);
             renderAssistantPlainMessage(`✅ **SUCCESS:** ${response.message}`, "assistant");
           } else if (response.status === "requires_approval") {
             const approved = await requestSafetyApproval("click_element", {
@@ -2861,6 +2920,7 @@ async function handleSlashCommand(fullCommand) {
             }, stepsTaken + 1);
 
             if (!approved) {
+              setBusyState(false);
               renderAgentStepBadge(`Cancellation stopped by user: ${response.targetName}`, false);
               renderAssistantPlainMessage("🛑 Cancellation flow stopped by user.", "system");
               return;
@@ -2874,6 +2934,7 @@ async function handleSlashCommand(fullCommand) {
                 renderAssistantPlainMessage(`🔄 Step ${stepsTaken}: ${response.message}`, "system");
                 setTimeout(runCancelLoop, 1200);
               } else {
+                setBusyState(false);
                 renderAssistantPlainMessage(`⚠️ Failed to click target: ${clickRes?.error || "Target element not interactable"}`, "system");
               }
             });
@@ -2882,6 +2943,7 @@ async function handleSlashCommand(fullCommand) {
               stuckRetries++;
               setTimeout(runCancelLoop, 1500);
             } else {
+              setBusyState(false);
               renderAssistantPlainMessage(`⚠️ **Halted:** ${response.message}`, "system");
             }
           } else {
@@ -3105,7 +3167,8 @@ async function submitPrompt(promptText) {
     const apiClient = new SidekickApiClient(state.apiKey, state.model);
     const coordinator = new SidekickCoordinator(apiClient);
 
-    const result = await coordinator.processTurn(promptText, state.pageContext, {
+    state.hasExecutedPhysicalAction = false;
+    let result = await coordinator.processTurn(promptText, state.pageContext, {
       signal: state.abortController.signal,
       enclaveId: state.activeEnclaveId,
       onProgress: (actionLabel, detail, step) => {
@@ -3134,6 +3197,7 @@ async function submitPrompt(promptText) {
       return;
     }
 
+    // 3. Action Worker Execution (Element [#ID] based or Tab Group)
     // 3. Action Worker Execution (Autonomous Continuous Multi-Process Loop)
     if (result.type === "action") {
       showActiveTaskLedger(promptText);
@@ -3150,15 +3214,29 @@ async function submitPrompt(promptText) {
 
       try {
         while (!state.abortController?.signal.aborted) {
+          if (cognitiveLedger.stepNumber > MAX_AGENT_STEPS) {
+            renderNotice(`Reached task step limit (${MAX_AGENT_STEPS} steps). Complete.`);
+            break;
+          }
+
           const actionData = result.payload || {};
           const actType = actionData.action;
 
-          // Safe completion or informational exit
-          if (actionData.is_task_complete || actType === "none") {
+          // Explicit completion signal
+          if (actionData.is_task_complete) {
             const summary = actionData.completion_summary || actionData.explanation || "Objective reached successfully.";
             updateTaskLedger(actionData.plan_checklist || [], cognitiveLedger.stepNumber, actionData.situational_thought || "Task completed.");
             renderAssistantPlainMessage(`✅ **Task Completed:** ${summary}`);
             state.conversation.push({ role: "model", text: summary });
+            break;
+          }
+
+          // Non-actionable or element missing exit
+          if (actType === "none") {
+            const explanation = actionData.explanation || "No physical action could be targeted on this page.";
+            updateTaskLedger(actionData.plan_checklist || [], cognitiveLedger.stepNumber, actionData.situational_thought || explanation);
+            renderAssistantPlainMessage(`ℹ️ ${explanation}`);
+            state.conversation.push({ role: "model", text: explanation });
             break;
           }
 
@@ -3206,6 +3284,8 @@ async function submitPrompt(promptText) {
               renderAssistantPlainMessage(`Viewport smoothly scrolled ${dir}.`);
               cognitiveLedger.lastAction = stepDesc;
               cognitiveLedger.completedMilestones.push(stepDesc);
+              await delay(300);
+              await extractContext();
             } else if (actType === "navigate") {
               if (!actionData.url || (!actionData.url.startsWith("http://") && !actionData.url.startsWith("https://"))) {
                 renderAgentStepBadge(`Blocked navigation: Invalid URL`, false);
@@ -3229,7 +3309,7 @@ async function submitPrompt(promptText) {
               renderAssistantPlainMessage(stepDesc);
               cognitiveLedger.lastAction = stepDesc;
               cognitiveLedger.completedMilestones.push(stepDesc);
-              await delay(200);
+              await delay(350);
               await extractContext();
             } else if (actType === "click" || actType === "type") {
               let targetEl = null;
@@ -3277,8 +3357,8 @@ async function submitPrompt(promptText) {
                 element_description: targetEl.label,
               };
               if (!isClick) {
-                cdpArgs.text = actionData.text || "test";
-                cdpArgs.press_enter = false;
+                cdpArgs.text = actionData.text !== undefined ? actionData.text : "";
+                cdpArgs.press_enter = Boolean(actionData.press_enter || actionData.pressEnter);
               }
 
               // Check high-risk confirmation
@@ -3301,13 +3381,14 @@ async function submitPrompt(promptText) {
               cognitiveLedger.lastAction = stepDesc;
               cognitiveLedger.completedMilestones.push(stepDesc);
 
-              await delay(250);
+              await delay(300);
               await extractContext();
             }
           }
 
           // Cycle detection (Anti-thrashing: detect 3 repeated identical states)
-          const currentSignature = `${actType}:${actionData.target_id || ""}:${actionData.url || ""}:${state.pageContext?.interactiveElements?.length || 0}`;
+          const scrollYPos = typeof window !== "undefined" ? window.scrollY || 0 : 0;
+          const currentSignature = `${actType}:${actionData.target_id || ""}:${actionData.url || ""}:${actionData.direction || ""}:${scrollYPos}:${state.pageContext?.interactiveElements?.length || 0}`;
           cognitiveLedger.historySignatures.push(currentSignature);
           const last3 = cognitiveLedger.historySignatures.slice(-3);
           if (last3.length === 3 && last3[0] === last3[1] && last3[1] === last3[2]) {
@@ -3328,9 +3409,21 @@ async function submitPrompt(promptText) {
 
           if (result.type !== "action") {
             if (result.type === "answer") {
-              await renderAssistantResponse(result.payload);
+              const answerPayload = result.payload;
+              await renderAssistantResponse(answerPayload);
+              state.conversation.push({ role: "model", text: answerPayload });
+              saveSession();
+              return;
             } else if (result.type === "transform") {
-              renderAssistantMarkdownMessage(result.payload.text || "");
+              const transformPayload = result.payload;
+              renderAssistantMarkdownMessage(transformPayload.text || "", transformPayload.followUps || []);
+              state.conversation.push({ role: "model", text: transformPayload.text || "" });
+              saveSession();
+              return;
+            } else if (result.type === "action_blocked" || result.type === "security_blocked") {
+              const reason = result.reason || "Action blocked by safety policy invariants.";
+              renderAgentStepBadge(`Step ${cognitiveLedger.stepNumber} Blocked: ${reason}`, false);
+              renderAssistantPlainMessage(`🛡️ **Safety Gate Notification:**\n${reason}`);
             }
             break;
           }
@@ -3366,7 +3459,10 @@ async function submitPrompt(promptText) {
       renderNotice("Generation stopped.");
     } else {
       console.error("Multi-Agent Pipeline Error:", error);
-      const handled = await handleResilientDirectActionFallback(promptText);
+      let handled = false;
+      if (!state.hasExecutedPhysicalAction) {
+        handled = await handleResilientDirectActionFallback(promptText);
+      }
       if (!handled) {
         renderErrorCard(error, promptText);
       }
@@ -3634,6 +3730,7 @@ function resolveElementCoordinates(args, elements) {
  */
 async function executeJITAction(toolName, args) {
   if (!state.activeTabId) throw new Error("No active tab connected");
+  state.hasExecutedPhysicalAction = true;
 
   // Smart Coordinate & Element Resolution if coordinates are missing or invalid
   if (toolName === "click_element" || toolName === "type_text") {
@@ -3671,7 +3768,11 @@ async function executeJITAction(toolName, args) {
           args.x = liveCoords.x;
           args.y = liveCoords.y;
         }
-      } catch {}
+      } catch (err) {
+        if (err && err.message && err.message.includes("Security Exception")) {
+          throw err;
+        }
+      }
     }
   }
 
@@ -3695,7 +3796,7 @@ async function executeJITAction(toolName, args) {
   switch (toolName) {
     case "click_element":
       cdpAction = "click";
-      params = { x: args.x, y: args.y, selector: args.selector };
+      params = { x: args.x, y: args.y, selector: args.selector, element_description: args.element_description };
       break;
 
     case "type_text": {

@@ -66,9 +66,11 @@
       const { signal, elementHint, cognitiveLedger, thinkingLevel = "HIGH" } = options;
       const enclaveId = getSafeEnclaveId(options);
 
-      const elementListStr = (interactiveElements || []).slice(0, 35).map((el) => {
+      const elementListStr = (interactiveElements || []).slice(0, 45).map((el) => {
         const cleanLabel = sanitizeElementLabel(el.label);
-        return `[#${el.id}] ${el.role.toUpperCase()}: "${cleanLabel}"`;
+        const valStr = el.value ? ` [value: "${sanitizeElementLabel(el.value).slice(0, 30)}"]` : "";
+        const checkedStr = el.checked ? ` [checked]` : "";
+        return `[#${el.id}] ${el.role.toUpperCase()}: "${cleanLabel}"${valStr}${checkedStr}`;
       }).join("\n");
 
       let continuousSection = "";
@@ -137,9 +139,11 @@ RECENT PAGE CHANGES OBSERVED: "${cognitiveLedger.domDelta || "Initial DOM extrac
 `;
       }
 
-      const userContent = `ACTIVE PAGE: "${pageMeta?.title || "Untitled"}" (${pageMeta?.url || ""})
-${elementHint ? `ROUTER HINT: Target likely relates to "${elementHint}"\n` : ""}${ledgerUserContext}
+      const userContent = `${elementHint ? `ROUTER HINT: Target likely relates to "${elementHint}"\n` : ""}${ledgerUserContext}
 <<<UNTRUSTED_CONTENT_${enclaveId}>>>
+ACTIVE PAGE CONTEXT (passive data):
+Title: "${pageMeta?.title || "Untitled"}"
+URL: "${pageMeta?.url || ""}"
 VISIBLE INTERACTIVE CANDIDATES:
 ${elementListStr || "No interactive elements detected on this viewport."}
 <<<END_UNTRUSTED_CONTENT_${enclaveId}>>>

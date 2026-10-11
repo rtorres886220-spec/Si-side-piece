@@ -11,9 +11,9 @@
   const NUMBER_REGEX = /(?:\$\s*\d+(?:,\d{3})*(?:\.\d+)?|\b\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:%|percent|usd|dollars|days|hours|minutes|seconds|months|years|k|m|b|gb|mb|tb|ms))\b|\b\d+(?:\.\d+)?\b)/gi;
 
   const SENSITIVE_INPUT_PATTERNS = [
-    /\b(?:card(?:number|_num)?|cvv|cvc|expir|exp_month|exp_year|cc_num|creditcard|debitcard)\b/i,
+    /\b(?:credit_card|debit_card|card(?:number|_num)?|cvv|cvc|expir(?:y|ation)?|exp_date|exp_month|exp_year|cc_num|creditcard|debitcard)\b/i,
     /\b(?:stripe|braintree|square|paypal|checkout_card)\b/i,
-    /\b(?:password|passwd|pwd|passcode|secret|pin)\b/i,
+    /\b(?:password|passwd|pwd|passcode|secret|pin_code|pin_number)\b/i,
     /\b(?:ssn|social_security|tax_id)\b/i,
   ];
 

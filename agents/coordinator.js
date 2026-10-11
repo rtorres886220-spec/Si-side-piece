@@ -86,7 +86,7 @@
           promptText,
           pageContext?.interactiveElements || [],
           pageContext,
-          { signal, elementHint: route.element_hint, enclaveId, thinkingLevel }
+          { signal, elementHint: route.element_hint, enclaveId, thinkingLevel, cognitiveLedger: options.cognitiveLedger }
         );
       } else if (route.intent === "answer") {
         onProgress("Synthesizing grounded facts & receipts…", "2. Answer Worker", 2);
