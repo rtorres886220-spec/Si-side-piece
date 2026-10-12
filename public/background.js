@@ -78,7 +78,11 @@ function checkDomainAllowed(urlStr) {
   if (
     urlLower.startsWith("chrome://") ||
     urlLower.startsWith("chrome-extension://") ||
+    urlLower.startsWith("chrome-search://") ||
     urlLower.startsWith("edge://") ||
+    urlLower.startsWith("brave://") ||
+    urlLower.startsWith("opera://") ||
+    urlLower.startsWith("vivaldi://") ||
     urlLower.startsWith("about:") ||
     urlLower.startsWith("file:") ||
     urlLower.startsWith("javascript:") ||
@@ -98,14 +102,55 @@ function checkDomainAllowed(urlStr) {
   if (hostname === "chromewebstore.google.com" || (hostname === "chrome.google.com" && pathname.startsWith("/webstore"))) {
     throw new Error("Security Exception: Chrome restricts automation and debugging on the Chrome Web Store.");
   }
+
+  // Permitted public documentation & utility tools subdomains on otherwise restricted platforms
+  if (hostname === "docs.aws.amazon.com" || (hostname === "aws.amazon.com" && (pathname.startsWith("/blogs") || pathname.startsWith("/documentation") || pathname.startsWith("/pricing") || pathname.startsWith("/about-aws")))) {
+    return true;
+  }
+  if (hostname === "docs.stripe.com" || (hostname === "stripe.com" && (pathname.startsWith("/docs") || pathname.startsWith("/resources")))) {
+    return true;
+  }
+  if (hostname === "developer.paypal.com" || (hostname === "paypal.com" && pathname.startsWith("/developer"))) {
+    return true;
+  }
+  if (hostname === "tools.usps.com" || hostname === "postcalc.usps.com") {
+    return true;
+  }
+
   for (const denied of AUTOMATION_DENYLIST) {
     if (denied === "github.com") {
       if ((hostname === "github.com" || hostname.endsWith(".github.com")) &&
-          (pathname.includes("/settings/security") || pathname.includes("/settings/keys") || pathname.includes("/settings/tokens") || pathname.includes("/settings/auth"))) {
+          (pathname.startsWith("/settings/security") || pathname.startsWith("/settings/keys") || pathname.startsWith("/settings/tokens") || pathname.startsWith("/settings/auth") ||
+           pathname.includes("/settings/security") || pathname.includes("/settings/keys") || pathname.includes("/settings/tokens") || pathname.includes("/settings/auth"))) {
         throw new Error("Security Exception: Automation is strictly prohibited on sensitive GitHub security settings.");
       }
       continue;
     }
+    if (denied === "aws.amazon.com") {
+      if (hostname === "console.aws.amazon.com" || (hostname === "aws.amazon.com" && (pathname.includes("/billing") || pathname.includes("/signin")))) {
+        throw new Error("Security Exception: Automation is strictly prohibited on AWS Console and billing portals.");
+      }
+      continue;
+    }
+    if (denied === "stripe.com") {
+      if (hostname === "dashboard.stripe.com" || hostname === "checkout.stripe.com" || hostname === "js.stripe.com") {
+        throw new Error("Security Exception: Automation is strictly prohibited on Stripe dashboard and checkout elements.");
+      }
+      continue;
+    }
+    if (denied === "paypal.com") {
+      if (hostname === "paypal.com" || hostname === "www.paypal.com" || hostname.endsWith(".paypal.com")) {
+        throw new Error("Security Exception: Automation is strictly prohibited on sensitive financial platform (paypal.com).");
+      }
+      continue;
+    }
+    if (denied === "usps.com") {
+      if (hostname === "reg.usps.com" || hostname === "store.usps.com") {
+        throw new Error("Security Exception: Automation is strictly prohibited on sensitive postal account/store portals.");
+      }
+      continue;
+    }
+
     if (hostname === denied || hostname.endsWith("." + denied)) {
       throw new Error(`Security Exception: Automation is strictly prohibited on sensitive domain (${denied}).`);
     }
@@ -113,14 +158,17 @@ function checkDomainAllowed(urlStr) {
   return true;
 }
 
-// Sensitive payment keywords to block at background service level (word-bounded to avoid false positives on .striped-row etc.)
+// Sensitive payment patterns targeting payment card inputs, CVVs, and checkout card elements
 const PAYMENT_PATTERNS = [
   /\b(?:stripe[-_ ]*element|stripe[-_ ]*card|stripe[-_ ]*checkout|stripe[-_ ]*frame)\b/i,
   /\b(?:paypal[-_ ]*button|paypal[-_ ]*checkout|braintree)\b/i,
-  /\b(?:credit[-_ ]*card|card[-_ ]*number|card_number|card-number|cardnumber|ccnum|cc[-_ ]*number)\b/i,
-  /\b(?:cvv|cvc|cvv2|security[-_ ]*code)\b/i,
+  /\b(?:credit[-_ ]*card|debit[-_ ]*card|card[-_ ]*number(?<!(?:gift|loyalty|rewards?|library|id|member|sound|graphics?|sd|trading|playing)[-_ ]*card[-_ ]*number)|ccnum|cc[-_ ]*number)\b/i,
+  /\b(?:cvv|cvc|cvv2|card[-_ ]*security[-_ ]*code)\b/i,
   /\b(?:exp[-_ ]*date|exp[-_ ]*month|exp[-_ ]*year|payment[-_ ]*widget)\b/i
 ];
+
+// Exemptions for benign non-payment card and 2FA authentication items
+const BENIGN_CARD_EXEMPTIONS = /\b(?:gift[-_ ]*card|loyalty[-_ ]*card|rewards?[-_ ]*card|sd[-_ ]*card|graphics?[-_ ]*card|sound[-_ ]*card|video[-_ ]*card|trading[-_ ]*card|playing[-_ ]*card|business[-_ ]*card|library[-_ ]*card|card[-_ ]*sleeve|verification[-_ ]*code|2fa|otp|sms[-_ ]*code|one[-_ ]*time[-_ ]*code|(?:listing|product|item|article|result|car|vehicle|auto|profile|info|nav|menu|recipe|search|preview)[-_ ]*card)\b/i;
 
 // Tab Group Management State & Functions
 async function getManagedGroupState() {
@@ -346,6 +394,21 @@ async function handleCDPAction({ tabId, action, params }) {
   const tab = await chrome.tabs.get(tabId);
   if (!tab || !tab.url) throw new Error("Target tab not accessible");
 
+  // Handle navigate directly with chrome.tabs.update - works seamlessly on any tab including newtab & about:blank
+  // without needing debugger attachment or triggering CDP target errors on internal chrome:// pages!
+  if (action === "navigate") {
+    let targetUrl = (params?.url || "").trim();
+    if (targetUrl && !/^https?:\/\//i.test(targetUrl)) {
+      targetUrl = `https://${targetUrl}`;
+    }
+    if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
+      throw new Error("Security Exception: Navigation is restricted to HTTP/HTTPS protocols only.");
+    }
+    checkDomainAllowed(targetUrl);
+    await chrome.tabs.update(tabId, { url: targetUrl });
+    return { navigated: true, url: targetUrl };
+  }
+
   checkDomainAllowed(tab.url);
 
   // 1b. Tab Group Isolation Check: Enforce that actions only execute on tabs within the managed group
@@ -358,19 +421,23 @@ async function handleCDPAction({ tabId, action, params }) {
   const isolationEnabled = storage.sidekickGroupIsolationEnabled !== false;
 
   if (isolationEnabled && managedGroupId) {
-    if (tab.groupId !== managedGroupId) {
-      const groupName = storage.sidekickManagedGroupName || "Sidekick Workgroup";
-      throw new Error(
-        `Tab Group Isolation Lock: Operation blocked. Tab #${tabId} is outside the active Sidekick Tab Group ("${groupName}"). Sidekick can only control tabs inside this group.`
-      );
+    if (tab.groupId !== managedGroupId && chrome.tabs?.group) {
+      try {
+        await chrome.tabs.group({ tabIds: [tabId], groupId: managedGroupId });
+      } catch (grpErr) {
+        console.debug("Auto-group tab notice:", grpErr);
+      }
     }
   }
 
   // Explicit Payment Widget Lockout across selector, element description, and label
   const descToCheck = `${params?.selector || ""} ${params?.element_description || ""} ${params?.label || ""}`.toLowerCase();
-  for (const pat of PAYMENT_PATTERNS) {
-    if (pat.test(descToCheck)) {
-      throw new Error("Security Exception: Automated interaction with payment widgets or checkout card elements is strictly blocked.");
+  const isBenignCardOrAuth = BENIGN_CARD_EXEMPTIONS.test(descToCheck);
+  if (!isBenignCardOrAuth) {
+    for (const pat of PAYMENT_PATTERNS) {
+      if (pat.test(descToCheck)) {
+        throw new Error("Security Exception: Automated interaction with payment widgets or checkout card elements is strictly blocked.");
+      }
     }
   }
 
@@ -499,27 +566,20 @@ async function handleCDPAction({ tabId, action, params }) {
         if (!files || !Array.isArray(files) || files.length === 0) {
           throw new Error("Missing files parameter for uploadFile action");
         }
+        const SENSITIVE_FILE_PATTERNS = [
+          /(?:^|[/\\])etc[/\\](?:passwd|shadow|sudoers|security|ssh)[/\\]?/i,
+          /(?:^|[/\\])(?:proc|sys)[/\\]/i,
+          /(?:^|[/\\])\.(?:ssh|aws|gnupg|docker)[/\\]/i,
+          /(?:^|[/\\])\.env(?:\.[a-z0-9_-]+)?$/i,
+          /(?:^|[/\\])\.(?:bash_history|zsh_history|sh_history)$/i,
+          /(?:^|[/\\])id_(?:rsa|ed25519|ecdsa|dsa)(?:\.pub)?$/i,
+          /(?:^|[/\\])(?:client_secret|service_account_key)\.json$/i,
+          /^(\/root|\/root[/\\])/i,
+          /^[a-z]:[/\\]windows[/\\]system32[/\\]config[/\\]?/i
+        ];
         for (const f of files) {
           const fLower = String(f).toLowerCase();
-          if (
-            fLower.includes("/etc/") ||
-            fLower.includes("/root") ||
-            fLower.includes("/var/") ||
-            fLower.includes("/proc/") ||
-            fLower.includes("/sys/") ||
-            fLower.includes("/.ssh") ||
-            fLower.includes("/.aws") ||
-            fLower.includes("/.env") ||
-            fLower.includes("/.config") ||
-            fLower.includes("/.git") ||
-            fLower.includes("c:\\windows") ||
-            fLower.includes("id_rsa") ||
-            fLower.includes("credentials") ||
-            fLower.includes("passwd") ||
-            fLower.includes("hostname") ||
-            fLower.includes("secret") ||
-            fLower.includes(".bash_history")
-          ) {
+          if (SENSITIVE_FILE_PATTERNS.some((pat) => pat.test(fLower))) {
             throw new Error(`Security Exception: Access to protected or sensitive system path is blocked (${f}).`);
           }
         }

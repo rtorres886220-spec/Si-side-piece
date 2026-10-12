@@ -21,6 +21,18 @@ export interface SlashCommandDef {
 export const SLASH_COMMANDS: SlashCommandDef[] = [
   // ================= TIER 1: CORE ESSENTIALS =================
   {
+    id: "search",
+    name: "/search",
+    aliases: ["/google", "/find", "/web"],
+    tier: 1,
+    tierLabel: "Tier 1: Core Essentials",
+    syntax: "/search <search query>",
+    description: "Search Google and navigate active tab",
+    category: "Browser Action",
+    example: "/search 2008 Acura tl for sale",
+    requiresArg: true
+  },
+  {
     id: "summarize",
     name: "/summarize",
     aliases: ["/sum", "/brief"],
@@ -103,6 +115,18 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
   },
 
   // ================= TIER 2: ACTION, DATA & AUDIO =================
+  {
+    id: "navigate",
+    name: "/navigate",
+    aliases: ["/goto", "/openurl"],
+    tier: 2,
+    tierLabel: "Tier 2: Action, Data & Audio",
+    syntax: "/navigate <url>",
+    description: "Navigate active tab to destination URL",
+    category: "Browser Action",
+    example: "/navigate https://google.com",
+    requiresArg: true
+  },
   {
     id: "click",
     name: "/click",

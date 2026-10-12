@@ -39,7 +39,7 @@
 
       const systemInstruction = `You are a precision router for an autonomous browser companion.
 Classify the user prompt into exactly ONE specialist worker:
-1. "action": The user wants to physically interact with the browser or webpage (click a button, fill an input, submit a form, navigate, scroll, open a new tab, add to cart).
+1. "action": The user wants to physically interact with the browser or webpage (click a button, fill an input, submit a form, navigate, scroll, open a new tab, add to cart, search the web or internet).
 2. "answer": The user is asking a factual question about this webpage that requires receipts/citations (e.g. pricing, return policy, author, specifications, dates, table lookup).
 3. "transform": Open-ended synthesis, evaluation, or creative tasks (e.g. summarize, rewrite, translate, draft a reply, quiz, "is this worth it?", comparison, general reasoning, social banter).
 
@@ -96,7 +96,7 @@ USER PROMPT: "${promptText}"`;
 
       // Safe fallback heuristic only if model call completely fails
       const pLower = promptText.toLowerCase();
-      if (/\b(?:click|press|tap|type|fill|enter|submit|button|input|navigate|go\s+to|open|tab|scroll)\b/i.test(pLower)) {
+      if (/\b(?:click|press|tap|type|fill|enter|submit|button|input|navigate|go\s+to|open|tab|scroll|search|google)\b/i.test(pLower)) {
         return { intent: "action", target_sections: [], element_hint: null, reasoning: "fallback" };
       }
       if (/\b(?:rewrite|draft|translate|quiz|compare|worth\s+it|opinion)\b/i.test(pLower)) {

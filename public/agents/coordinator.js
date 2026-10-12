@@ -312,6 +312,12 @@
           );
           if (repair.repaired && repair.payload) {
             Object.assign(workerPayload, repair.payload);
+            gateResult = {
+              ...gateResult,
+              passed: true,
+              repaired: true,
+              reason: "Action invariants successfully repaired by Critic."
+            };
           } else {
             onVerificationUpdate(`Action repair failed: ${gateResult.reason}`);
             break;

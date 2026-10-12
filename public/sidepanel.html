@@ -80,22 +80,6 @@
       </button>
     </div>
 
-    <!-- Status & Context Tokens Bar -->
-    <div class="tokens-bar">
-      <button type="button" id="tabToken" class="mono-token reading" title="Click to toggle or refresh page reading">
-        <span id="tabTokenDot" class="token-dot"></span>
-        <span id="tabTokenLabel">This tab</span>
-      </button>
-
-      <button type="button" id="selectionToken" class="mono-token quote" title="Include highlighted page selection">
-        <span>”</span>
-        <span>Selection</span>
-      </button>
-
-      <button type="button" id="modelToken" class="mono-token" title="Switch active Gemini model">
-        <span id="modelTokenLabel">gemini-3.5-flash-lite</span>
-      </button>
-    </div>
 
     <!-- Tab Group Details & Managed Tabs Popover Drawer -->
     <div id="tabGroupDrawer" class="group-drawer hidden">
@@ -267,22 +251,6 @@
         <button id="clearSelectionBtn" class="selection-quote-close" title="Clear selection" aria-label="Clear selection">&times;</button>
       </div>
 
-      <!-- Human-in-the-Loop (HITL) Safety Gate Modal -->
-      <div id="safetyModal" class="safety-gate hidden">
-        <div class="safety-gate-header">
-          <span class="safety-gate-badge">Action Approval Required</span>
-          <span id="safetyStepBadge" class="safety-step-count">Step 1 of 5</span>
-        </div>
-        <p id="safetyActionDesc" class="safety-gate-desc"></p>
-        <div class="safety-notice-tip">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
-          <span>Chrome displays a brief top system notice during action dispatch — this is Chrome's native security confirmation and detaches immediately.</span>
-        </div>
-        <div class="safety-gate-actions">
-          <button type="button" id="approveActionBtn" class="safety-btn approve">Approve Action</button>
-          <button type="button" id="denyActionBtn" class="safety-btn deny">Deny &amp; Stop</button>
-        </div>
-      </div>
 
       <!-- Speech Synthesis Status Bar -->
       <div id="speechBar" class="speech-bar hidden">

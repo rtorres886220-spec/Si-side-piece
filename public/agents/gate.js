@@ -169,8 +169,11 @@
         const isHarmlessLink = (elRole === "link" || elRole === "a") &&
           (elLabel.includes("forgot") || elLabel.includes("help") || elLabel.includes("learn") || elLabel.includes("terms") || elLabel.includes("gift"));
 
-        if (!isHarmlessLink) {
-          const elDesc = `${elLabel} ${elSelector} ${elRole}`;
+        const elDesc = `${elLabel} ${elSelector} ${elRole}`;
+        // Allow benign card inputs (gift cards, loyalty cards, rewards cards, tech cards, 2FA/SMS codes)
+        const isBenignCardOrAuth = /\b(?:gift[-_ ]*card|loyalty[-_ ]*card|rewards?[-_ ]*card|sd[-_ ]*card|graphics?[-_ ]*card|sound[-_ ]*card|video[-_ ]*card|trading[-_ ]*card|playing[-_ ]*card|business[-_ ]*card|library[-_ ]*card|card[-_ ]*sleeve|verification[-_ ]*code|2fa|otp|sms[-_ ]*code|one[-_ ]*time[-_ ]*code)\b/i.test(elDesc);
+
+        if (!isHarmlessLink && !isBenignCardOrAuth) {
           for (const pattern of SENSITIVE_INPUT_PATTERNS) {
             if (pattern.test(elDesc)) {
               if (isTyping || isInputRole || /card[-_ ]*number|cvv|cvc|security[-_ ]*code|pin/i.test(elDesc)) {

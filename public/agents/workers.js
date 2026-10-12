@@ -109,7 +109,8 @@ CRITICAL RULES:
    - "open_tab": opens a new tab inside the managed Tab Group ("url")
    - "none": if the element is absent or request cannot be performed on this page, return action "none" with an explanation.
 3. If the user asks to open a new tab or visit a new site in a new tab, use action "open_tab".
-4. If the required element is not listed in the viewport, return action "none" with a clear explanation.
+4. If the user asks to search the web or internet (e.g. "search internet for 2008 Acura tl for sale", "google X", "search for X"), use action "navigate" with url "https://www.google.com/search?q=..." (or "open_tab" if requested in a new tab).
+5. If the required element is not listed in the viewport, return action "none" with a clear explanation.
 
 Respond with ONLY valid JSON:
 {
@@ -221,6 +222,12 @@ USER COMMAND: "${promptText}"`;
         if (!rawAction) {
           if (/\b(?:new|open)\s+tab\b/i.test(promptText)) {
             rawAction = "open_tab";
+          } else if (/^(?:search(?:\s+(?:the\s+)?(?:internet|web|google))?(?:\s+for)?|google|look\s+up)\b/i.test(promptText.trim())) {
+            rawAction = "navigate";
+            const q = promptText.replace(/^(?:search(?:\s+(?:the\s+)?(?:internet|web|google))?(?:\s+for)?|google|look\s+up)\s+/i, "").trim();
+            if (q && !json.url) {
+              json.url = `https://www.google.com/search?q=${encodeURIComponent(q)}`;
+            }
           } else if (json.url) {
             rawAction = "navigate";
           } else if (json.text && targetId !== null) {
@@ -262,6 +269,21 @@ USER COMMAND: "${promptText}"`;
           target_id: null,
           explanation: `Inferred URL from context: ${urlMatch[0]}`
         };
+      }
+
+      // Check for search intent in prompt
+      const searchMatch = promptText.match(/^(?:search(?:\s+(?:the\s+)?(?:internet|web|google))?(?:\s+for)?|google|look\s+up)\s+(.+)$/i);
+      if (searchMatch) {
+        const query = searchMatch[1].trim();
+        if (query) {
+          const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+          return {
+            action: isNewTabReq ? "open_tab" : "navigate",
+            url: searchUrl,
+            target_id: null,
+            explanation: `Navigating to search for "${query}"`
+          };
+        }
       }
 
       // Check for scroll action

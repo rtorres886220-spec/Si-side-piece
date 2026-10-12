@@ -254,10 +254,21 @@ export function routeUserRequest(prompt: string): RouterResult {
   }
 
   // Navigate actions
-  const navMatch = p.match(/(?:\b)(?:navigate\s+to|go\s+to|open)\s+(https?:\/\/[^\s]+)/i);
+  const navMatch = p.match(/(?:\b)(?:navigate\s+to|go\s+to|open|visit|browse\s+to)\s+([a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s]*)?|https?:\/\/[^\s]+)/i);
   if (navMatch) {
+    let dest = navMatch[1].trim();
+    if (!/^https?:\/\//i.test(dest)) dest = `https://${dest}`;
     actionTypes.add("navigate");
-    navigatePayload = { url: navMatch[1].trim() };
+    navigatePayload = { url: dest };
+  } else if (!isAskingAboutAction) {
+    const searchMatch = p.match(/(?:\b)(?:search(?:\s+(?:the\s+)?(?:internet|web|google))?(?:\s+for)?|google|look\s*up|find(?:\s+me)?)\s+(.+)$/i);
+    if (searchMatch) {
+      const q = searchMatch[1].trim();
+      if (q) {
+        actionTypes.add("navigate");
+        navigatePayload = { url: `https://www.google.com/search?q=${encodeURIComponent(q)}` };
+      }
+    }
   }
 
   // Upload actions

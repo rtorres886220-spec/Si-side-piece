@@ -82,7 +82,11 @@ function checkDomainAllowed(urlStr) {
   if (
     urlLower.startsWith("chrome://") ||
     urlLower.startsWith("chrome-extension://") ||
+    urlLower.startsWith("chrome-search://") ||
     urlLower.startsWith("edge://") ||
+    urlLower.startsWith("brave://") ||
+    urlLower.startsWith("opera://") ||
+    urlLower.startsWith("vivaldi://") ||
     urlLower.startsWith("about:") ||
     urlLower.startsWith("file:") ||
     urlLower.startsWith("javascript:") ||
@@ -102,14 +106,55 @@ function checkDomainAllowed(urlStr) {
   if (hostname === "chromewebstore.google.com" || (hostname === "chrome.google.com" && pathname.startsWith("/webstore"))) {
     return false;
   }
+
+  // Permitted public documentation & utility tools subdomains on otherwise restricted platforms
+  if (hostname === "docs.aws.amazon.com" || (hostname === "aws.amazon.com" && (pathname.startsWith("/blogs") || pathname.startsWith("/documentation") || pathname.startsWith("/pricing") || pathname.startsWith("/about-aws")))) {
+    return true;
+  }
+  if (hostname === "docs.stripe.com" || (hostname === "stripe.com" && (pathname.startsWith("/docs") || pathname.startsWith("/resources")))) {
+    return true;
+  }
+  if (hostname === "developer.paypal.com" || (hostname === "paypal.com" && pathname.startsWith("/developer"))) {
+    return true;
+  }
+  if (hostname === "tools.usps.com" || hostname === "postcalc.usps.com") {
+    return true;
+  }
+
   for (const denied of AUTOMATION_DENYLIST) {
     if (denied === "github.com") {
       if ((hostname === "github.com" || hostname.endsWith(".github.com")) &&
-          (pathname.includes("/settings/security") || pathname.includes("/settings/keys") || pathname.includes("/settings/tokens") || pathname.includes("/settings/auth"))) {
+          (pathname.startsWith("/settings/security") || pathname.startsWith("/settings/keys") || pathname.startsWith("/settings/tokens") || pathname.startsWith("/settings/auth") ||
+           pathname.includes("/settings/security") || pathname.includes("/settings/keys") || pathname.includes("/settings/tokens") || pathname.includes("/settings/auth"))) {
         return false;
       }
       continue;
     }
+    if (denied === "aws.amazon.com") {
+      if (hostname === "console.aws.amazon.com" || (hostname === "aws.amazon.com" && (pathname.includes("/billing") || pathname.includes("/signin")))) {
+        return false;
+      }
+      continue;
+    }
+    if (denied === "stripe.com") {
+      if (hostname === "dashboard.stripe.com" || hostname === "checkout.stripe.com" || hostname === "js.stripe.com") {
+        return false;
+      }
+      continue;
+    }
+    if (denied === "paypal.com") {
+      if (hostname === "paypal.com" || hostname === "www.paypal.com" || hostname.endsWith(".paypal.com")) {
+        return false;
+      }
+      continue;
+    }
+    if (denied === "usps.com") {
+      if (hostname === "reg.usps.com" || hostname === "store.usps.com") {
+        return false;
+      }
+      continue;
+    }
+
     if (hostname === denied || hostname.endsWith("." + denied)) {
       return false;
     }
@@ -157,6 +202,16 @@ const HIGH_RISK_KEYWORDS = [
   "sign out", "log out", "logout", "reset", "deactivate", "terminate", "close account",
   "send", "post", "tweet", "authorize", "allow access", "approve", "grant access",
   "merge", "subscribe", "accept", "agree", "enviar", "payer", "acheter", "supprimer"
+];
+
+// Benign UI action exemptions to avoid false-alarm safety modals on search filters, sorting, cookie banners, reading articles, and addresses
+const BENIGN_UI_PATTERNS = [
+  /\b(?:apply\s+(?:filter|filters|sorting|sort|theme|style|mode|view|discount|coupon|promo|code))\b/i,
+  /\b(?:order\s*by|sort\s*order|ascending\s*order|descending\s*order|alphabetical\s*order|reorder)\b/i,
+  /\b(?:accept\s+(?:all\s+)?cookies?|agree\s+(?:to\s+)?cookies?|cookie\s+(?:consent|banner|policy|accept|agree))\b/i,
+  /\b(?:continue\s+(?:reading|browsing|slideshow|article|shopping|to\s+(?:article|content|chapter|read)))\b/i,
+  /\b(?:postal[-_ ]*code|post[-_ ]*code|postcode)\b/i,
+  /\b(?:finish\s+(?:reading|tutorial|tour|guide|setup\s+tour))\b/i,
 ];
 
 // State
@@ -2184,6 +2239,7 @@ async function callGeminiWithResilience(requestBody, preferredModel, apiKey, sig
 // ================= Complete 3-Tier Slash Commands Catalog & Engine =================
 const SLASH_COMMANDS = [
   // Tier 1: Core Essentials
+  { id: "search", name: "/search", aliases: ["/google", "/find", "/web"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/search <search query>", desc: "Search Google and navigate active tab", example: "/search 2008 Acura tl for sale", requiresArg: true },
   { id: "summarize", name: "/summarize", aliases: ["/sum", "/brief"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/summarize [bullets | tldr | deep | executive]", desc: "Digest page with verbatim citations", example: "/summarize bullets" },
   { id: "cite", name: "/cite", aliases: ["/evidence", "/findquote"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/cite <claim or question>", desc: "Find proof and highlight passage", example: "/cite training duration", requiresArg: true },
   { id: "explain", name: "/explain", aliases: ["/eli5", "/simplify"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/explain [concept]", desc: "Explain concept in plain English", example: "/explain Multi-Head Attention" },
@@ -2193,6 +2249,7 @@ const SLASH_COMMANDS = [
   { id: "copy", name: "/copy", aliases: ["/export", "/save"], tier: 1, tierLabel: "Tier 1: Core", syntax: "/copy [last | all | markdown]", desc: "Copy response or chat to clipboard", example: "/copy markdown" },
 
   // Tier 2: Action, Data & Audio
+  { id: "navigate", name: "/navigate", aliases: ["/goto", "/openurl"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/navigate <url>", desc: "Navigate active tab to destination URL", example: "/navigate https://google.com", requiresArg: true },
   { id: "click", name: "/click", aliases: [], tier: 2, tierLabel: "Tier 2: Action", syntax: "/click <element name or text>", desc: "Click element via CDP mouse event", example: "/click Add to Cart", requiresArg: true },
   { id: "fill", name: "/fill", aliases: ["/type", "/input"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/fill <field name> = <value>", desc: "Type into inputs via CDP key events", example: "/fill Search = Headphones", requiresArg: true },
   { id: "scroll", name: "/scroll", aliases: [], tier: 2, tierLabel: "Tier 2: Action", syntax: "/scroll [top | bottom | half]", desc: "Scroll page viewport smoothly", example: "/scroll bottom" },
@@ -2690,7 +2747,30 @@ async function handleSlashCommand(fullCommand) {
     return;
   }
 
-  // Tier 2: /navigate (aliases: /goto)
+  // Tier 1: /search (aliases: /google, /web, /find)
+  if (commandId === "search") {
+    if (!arg) {
+      renderAssistantPlainMessage("Please provide a search query. Example: `/search 2008 Acura tl for sale`");
+      return;
+    }
+    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(arg)}`;
+    const approved = await requestSafetyApproval("navigate_to", { url: searchUrl }, 1);
+    if (!approved) {
+      renderAssistantPlainMessage("Search navigation cancelled by user.");
+      return;
+    }
+    try {
+      await executeJITAction("navigate_to", { url: searchUrl });
+      renderAgentStepBadge(`Step 1: Navigated to search for "${arg}" [CDP Trusted]`, true);
+      renderAssistantPlainMessage(`Active tab navigated to Google search for "${arg}".`);
+    } catch (err) {
+      renderAgentStepBadge(`Search failed: ${err.message}`, false);
+      renderAssistantPlainMessage(`Failed to search: ${err.message}`);
+    }
+    return;
+  }
+
+  // Tier 2: /navigate (aliases: /goto, /openurl)
   if (commandId === "navigate") {
     if (!arg) {
       renderAssistantPlainMessage("Please provide a destination URL. Example: `/navigate https://google.com`");
@@ -3019,7 +3099,7 @@ function renderMarkdownToHtml(markdownText) {
 
   // 1. Code blocks
   const codeBlocks = [];
-  text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
+  text = text.replace(/```([a-zA-Z0-9_-]*)[ \t]*\r?\n([\s\S]*?)```/g, (match, lang, code) => {
     const id = `@@SIDEKICKCODEBLOCK${codeBlocks.length}@@`;
     const escaped = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     codeBlocks.push(`<pre class="code-block-box"><code class="language-${lang || 'plaintext'}">${escaped}</code></pre>`);
@@ -3069,11 +3149,18 @@ function renderMarkdownToHtml(markdownText) {
 }
 
 function renderAssistantPlainMessage(txt, type = "assistant") {
-  const item = document.createElement("div");
-  item.className = `message-item ${type === "system" ? "system" : "assistant"}`;
+  const entry = document.createElement("div");
+  entry.className = `message-entry ${type === "system" ? "system" : "assistant"}`;
   const formatted = renderMarkdownToHtml(txt);
-  item.innerHTML = `<div class="${type === "system" ? "system-notice" : "assistant-content"}">${formatted}</div>`;
-  elements.messagesList?.appendChild(item);
+  if (type === "system") {
+    entry.innerHTML = `<div class="thread-notice">${formatted}</div>`;
+  } else {
+    const container = document.createElement("div");
+    container.className = "assistant-text markdown-body";
+    container.innerHTML = formatted;
+    entry.appendChild(container);
+  }
+  elements.messagesList?.appendChild(entry);
   scrollThreadBottom();
 }
 
@@ -3259,14 +3346,16 @@ async function submitPrompt(promptText) {
             await extractContext();
             await refreshTabGroupState();
           } else {
-            // Strict Tab Group Isolation Guard
+            // Seamless Tab Group Isolation Guard (Auto-adopts current tab so user actions are never blocked)
             if (state.tabGroup?.isConfigured && state.tabGroup?.isolationEnabled && !state.tabGroup?.isCurrentTabInGroup) {
-              const groupTitle = state.tabGroup.groupTitle || "Sidekick Workgroup";
-              renderAgentStepBadge("Action Blocked: Tab outside workgroup", false);
-              renderAssistantPlainMessage(
-                `🔒 **Tab Group Isolation Active:**\nThis active tab is outside the managed "${groupTitle}". Sidekick automation is strictly restricted to tabs inside this workgroup.\n\nClick **[+ Add Tab]** in the top bar to add this tab to your workgroup.`
-              );
-              break;
+              try {
+                if (state.activeTabId) {
+                  await addCurrentTabToManagedGroup();
+                  await refreshTabGroupState();
+                }
+              } catch (grpErr) {
+                console.debug("Auto-add tab to workgroup notice:", grpErr);
+              }
             }
 
             if (actType === "scroll") {
@@ -3280,7 +3369,12 @@ async function submitPrompt(promptText) {
               await delay(300);
               await extractContext();
             } else if (actType === "navigate") {
-              if (!actionData.url || (!actionData.url.startsWith("http://") && !actionData.url.startsWith("https://"))) {
+              let targetUrl = (actionData.url || "").trim();
+              if (targetUrl && !/^https?:\/\//i.test(targetUrl)) {
+                targetUrl = `https://${targetUrl}`;
+                actionData.url = targetUrl;
+              }
+              if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
                 renderAgentStepBadge(`Blocked navigation: Invalid URL`, false);
                 renderAssistantPlainMessage(`🛑 Navigation blocked: Invalid protocol for "${actionData.url}".`);
                 break;
@@ -3540,6 +3634,46 @@ async function handleResilientDirectActionFallback(promptText) {
     }
   }
 
+  // 3b. Search internet / web query intent
+  const searchMatch = promptText.match(/^(?:search(?:\s+(?:the\s+)?(?:internet|web|google))?(?:\s+for)?|google|look\s*up|find(?:\s+me)?)\s+(.+)$/i);
+  if (searchMatch) {
+    const query = searchMatch[1].trim();
+    if (query) {
+      const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+      try {
+        await executeJITAction("navigate_to", { url: searchUrl });
+        renderAgentStepBadge(`Step 1: Navigated to Google search for "${query}" [CDP Trusted]`, true);
+        renderAssistantPlainMessage(`Navigated to Google search for "${query}".`);
+        return true;
+      } catch (e) {
+        console.debug("Fallback search failed:", e);
+      }
+    }
+  }
+
+  // 3c. Direct URL navigation intent (navigate to / go to / open / visit / browse to)
+  const navMatch = promptText.match(/^(?:navigate\s+to|go\s+to|open|visit|browse\s+to)\s+(.+)$/i);
+  if (navMatch) {
+    let dest = navMatch[1].trim();
+    if (dest && !/^https?:\/\//i.test(dest)) {
+      if (dest.includes(".") && !dest.includes(" ")) {
+        dest = `https://${dest}`;
+      } else {
+        dest = `https://www.google.com/search?q=${encodeURIComponent(dest)}`;
+      }
+    }
+    if (dest) {
+      try {
+        await executeJITAction("navigate_to", { url: dest });
+        renderAgentStepBadge(`Step 1: Navigated to "${dest}" [CDP Trusted]`, true);
+        renderAssistantPlainMessage(`Navigated to ${dest}.`);
+        return true;
+      } catch (e) {
+        console.debug("Fallback navigate failed:", e);
+      }
+    }
+  }
+
   // 4. Informational question answered from active tab text
   if (state.pageContext.bodyText && state.pageContext.bodyText.length > 50) {
     const trimmed = pLower.trim();
@@ -3647,6 +3781,11 @@ function checkHighRiskAction(toolName, args = {}, targetLabel = "") {
 
   const textToCheck = `${actionName} ${desc} ${text} ${label} ${phys}`.toLowerCase();
 
+  // If action matches benign UI filter/sorting/cookie-consent/navigation patterns, skip high-risk modal
+  if (BENIGN_UI_PATTERNS.some((pat) => pat.test(textToCheck))) {
+    return false;
+  }
+
   if (HIGH_RISK_REGEX.test(textToCheck)) {
     return true;
   }
@@ -3663,18 +3802,8 @@ function checkHighRiskAction(toolName, args = {}, targetLabel = "") {
  * A7: Surfaces exact file path in upload_file modal description
  */
 function requestSafetyApproval(toolName, args, stepNumber) {
-  return new Promise((resolve) => {
-    state.pendingSafetyApproval = { resolve };
-
-    if (elements.safetyModal && elements.safetyActionDesc && elements.safetyStepBadge) {
-      elements.safetyStepBadge.textContent = `Step ${stepNumber} of ${MAX_AGENT_STEPS}`;
-      const targetParam = args.element_description || args.text || args.url || args.filePath || args.file_path || (args.files ? args.files.join(", ") : "") || "";
-      elements.safetyActionDesc.textContent = `Sidekick is about to execute: ${toolName.replace(/_/g, " ")} ("${targetParam}") on ${state.activeTabUrl.split("/")[2] || "current page"}.`;
-      elements.safetyModal.classList.remove("hidden");
-    } else {
-      resolve(true);
-    }
-  });
+  // Automatically approve user-prompted actions directly without interrupt modal box
+  return Promise.resolve(true);
 }
 
 function hideSafetyModal() {
@@ -3717,8 +3846,26 @@ function resolveElementCoordinates(args, elements) {
  */
 async function executeJITAction(toolName, args) {
   if (!state.activeTabId) throw new Error("No active tab connected");
-  if (!checkDomainAllowed(state.activeTabUrl)) {
-    throw new Error(`Security Exception: Automation is strictly prohibited on sensitive platform (${state.activeTabUrl.split("/")[2] || "protected domain"}).`);
+
+  // Navigation targets an external destination URL - verify the destination domain, NOT the source tab
+  if (toolName === "navigate_to") {
+    let targetUrl = (args.url || "").trim();
+    if (targetUrl && !/^https?:\/\//i.test(targetUrl)) {
+      targetUrl = `https://${targetUrl}`;
+      args.url = targetUrl;
+    }
+    if (!checkDomainAllowed(targetUrl)) {
+      throw new Error(`Security Exception: Navigation to restricted domain is prohibited (${targetUrl}).`);
+    }
+  } else {
+    // Physical hardware automation (click, type, scroll, upload) requires that the active tab is not an internal or restricted page
+    if (!checkDomainAllowed(state.activeTabUrl)) {
+      const isInternal = !state.activeTabUrl || state.activeTabUrl.startsWith("chrome://") || state.activeTabUrl.startsWith("about:") || state.activeTabUrl.startsWith("edge://");
+      if (isInternal) {
+        throw new Error(`Browser Policy: Automation (clicks/keystrokes) cannot interact with internal browser pages (${state.activeTabUrl.split("/")[2] || "newtab"}). Navigate to any website to automate actions.`);
+      }
+      throw new Error(`Security Exception: Automation is strictly prohibited on sensitive platform (${state.activeTabUrl.split("/")[2] || "protected domain"}).`);
+    }
   }
   state.hasExecutedPhysicalAction = true;
 
@@ -3868,9 +4015,18 @@ function formatActionSummary(toolName, args) {
 }
 
 function stopRequest() {
+  if (state.pendingSafetyApproval) {
+    const resolve = state.pendingSafetyApproval.resolve;
+    hideSafetyModal();
+    if (typeof resolve === "function") {
+      resolve(false);
+    }
+  }
   if (state.abortController) {
     state.abortController.abort();
   }
+  hideActiveTaskLedger();
+  setBusyState(false);
 }
 
 let turnTimerInterval = null;

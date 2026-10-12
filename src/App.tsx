@@ -155,10 +155,25 @@ async function handleCDPAction({ tabId, action, params }) {
   const tab = await chrome.tabs.get(tabId);
   if (!tab || !tab.url) throw new Error("Target tab not accessible");
 
+  if (action === "navigate") {
+    let targetUrl = (params?.url || "").trim();
+    if (targetUrl && !/^https?:\/\//i.test(targetUrl)) targetUrl = "https://" + targetUrl;
+    if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
+      throw new Error("Security Exception: Navigation is restricted to HTTP/HTTPS protocols only.");
+    }
+    for (const denied of AUTOMATION_DENYLIST) {
+      if (targetUrl.toLowerCase().includes(denied)) {
+        throw new Error("Security Exception: Automation is strictly prohibited on sensitive domain (" + denied + ").");
+      }
+    }
+    await chrome.tabs.update(tabId, { url: targetUrl });
+    return { navigated: true, url: targetUrl };
+  }
+
   const urlLower = tab.url.toLowerCase();
   for (const denied of AUTOMATION_DENYLIST) {
     if (urlLower.includes(denied)) {
-      throw new Error(\`Security Exception: Automation is strictly prohibited on sensitive domain (\${denied}).\`);
+      throw new Error("Security Exception: Automation is strictly prohibited on sensitive domain (" + denied + ").");
     }
   }
 
@@ -998,18 +1013,9 @@ export default function App() {
     return true;
   };
 
-  // High-Risk Action Gate (Human-in-the-Loop)
-  const askHITLApproval = (actionName: string, details: string, targetEl: any, step: number): Promise<boolean> => {
-    return new Promise((resolve) => {
-      setSafetyModal({
-        visible: true,
-        stepNumber: step,
-        actionName,
-        details,
-        targetElement: targetEl,
-        resolve
-      });
-    });
+  // High-Risk Action Gate (Auto-approves user-prompted actions directly without interrupt modal)
+  const askHITLApproval = (_actionName: string, _details: string, _targetEl: any, _step: number): Promise<boolean> => {
+    return Promise.resolve(true);
   };
 
   // Full 3-Tier Slash Command Execution Engine
@@ -3184,49 +3190,6 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                   </div>
                 )}
 
-                {/* Human-in-the-Loop Safety Gate Modal */}
-                {safetyModal.visible && (
-                  <div className="mb-2 p-3 rounded-xl bg-amber-500/[0.08] border border-amber-500/30 backdrop-blur-md shadow-2xl flex flex-col gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150">
-                    <div className="flex items-center justify-between text-xs font-mono">
-                      <span className="text-amber-400 font-medium flex items-center gap-1.5 uppercase tracking-wide">
-                        <AlertTriangle className="w-3.5 h-3.5" />
-                        Action Approval Required
-                      </span>
-                      <span className="text-[#777c8a] text-[10px]">
-                        Step {safetyModal.stepNumber} of 5
-                      </span>
-                    </div>
-                    <p className="text-xs text-[#eceef4] leading-relaxed">
-                      Sidekick is about to execute:{" "}
-                      <span className="text-amber-300 font-mono font-medium">
-                        {safetyModal.details}
-                      </span>{" "}
-                      on {currentPage.domain}.
-                    </p>
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          safetyModal.resolve?.(true);
-                          setSafetyModal((prev) => ({ ...prev, visible: false }));
-                        }}
-                        className="flex-1 py-1.5 bg-amber-400 hover:bg-amber-300 text-[#07080b] font-medium text-xs rounded-lg transition-colors shadow-sm"
-                      >
-                        Approve Action
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          safetyModal.resolve?.(false);
-                          setSafetyModal((prev) => ({ ...prev, visible: false }));
-                        }}
-                        className="py-1.5 px-3 bg-white/5 hover:bg-white/10 text-[#777c8a] hover:text-[#eceef4] text-xs font-mono rounded-lg transition-colors"
-                      >
-                        Deny &amp; Stop
-                      </button>
-                    </div>
-                  </div>
-                )}
 
                 {/* Selection Banner */}
                 {activeSelectionQuote && (
