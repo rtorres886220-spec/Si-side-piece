@@ -137,6 +137,7 @@ export async function validateAndPackExtension(options: {
     "gate.js",
     "retriever.js",
     "router.js",
+    "surveyEngine.js",
     "workers.js",
   ];
 

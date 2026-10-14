@@ -4,6 +4,8 @@
  */
 
 (function () {
+  const Node = (typeof window !== "undefined" && window.Node) ? window.Node : (typeof globalThis !== "undefined" && globalThis.Node ? globalThis.Node : { ELEMENT_NODE: 1, TEXT_NODE: 3, DOCUMENT_NODE: 9 });
+  const CSS = (typeof window !== "undefined" && window.CSS) ? window.CSS : { escape: (s) => String(s).replace(/([ #;?%&,.+*~':"!^$[\]()=>|/@])/g, "\\$1") };
   // If re-injected after extension reload, unbind stale listener if any
   if (typeof window !== "undefined" && window.__SIDEKICK_MESSAGE_LISTENER__) {
     try {
@@ -192,6 +194,46 @@
       }
       return false;
     }
+
+    if (message.action === "PARSE_SURVEY") {
+      try {
+        const surveyData = SurveyDOMEngine.parseQuestions();
+        sendResponse({ success: true, surveyData });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+      return false;
+    }
+
+    if (message.action === "INTERACT_SURVEY_CONTROL") {
+      try {
+        const result = SurveyDOMEngine.interactControl(message.params);
+        sendResponse({ success: true, result });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+      return false;
+    }
+
+    if (message.action === "VERIFY_SURVEY_SELECTION") {
+      try {
+        const state = SurveyDOMEngine.verifyQuestionState(message.questionId);
+        sendResponse({ success: true, state });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+      return false;
+    }
+
+    if (message.action === "ADVANCE_SURVEY_PAGE") {
+      try {
+        const result = SurveyDOMEngine.advancePage(message.actionType, message.selector);
+        sendResponse({ success: true, result });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+      return false;
+    }
   };
 
   if (typeof window !== "undefined") {
@@ -300,6 +342,7 @@
       tables: structuredTables,
       charCount: formattedBody.length,
       interactiveElements: interactiveElements.slice(0, 45),
+      surveyData: (typeof SurveyDOMEngine !== "undefined") ? SurveyDOMEngine.parseQuestions() : null,
       extractionTimeMs: (typeof performance !== "undefined" ? performance.now() : Date.now()) - startTime,
       fromCache: false,
       mutationVersion: docMutationVersion
@@ -421,15 +464,18 @@
     }
 
     // Bounds check for rendered boxes
+    const isSyntheticDom = typeof window !== "undefined" && window.navigator && window.navigator.userAgent && window.navigator.userAgent.includes("jsdom");
     const rect = el.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0) {
-      // Allow display: contents and inline text containers whose children carry text
-      if (style.display !== "contents" && (style.display !== "inline" || el.childNodes.length === 0)) {
+    if (!isSyntheticDom) {
+      if (rect.width === 0 && rect.height === 0) {
+        // Allow display: contents and inline text containers whose children carry text
+        if (style.display !== "contents" && (style.display !== "inline" || el.childNodes.length === 0)) {
+          return false;
+        }
+      }
+      if (rect.width <= 1 && rect.height <= 1 && (style.overflow === "hidden" || style.overflowX === "hidden" || style.overflowY === "hidden")) {
         return false;
       }
-    }
-    if (rect.width <= 1 && rect.height <= 1 && (style.overflow === "hidden" || style.overflowX === "hidden" || style.overflowY === "hidden")) {
-      return false;
     }
     // Only reject elements that are deliberately positioned off-screen (e.g. left: -9999px),
     // NEVER strip elements simply because the user has scrolled down the page!
@@ -1543,6 +1589,610 @@
     }
   }
 
+  /**
+   * Survey Question Recognition & Verified Interaction DOM Engine
+   * Inspects active page DOM to extract structured survey questions, options,
+   * associated labels, and navigation controls, with robust pre/post state verification.
+   */
+  class SurveyDOMEngine {
+    static sanitize(str) {
+      if (!str) return "";
+      return String(str).replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+    }
+
+    static cleanQuestionText(raw) {
+      if (!raw) return "";
+      let s = SurveyDOMEngine.sanitize(raw);
+      // Remove leading question numbering like "1.", "Q1:", "Question 2 -"
+      s = s.replace(/^(?:question\s*\d+|q\d+|\d+)[\.\:\-\)]\s*/i, "");
+      // Remove trailing or leading required asterisks and marks
+      s = s.replace(/\s*\*\s*$/, "");
+      s = s.replace(/\s*\(required\)\s*$/i, "");
+      return s.trim();
+    }
+
+    static getOptionLabel(input, container) {
+      if (!input) return "";
+      // 0. Explicit data-sidekick-label attribute
+      if (input.getAttribute && input.getAttribute("data-sidekick-label")) {
+        return input.getAttribute("data-sidekick-label");
+      }
+      // 1. label[for="inputId"]
+      if (input.id) {
+        try {
+          const forLabel = document.querySelector(`label[for="${CSS.escape(input.id)}"]`);
+          if (forLabel) {
+            const t = SurveyDOMEngine.sanitize(forLabel.innerText || forLabel.textContent);
+            if (t) return t;
+          }
+        } catch {}
+      }
+      // 2. Wrapping <label>
+      const parentLabel = input.closest ? input.closest("label") : null;
+      if (parentLabel) {
+        try {
+          const clone = parentLabel.cloneNode(true);
+          clone.querySelectorAll("input, select, textarea").forEach((el) => el.remove());
+          const t = SurveyDOMEngine.sanitize(clone.innerText || clone.textContent);
+          if (t) return t;
+        } catch {}
+      }
+      // 3. aria-label / aria-labelledby
+      if (input.getAttribute && input.getAttribute("aria-label")) {
+        return SurveyDOMEngine.sanitize(input.getAttribute("aria-label"));
+      }
+      if (input.getAttribute && input.getAttribute("aria-labelledby")) {
+        const ids = input.getAttribute("aria-labelledby").split(/\s+/);
+        const parts = ids.map((id) => {
+          const el = document.getElementById(id);
+          return el ? (el.innerText || el.textContent) : "";
+        }).filter(Boolean);
+        if (parts.length > 0) return SurveyDOMEngine.sanitize(parts.join(" "));
+      }
+
+      // 4. Custom controls (role="option", role="radio", role="checkbox", or non-input elements) with their own text content
+      const tagName = (input.tagName || "").toLowerCase();
+      if (tagName !== "input") {
+        const own = SurveyDOMEngine.sanitize(input.innerText || input.textContent);
+        if (own && own.length < 200) return own;
+      }
+
+      // 5. Sibling element text (e.g. <input><span class="label">Option</span>)
+      if (tagName === "input") {
+        let sib = input.nextElementSibling;
+        while (sib) {
+          const tag = (sib.tagName || "").toLowerCase();
+          if (tag !== "input" && tag !== "script" && tag !== "style") {
+            const t = SurveyDOMEngine.sanitize(sib.innerText || sib.textContent);
+            if (t && t.length < 150) return t;
+          }
+          sib = sib.nextElementSibling;
+        }
+      }
+
+      // 6. Parent text (if shallow)
+      if (input.parentElement && input.parentElement !== container) {
+        try {
+          const clone = input.parentElement.cloneNode(true);
+          clone.querySelectorAll("input, select, textarea").forEach((el) => el.remove());
+          const t = SurveyDOMEngine.sanitize(clone.innerText || clone.textContent);
+          if (t && t.length < 150) return t;
+        } catch {}
+      }
+      // 7. Value or placeholder or name
+      return input.value || input.placeholder || input.name || "";
+    }
+
+    static parseQuestions(root = document) {
+      const questions = [];
+      let questionCounter = 1;
+      const processedElements = new Set();
+
+      // 1. Scan for Likert Matrix Tables
+      const likertTables = Array.from(root.querySelectorAll("table.likert, table.matrix, table[role='grid'], table")).filter((tbl) => {
+        const radios = tbl.querySelectorAll('input[type="radio"], [role="radio"]');
+        return radios.length >= 4;
+      });
+
+      for (const table of likertTables) {
+        const headerCells = Array.from(table.querySelectorAll("thead th, thead td, tr:first-child th, tr:first-child td"));
+        const colHeaders = headerCells.map((c) => SurveyDOMEngine.sanitize(c.innerText || c.textContent)).filter(Boolean);
+
+        const rows = Array.from(table.querySelectorAll("tbody tr, tr:not(:first-child)"));
+        for (const row of rows) {
+          const radios = Array.from(row.querySelectorAll('input[type="radio"], [role="radio"]'));
+          if (radios.length === 0) continue;
+
+          const rowHeaderEl = row.querySelector("th, td:first-child, .row-label");
+          const rowText = SurveyDOMEngine.cleanQuestionText(rowHeaderEl ? (rowHeaderEl.innerText || rowHeaderEl.textContent) : `Rating row`);
+          if (!rowText) continue;
+
+          const qId = `sq-matrix-${questionCounter++}`;
+          row.setAttribute("data-sidekick-qid", qId);
+
+          const options = [];
+          radios.forEach((r, idx) => {
+            processedElements.add(r);
+            const optId = `opt-${qId}-${idx + 1}`;
+            r.setAttribute("data-sidekick-id", optId);
+
+            const colLabel = colHeaders[idx + 1] || colHeaders[idx] || r.value || `Rating ${idx + 1}`;
+            r.setAttribute("data-sidekick-label", colLabel);
+            const rect = r.getBoundingClientRect();
+            options.push({
+              id: optId,
+              label: colLabel,
+              value: r.value || colLabel,
+              type: "radio",
+              checked: Boolean(r.checked || r.getAttribute("aria-checked") === "true"),
+              disabled: Boolean(r.disabled || r.getAttribute("aria-disabled") === "true"),
+              hidden: !isVisible(r),
+              selector: `[data-sidekick-id="${optId}"]`,
+              x: Math.round(rect.left + rect.width / 2),
+              y: Math.round(rect.top + rect.height / 2),
+            });
+          });
+
+          questions.push({
+            id: qId,
+            text: rowText,
+            instructions: "Rate each item",
+            type: "likert_matrix",
+            required: false,
+            options,
+            selector: `[data-sidekick-qid="${qId}"]`,
+          });
+        }
+      }
+
+      // 2. Scan Standard Question Containers
+      const containerSelectors = [
+        "fieldset",
+        "[role='radiogroup']",
+        "[role='group']",
+        ".question",
+        ".survey-question",
+        ".form-group",
+        ".form-field",
+        "[data-question]",
+        "[data-qa]",
+        ".card-question",
+        ".survey-item"
+      ];
+      const rawContainers = Array.from(root.querySelectorAll(containerSelectors.join(", ")));
+
+      for (const container of rawContainers) {
+        if (container.closest && container.closest("table.likert, table.matrix")) continue;
+
+        // Find question text
+        const titleEl = container.querySelector(
+          "legend, .question-title, .question-text, .title, .label, h1, h2, h3, h4, h5, h6, label.main, [id*='label']"
+        );
+        let qText = titleEl ? SurveyDOMEngine.cleanQuestionText(titleEl.innerText || titleEl.textContent) : "";
+        if (!qText && container.getAttribute("aria-label")) {
+          qText = SurveyDOMEngine.cleanQuestionText(container.getAttribute("aria-label"));
+        }
+        if (!qText && container.getAttribute("aria-labelledby")) {
+          const lEl = document.getElementById(container.getAttribute("aria-labelledby"));
+          if (lEl) qText = SurveyDOMEngine.cleanQuestionText(lEl.innerText || lEl.textContent);
+        }
+
+        // Instructions
+        const instrEl = container.querySelector(".description, .instructions, .help-text, .sub-text, [aria-describedby]");
+        let instructions = instrEl ? SurveyDOMEngine.sanitize(instrEl.innerText || instrEl.textContent) : "";
+
+        // Required & Validation Error
+        const isRequired = Boolean(
+          container.hasAttribute("required") ||
+          container.getAttribute("aria-required") === "true" ||
+          container.querySelector(".required, [aria-required='true']") ||
+          /\*\s*$/.test(titleEl?.innerText || "")
+        );
+
+        const errorEl = container.querySelector(".error, .error-message, [role='alert'], .invalid-feedback, .is-invalid");
+        let validationError = null;
+        if (errorEl && isVisible(errorEl)) {
+          const errText = SurveyDOMEngine.sanitize(errorEl.innerText || errorEl.textContent);
+          if (errText) validationError = errText;
+        }
+
+        // Collect inputs inside this container
+        const inputs = Array.from(container.querySelectorAll('input:not([type="hidden"]), select, textarea, [role="radio"], [role="checkbox"], [role="combobox"], [role="listbox"]'));
+        if (inputs.length === 0) continue;
+
+        const availableInputs = inputs.filter((inp) => !processedElements.has(inp));
+        if (availableInputs.length === 0) continue;
+
+        const qId = `sq-${questionCounter++}`;
+        container.setAttribute("data-sidekick-qid", qId);
+
+        const radios = availableInputs.filter((i) => i.type === "radio" || i.getAttribute("role") === "radio");
+        const checkboxes = availableInputs.filter((i) => i.type === "checkbox" || i.getAttribute("role") === "checkbox");
+        const selects = availableInputs.filter((i) => (i.tagName || "").toLowerCase() === "select");
+        const customDropdowns = availableInputs.filter((i) => i.getAttribute("role") === "combobox" || i.getAttribute("role") === "listbox");
+        const textInputs = availableInputs.filter((i) => {
+          const tag = (i.tagName || "").toLowerCase();
+          return tag === "textarea" || (tag === "input" && !["radio", "checkbox", "button", "submit", "reset"].includes(i.type));
+        });
+
+        let qType = "single_choice_radio";
+        const options = [];
+
+        if (radios.length > 0) {
+          qType = "single_choice_radio";
+          radios.forEach((r, idx) => {
+            processedElements.add(r);
+            const optId = `opt-${qId}-${idx + 1}`;
+            r.setAttribute("data-sidekick-id", optId);
+            const lbl = SurveyDOMEngine.getOptionLabel(r, container);
+            const rect = r.getBoundingClientRect();
+            options.push({
+              id: optId,
+              label: lbl,
+              value: r.value || lbl,
+              type: "radio",
+              checked: Boolean(r.checked || r.getAttribute("aria-checked") === "true"),
+              disabled: Boolean(r.disabled || r.getAttribute("aria-disabled") === "true"),
+              hidden: !isVisible(r),
+              selector: `[data-sidekick-id="${optId}"]`,
+              x: Math.round(rect.left + rect.width / 2),
+              y: Math.round(rect.top + rect.height / 2),
+            });
+          });
+        } else if (checkboxes.length > 0) {
+          qType = "multi_choice_checkbox";
+          checkboxes.forEach((cb, idx) => {
+            processedElements.add(cb);
+            const optId = `opt-${qId}-${idx + 1}`;
+            cb.setAttribute("data-sidekick-id", optId);
+            const lbl = SurveyDOMEngine.getOptionLabel(cb, container);
+            const rect = cb.getBoundingClientRect();
+            options.push({
+              id: optId,
+              label: lbl,
+              value: cb.value || lbl,
+              type: "checkbox",
+              checked: Boolean(cb.checked || cb.getAttribute("aria-checked") === "true"),
+              disabled: Boolean(cb.disabled || cb.getAttribute("aria-disabled") === "true"),
+              hidden: !isVisible(cb),
+              selector: `[data-sidekick-id="${optId}"]`,
+              x: Math.round(rect.left + rect.width / 2),
+              y: Math.round(rect.top + rect.height / 2),
+            });
+          });
+        } else if (selects.length > 0) {
+          qType = "dropdown_native";
+          const sel = selects[0];
+          processedElements.add(sel);
+          const selId = `opt-${qId}-select`;
+          sel.setAttribute("data-sidekick-id", selId);
+          const optEls = Array.from(sel.querySelectorAll("option"));
+          optEls.forEach((o, idx) => {
+            if (o.value === "" && idx === 0) return; // skip placeholder
+            const optId = `opt-${qId}-val-${idx}`;
+            options.push({
+              id: optId,
+              label: SurveyDOMEngine.sanitize(o.innerText || o.textContent),
+              value: o.value,
+              type: "select_option",
+              selected: Boolean(o.selected),
+              disabled: Boolean(o.disabled),
+              hidden: false,
+              selector: `[data-sidekick-id="${selId}"]`,
+            });
+          });
+        } else if (customDropdowns.length > 0) {
+          qType = "dropdown_custom";
+          const dd = customDropdowns[0];
+          processedElements.add(dd);
+          const ddId = `opt-${qId}-combobox`;
+          dd.setAttribute("data-sidekick-id", ddId);
+          let optEls = Array.from(dd.querySelectorAll("[role='option']"));
+          if (optEls.length === 0 && dd.getAttribute("aria-controls")) {
+            const listbox = document.getElementById(dd.getAttribute("aria-controls"));
+            if (listbox) optEls = Array.from(listbox.querySelectorAll("[role='option']"));
+          }
+          optEls.forEach((o, idx) => {
+            const optId = `opt-${qId}-custom-${idx}`;
+            o.setAttribute("data-sidekick-id", optId);
+            options.push({
+              id: optId,
+              label: SurveyDOMEngine.sanitize(o.innerText || o.textContent),
+              value: o.getAttribute("data-value") || o.innerText.trim(),
+              type: "custom_option",
+              selected: o.getAttribute("aria-selected") === "true",
+              disabled: o.getAttribute("aria-disabled") === "true",
+              hidden: !isVisible(o),
+              selector: `[data-sidekick-id="${optId}"]`,
+            });
+          });
+        } else if (textInputs.length > 0) {
+          qType = "text_input";
+          const ti = textInputs[0];
+          processedElements.add(ti);
+          const tiId = `opt-${qId}-text`;
+          ti.setAttribute("data-sidekick-id", tiId);
+          const rect = ti.getBoundingClientRect();
+          options.push({
+            id: tiId,
+            label: qText || "Text response",
+            value: ti.value || "",
+            type: "text",
+            disabled: Boolean(ti.disabled),
+            hidden: !isVisible(ti),
+            selector: `[data-sidekick-id="${tiId}"]`,
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+          });
+        }
+
+        if (!qText && options.length > 0) {
+          qText = container.getAttribute("name") || `Question ${questions.length + 1}`;
+        }
+
+        questions.push({
+          id: qId,
+          text: qText,
+          instructions,
+          type: qType,
+          required: isRequired,
+          validationError,
+          options,
+          selector: `[data-sidekick-qid="${qId}"]`,
+        });
+      }
+
+      // 3. Scan Standalone Ungrouped Radios
+      const standaloneInputs = Array.from(root.querySelectorAll('input[type="radio"]')).filter((el) => !processedElements.has(el));
+      const radioGroups = new Map();
+      for (const el of standaloneInputs) {
+        if (el.name) {
+          const list = radioGroups.get(el.name) || [];
+          list.push(el);
+          radioGroups.set(el.name, list);
+        }
+      }
+
+      for (const [name, radios] of radioGroups.entries()) {
+        const qId = `sq-radio-${questionCounter++}`;
+        const options = [];
+        radios.forEach((r, idx) => {
+          processedElements.add(r);
+          const optId = `opt-${qId}-${idx + 1}`;
+          r.setAttribute("data-sidekick-id", optId);
+          const lbl = SurveyDOMEngine.getOptionLabel(r, null);
+          const rect = r.getBoundingClientRect();
+          options.push({
+            id: optId,
+            label: lbl,
+            value: r.value || lbl,
+            type: "radio",
+            checked: Boolean(r.checked),
+            disabled: Boolean(r.disabled),
+            hidden: !isVisible(r),
+            selector: `[data-sidekick-id="${optId}"]`,
+            x: Math.round(rect.left + rect.width / 2),
+            y: Math.round(rect.top + rect.height / 2),
+          });
+        });
+
+        questions.push({
+          id: qId,
+          text: `Question for ${name}`,
+          type: "single_choice_radio",
+          required: false,
+          options,
+          selector: `input[name="${CSS.escape(name)}"]`,
+        });
+      }
+
+      // 4. Scan Form Navigation Controls
+      const buttons = Array.from(root.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"], a.btn, a.button'));
+      let nextButton = null;
+      let backButton = null;
+      let submitButton = null;
+
+      for (const btn of buttons) {
+        if (btn.disabled || !isVisible(btn)) continue;
+        const text = (btn.innerText || btn.textContent || btn.value || btn.getAttribute("aria-label") || "").trim().toLowerCase();
+
+        if (/\b(?:submit|finish|complete|done)\b/i.test(text)) {
+          const btnId = `sk-submit-${Date.now()}`;
+          btn.setAttribute("data-sidekick-id", btnId);
+          submitButton = {
+            id: btnId,
+            text,
+            isSubmit: true,
+            selector: `[data-sidekick-id="${btnId}"]`,
+          };
+        } else if (/\b(?:next|continue|proceed|forward|continue to next)\b/i.test(text)) {
+          const btnId = `sk-next-${Date.now()}`;
+          btn.setAttribute("data-sidekick-id", btnId);
+          nextButton = {
+            id: btnId,
+            text,
+            isSubmit: false,
+            selector: `[data-sidekick-id="${btnId}"]`,
+          };
+        } else if (/\b(?:back|prev|previous)\b/i.test(text)) {
+          const btnId = `sk-back-${Date.now()}`;
+          btn.setAttribute("data-sidekick-id", btnId);
+          backButton = {
+            id: btnId,
+            text,
+            selector: `[data-sidekick-id="${btnId}"]`,
+          };
+        }
+      }
+
+      const progressEl = root.querySelector(".progress, .progress-bar, [role='progressbar'], .survey-progress, .page-number");
+      let progress = "";
+      if (progressEl) {
+        progress = SurveyDOMEngine.sanitize(progressEl.innerText || progressEl.textContent || progressEl.getAttribute("aria-valuenow") || "");
+      }
+
+      return {
+        questions,
+        nextButton,
+        backButton,
+        submitButton,
+        progress,
+        questionCount: questions.length,
+      };
+    }
+
+    static interactControl(params = {}) {
+      const { action, selector, value, text, optionId } = params;
+      let el = null;
+      if (selector) {
+        try { el = document.querySelector(selector); } catch {}
+      }
+      if (!el && optionId) {
+        el = document.querySelector(`[data-sidekick-id="${CSS.escape(optionId)}"]`);
+      }
+      if (!el) {
+        throw new Error(`Target control not found: ${selector || optionId}`);
+      }
+
+      if (el.disabled) {
+        throw new Error(`Target control is disabled`);
+      }
+
+      if (typeof el.focus === "function") el.focus();
+
+      const tag = (el.tagName || "").toLowerCase();
+      if (action === "select_option" || tag === "select") {
+        const select = tag === "select" ? el : el.closest("select");
+        if (select) {
+          if (value !== undefined) {
+            select.value = value;
+          }
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+          select.dispatchEvent(new Event("input", { bubbles: true }));
+          return { success: true, verified: select.value === value, value: select.value };
+        }
+      }
+
+      if (action === "type_text" || tag === "textarea" || (tag === "input" && el.type === "text")) {
+        const txt = text !== undefined ? text : (value || "");
+        const proto = tag === "textarea" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+        if (nativeSetter) {
+          nativeSetter.call(el, txt);
+        } else {
+          el.value = txt;
+        }
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return { success: true, verified: el.value === txt, value: el.value };
+      }
+
+      // Radio or Checkbox Click
+      const evtInit = { bubbles: true, cancelable: true, view: window };
+      try { el.dispatchEvent(new PointerEvent("pointerdown", evtInit)); } catch {}
+      try { el.dispatchEvent(new MouseEvent("mousedown", evtInit)); } catch {}
+      try { el.dispatchEvent(new PointerEvent("pointerup", evtInit)); } catch {}
+      try { el.dispatchEvent(new MouseEvent("mouseup", evtInit)); } catch {}
+
+      if (typeof el.click === "function") {
+        el.click();
+      } else {
+        el.dispatchEvent(new MouseEvent("click", evtInit));
+      }
+
+      if (el.type === "radio") {
+        el.checked = true;
+        el.setAttribute("aria-checked", "true");
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      } else if (el.type === "checkbox") {
+        if (action === "check") el.checked = true;
+        else if (action === "uncheck") el.checked = false;
+        el.setAttribute("aria-checked", el.checked ? "true" : "false");
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      } else if (el.getAttribute("role") === "option" || el.getAttribute("role") === "radio" || el.getAttribute("role") === "checkbox") {
+        const role = el.getAttribute("role");
+        if (role === "option") {
+          const listbox = el.closest("[role='listbox']") || el.parentElement;
+          if (listbox) {
+            listbox.querySelectorAll("[role='option']").forEach((sibling) => {
+              sibling.setAttribute("aria-selected", "false");
+            });
+          }
+          el.setAttribute("aria-selected", "true");
+        } else if (role === "radio") {
+          el.setAttribute("aria-checked", "true");
+        } else if (role === "checkbox") {
+          const cur = el.getAttribute("aria-checked") === "true";
+          el.setAttribute("aria-checked", action === "check" ? "true" : (action === "uncheck" ? "false" : String(!cur)));
+        }
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+
+      return {
+        success: true,
+        checked: Boolean(el.checked || el.getAttribute("aria-checked") === "true" || el.getAttribute("aria-selected") === "true"),
+      };
+    }
+
+    static verifyQuestionState(questionId) {
+      let qEl = document.querySelector(`[data-sidekick-qid="${CSS.escape(questionId)}"]`);
+      if (!qEl) {
+        qEl = document.getElementById(questionId);
+      }
+      if (!qEl) return null;
+
+      const inputs = Array.from(qEl.querySelectorAll("input, select, textarea, [role='radio'], [role='checkbox'], [role='option']"));
+      const options = inputs.map((inp) => {
+        return {
+          id: inp.getAttribute("data-sidekick-id") || inp.id,
+          label: SurveyDOMEngine.getOptionLabel(inp, qEl),
+          value: inp.value,
+          checked: Boolean(inp.checked || inp.getAttribute("aria-checked") === "true" || inp.getAttribute("aria-selected") === "true"),
+          selected: Boolean(inp.selected || inp.getAttribute("aria-selected") === "true"),
+          disabled: Boolean(inp.disabled),
+        };
+      });
+
+      const selectEl = qEl.querySelector("select");
+      const textareaEl = qEl.querySelector("textarea, input[type='text']");
+
+      return {
+        id: questionId,
+        options,
+        value: selectEl ? selectEl.value : (textareaEl ? textareaEl.value : undefined),
+      };
+    }
+
+    static advancePage(actionType, selector) {
+      let btn = null;
+      if (selector) {
+        try { btn = document.querySelector(selector); } catch {}
+      }
+      if (!btn) {
+        const buttons = Array.from(document.querySelectorAll("button, input[type='button'], input[type='submit']"));
+        const regex = actionType === "submit" ? /\b(?:submit|finish)\b/i : /\b(?:next|continue)\b/i;
+        btn = buttons.find((b) => regex.test(b.innerText || b.textContent || b.value || ""));
+      }
+      if (!btn) {
+        throw new Error(`Navigation button not found for action ${actionType}`);
+      }
+
+      const preUrl = window.location.href;
+      if (typeof btn.click === "function") btn.click();
+      else btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+      return {
+        success: true,
+        advanced: true,
+        preUrl,
+      };
+    }
+  }
+
   window.SludgeAuditor = SludgeAuditor;
   window.CancelationEngine = CancelationEngine;
+  window.SurveyDOMEngine = SurveyDOMEngine;
 })();

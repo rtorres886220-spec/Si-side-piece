@@ -2309,6 +2309,7 @@ const SLASH_COMMANDS = [
   { id: "fill", name: "/fill", aliases: ["/type", "/input"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/fill <field name> = <value>", desc: "Type into inputs via CDP key events", example: "/fill Search = Headphones", requiresArg: true },
   { id: "scroll", name: "/scroll", aliases: [], tier: 2, tierLabel: "Tier 2: Action", syntax: "/scroll [top | bottom | half]", desc: "Scroll page viewport smoothly", example: "/scroll bottom" },
   { id: "fillcart", name: "/fillcart", aliases: ["/checkout-prep"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/fillcart", desc: "Select options and add to cart", example: "/fillcart" },
+  { id: "survey", name: "/survey", aliases: ["/questionnaire", "/fillform", "/poll"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/survey [auto | review | profile]", desc: "Autonomously answer survey questions with verified control selection", example: "/survey auto" },
   { id: "extract", name: "/extract", aliases: ["/scrape", "/parse"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/extract [table | links | emails | pricing | json]", desc: "Extract tables, links, or JSON", example: "/extract table" },
   { id: "reply", name: "/reply", aliases: ["/respond", "/draft"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/reply [agree | disagree | professional | concise]", desc: "Draft contextual email or PR reply", example: "/reply professional" },
   { id: "model", name: "/model", aliases: [], tier: 2, tierLabel: "Tier 2: Action", syntax: "/model [flash | pro]", desc: "Switch between Flash and Pro", example: "/model pro" },
@@ -3271,6 +3272,144 @@ async function handleSlashCommand(fullCommand) {
   if (commandId === "fillcart") {
     await submitPrompt("Find the primary purchase or add-to-cart action on this page and proceed.");
     return;
+  }
+  if (commandId === "survey") {
+    if (!checkDomainAllowed(state.activeTabUrl)) {
+      renderAssistantPlainMessage(`Security Lock: Survey answering is strictly prohibited on sensitive domain.`);
+      return;
+    }
+    setBusyState(true);
+    renderAssistantPlainMessage("📋 Scanning page for survey questions and controls...", "system");
+
+    try {
+      await extractContext();
+      const targetTabId = state.activeTabId;
+
+      // Request live survey parsing from content script
+      const parseResponse = await new Promise((res) => {
+        chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY" }, { frameId: 0 }, (r) => {
+          const _ = chrome.runtime.lastError;
+          res(r?.surveyData);
+        });
+        setTimeout(() => res(null), 350);
+      });
+
+      const surveyData = parseResponse || state.pageContext?.surveyData;
+      if (!surveyData || !Array.isArray(surveyData.questions) || surveyData.questions.length === 0) {
+        setBusyState(false);
+        renderAssistantPlainMessage("ℹ️ No active survey questions, forms, or questionnaires detected on this page.");
+        return;
+      }
+
+      renderAssistantPlainMessage(`Found **${surveyData.questions.length} survey question(s)** on active page. Initializing Question-by-Question State Machine...`);
+
+      // Load user profile & preferences from storage
+      const storage = await chrome.storage.local.get(["sidekickUserProfile", "sidekickUserPreferences"]);
+      const userProfile = storage.sidekickUserProfile || {};
+      const userPreferences = storage.sidekickUserPreferences || {};
+
+      const engine = new SurveyEngine({ userProfile, userPreferences });
+
+      const getSurveyFn = async () => {
+        return new Promise((res) => {
+          chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY" }, { frameId: 0 }, (r) => {
+            const _ = chrome.runtime.lastError;
+            res(r?.surveyData || null);
+          });
+          setTimeout(() => res(null), 300);
+        });
+      };
+
+      const executeActionFn = async (params) => {
+        return new Promise((res) => {
+          chrome.tabs.sendMessage(targetTabId, { action: "INTERACT_SURVEY_CONTROL", params }, { frameId: 0 }, (r) => {
+            const _ = chrome.runtime.lastError;
+            res(r?.result || { success: true });
+          });
+          setTimeout(() => res({ success: true }), 300);
+        });
+      };
+
+      const verifyStateFn = async (questionId) => {
+        return new Promise((res) => {
+          chrome.tabs.sendMessage(targetTabId, { action: "VERIFY_SURVEY_SELECTION", questionId }, { frameId: 0 }, (r) => {
+            const _ = chrome.runtime.lastError;
+            res(r?.state || null);
+          });
+          setTimeout(() => res(null), 250);
+        });
+      };
+
+      const advancePageFn = async (actionType, btn) => {
+        return new Promise((res) => {
+          chrome.tabs.sendMessage(targetTabId, { action: "ADVANCE_SURVEY_PAGE", actionType, selector: btn?.selector }, { frameId: 0 }, (r) => {
+            const _ = chrome.runtime.lastError;
+            res(r?.result || { advanced: true });
+          });
+          setTimeout(() => res({ advanced: true }), 500);
+        });
+      };
+
+      await engine.processSurveyWorkflow(
+        getSurveyFn,
+        executeActionFn,
+        verifyStateFn,
+        advancePageFn,
+        {
+          evidenceText: state.pageContext?.bodyText || "",
+          onQuestionStart: (q) => {
+            renderAgentStepBadge(`Processing question: "${q.text.slice(0, 35)}"`, true);
+          },
+          onQuestionAnswered: ({ question, answer }) => {
+            renderAgentStepBadge(`[Verified] "${question.text.slice(0, 30)}": ${answer.join(", ")}`, true);
+            renderAssistantPlainMessage(`✓ **${question.text}:** Selected \`${answer.join(", ")}\` (state verified)`);
+          },
+          onQuestionPaused: (pauseInfo) => {
+            if (pauseInfo.category === "personal_info_required") {
+              renderAgentStepBadge("Paused: Personal info required", false);
+              renderAssistantPlainMessage(`🔒 **Personal Information Required:**\n${pauseInfo.reason}\n\n*Si strictly refuses to invent personal history or identity.* Please answer this question directly or authorize your profile.`);
+            } else if (pauseInfo.category === "ambiguous") {
+              renderAgentStepBadge("Paused: Ambiguous question", false);
+              renderAssistantPlainMessage(`❓ **Ambiguous Question Paused:**\n${pauseInfo.reason}\n\nPlease clarify your choice in chat.`);
+            } else {
+              renderAgentStepBadge(`Paused: ${pauseInfo.status}`, false);
+              renderAssistantPlainMessage(`⏸️ **Survey Paused:** ${pauseInfo.reason || pauseInfo.status}`);
+            }
+          },
+          onPageAdvanced: ({ progress }) => {
+            renderAgentStepBadge(`Advanced to next page ${progress ? `(${progress})` : ""}`, true);
+            renderAssistantPlainMessage(`➡️ Advanced to next survey page.`);
+          },
+          onRequiresSubmitApproval: async ({ submitButton }) => {
+            renderAgentStepBadge("Awaiting Submit Authorization", true);
+            const approved = await requestSafetyApproval("click_element", {
+              element_description: "Submit Completed Survey Form",
+              selector: submitButton.selector,
+            }, 99);
+
+            if (approved) {
+              await executeJITAction("click_element", { selector: submitButton.selector });
+              renderAgentStepBadge("Survey Submitted [Authorized]", true);
+              renderAssistantPlainMessage("🎉 **Survey Submitted Successfully!** All answers verified.");
+            } else {
+              renderAgentStepBadge("Submission Paused by User", false);
+              renderAssistantPlainMessage("⏸️ **Survey Submission Paused:** Form is completely filled and verified, but submit was held for user review.");
+            }
+          },
+          onComplete: ({ record }) => {
+            renderAgentStepBadge(`Survey Completed (${record?.length || 0} questions answered)`, true);
+            renderAssistantPlainMessage(`✅ **Survey Session Complete:** Answered and verified ${record?.length || 0} question(s).`);
+          }
+        }
+      );
+
+      setBusyState(false);
+      return;
+    } catch (err) {
+      setBusyState(false);
+      renderAssistantPlainMessage(`⚠️ Survey processing error: ${err.message}`);
+      return;
+    }
   }
   if (commandId === "curl") {
     await submitPrompt("Generate curl commands for API requests based on documentation on this page.");

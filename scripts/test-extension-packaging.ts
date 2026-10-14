@@ -54,6 +54,7 @@ async function runPackagingTestSuite() {
     "gate.js",
     "retriever.js",
     "router.js",
+    "surveyEngine.js",
     "workers.js"
   ];
   for (const ag of requiredAgents) {

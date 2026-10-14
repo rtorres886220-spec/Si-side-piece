@@ -175,6 +175,18 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     example: "/fillcart"
   },
   {
+    id: "survey",
+    name: "/survey",
+    aliases: ["/questionnaire", "/fillform", "/poll"],
+    tier: 2,
+    tierLabel: "Tier 2: Action, Data & Audio",
+    syntax: "/survey [auto | review | profile]",
+    description: "Autonomously answer survey questions with verified control selection",
+    category: "Browser Action",
+    example: "/survey auto",
+    argSuggestions: ["auto", "review", "profile"]
+  },
+  {
     id: "extract",
     name: "/extract",
     aliases: ["/scrape", "/parse"],
