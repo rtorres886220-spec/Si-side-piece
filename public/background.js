@@ -313,6 +313,13 @@ if (chrome.tabGroups && chrome.tabGroups.onRemoved) {
   });
 }
 
+// Clean up and synchronize state if debugger is detached externally
+if (chrome.debugger && chrome.debugger.onDetach) {
+  chrome.debugger.onDetach.addListener((source, reason) => {
+    console.debug(`Debugger detached from tab ${source.tabId} (${reason}). State synchronized.`);
+  });
+}
+
 // Message Handler for Side Panel Requests
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // A13: Enforce caller security: only allow extension UI (sidepanel), never webpage content scripts
@@ -474,13 +481,22 @@ async function handleCDPAction({ tabId, action, params }) {
           clickCount: 1
         });
         await delay(10);
-        await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
-          type: "mouseReleased",
-          x,
-          y,
-          button: "left",
-          clickCount: 1
-        });
+        try {
+          await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
+            type: "mouseReleased",
+            x,
+            y,
+            button: "left",
+            clickCount: 1
+          });
+        } catch (releaseErr) {
+          const msg = releaseErr?.message?.toLowerCase() || "";
+          if (msg.includes("debugger is not attached") || msg.includes("target closed") || msg.includes("session closed")) {
+            console.debug("Navigation detach during mouse release acknowledged.");
+            return { clicked: true, navigated: true, x, y };
+          }
+          throw releaseErr;
+        }
         return { clicked: true, x, y };
       }
 

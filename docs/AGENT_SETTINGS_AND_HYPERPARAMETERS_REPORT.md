@@ -19,11 +19,11 @@ This report provides an exhaustive, component-by-component audit of all agents, 
 | **Mechanical Bypass** | *Zero-LLM (Regex)* | N/A | N/A | N/A | N/A | Direct DOM Action | Pure Deterministic (0ms) |
 | **Deterministic Router** | *Zero-LLM / Grammar* | `gemini-3.1-flash-lite` | `0.1 – 0.5` | `0.95` | `LOW` / `HIGH` | `application/json` | Schema-constrained JSON |
 | **Discrete Retriever** | *Heuristic Indexer* | N/A | N/A | N/A | N/A | Text / Section Chunks | Token-budgeted windowing |
-| **Action Worker** | `gemini-3.8-flash` | `gemini-3.6-flash` | `0.1 – 0.2` | `0.95` | `LOW` | `application/json` or Tool Call | Element `[#ID]` + CDP Tools |
-| **Answer Worker** | `gemini-3.8-flash` | `gemini-3.6-flash` | `0.1 – 0.2` | `0.95` | `LOW` | `application/json` | `finish_task` with receipts |
-| **Transform Worker** | `gemini-3.8-flash` | `gemini-3.6-flash` | `0.5 – 0.7` | `0.95` | `LOW` / `HIGH` | `application/json` | Open synthesis Markdown |
+| **Action Worker** | `gemini-3.5-flash-lite` | `gemini-3.1-flash-lite` | `0.1 – 0.2` | `0.95` | `LOW` | `application/json` or Tool Call | Element `[#ID]` + CDP Tools |
+| **Answer Worker** | `gemini-3.5-flash-lite` | `gemini-3.1-flash-lite` | `0.1 – 0.2` | `0.95` | `LOW` | `application/json` | `finish_task` with receipts |
+| **Transform Worker** | `gemini-3.5-flash-lite` | `gemini-3.1-flash-lite` | `0.5 – 0.7` | `0.95` | `LOW` / `HIGH` | `application/json` | Open synthesis Markdown |
 | **Deterministic Invariant Gate** | *Zero-LLM Invariant* | N/A | N/A | N/A | N/A | Boolean / Audit Code | Hard regex & AST checks |
-| **Critic Verifier** | `gemini-3.8-flash` | `gemini-3.6-flash` | `0.1 – 0.2` | `0.95` | `LOW` | `application/json` | One-shot targeted repair |
+| **Critic Verifier** | `gemini-3.5-flash-lite` | `gemini-3.1-flash-lite` | `0.1 – 0.2` | `0.95` | `LOW` | `application/json` | One-shot targeted repair |
 | **Server Unified Orchestrator** | `gemini-3.5-flash-lite` | Cascade (see §8) | `0.5` | `0.95` | `HIGH` | Tool / JSON | `AUTO` Multi-tool dispatch |
 
 ---
@@ -66,7 +66,7 @@ This report provides an exhaustive, component-by-component audit of all agents, 
 * **Files:** `/public/agents/workers.js`, `/src/actionResolver.ts`
 * **Role:** Directs physical browser automation via Chrome DevTools Protocol (CDP).
 * **Settings:**
-  * **Primary Model:** `gemini-3.8-flash` (Fallback: `gemini-3.7-flash` / `gemini-3.6-flash`).
+  * **Primary Model:** `gemini-3.5-flash-lite` (Fallback: `gemini-3.1-flash-lite`).
   * **Temperature:** `0.1` (Required for deterministic coordinate targeting).
   * **Top P:** `0.95`.
   * **Thinking Level:** `LOW`.

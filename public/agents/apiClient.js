@@ -7,7 +7,7 @@
 
 (function () {
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-  const PRIMARY_MODEL = "gemini-3.6-flash";
+  const PRIMARY_MODEL = "gemini-3.5-flash-lite";
   const TEMPORARY_FALLBACK_MODEL = "gemini-3.1-flash-lite";
 
   class SidekickApiClient {
@@ -56,7 +56,7 @@
     }
 
     /**
-     * Call with exponential backoff and jitter
+     * Call with exponential backoff, jitter, and dual proxy fallback
      */
     async _callWithRetry(requestBody, options = {}) {
       const {
@@ -67,6 +67,39 @@
       } = options;
 
       if (!this.apiKey) {
+        // Dual-mode: Attempt seamless fallback to server-side proxy
+        try {
+          const proxyRes = await fetch("/api/gemini", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              promptText: requestBody?.contents?.[0]?.parts?.[0]?.text || "Request",
+              model: model || this.defaultModel,
+              rawPayload: requestBody,
+            }),
+            signal,
+          });
+          if (proxyRes.ok) {
+            const proxyData = await proxyRes.json();
+            return {
+              data: proxyData.rawResponse || {
+                candidates: [
+                  {
+                    content: {
+                      parts: proxyData.functionCall
+                        ? [{ functionCall: proxyData.functionCall }]
+                        : [{ text: proxyData.text || "" }]
+                    }
+                  }
+                ]
+              },
+              usedModel: proxyData.usedModel || model,
+              wasFallback: true,
+            };
+          }
+        } catch (proxyErr) {
+          console.debug("[ApiClient] Proxy route attempt notice:", proxyErr.message);
+        }
         throw new Error("Missing Gemini API Key. Please configure your key in Settings.");
       }
 

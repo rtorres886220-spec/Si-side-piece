@@ -19,7 +19,7 @@
     "https://generativelanguage.googleapis.com/*"
   ],
   "content_security_policy": {
-    "extension_pages": "default-src 'self'; connect-src https://generativelanguage.googleapis.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; base-uri 'none';"
+    "extension_pages": "default-src 'self'; connect-src https://generativelanguage.googleapis.com http://localhost:* http://127.0.0.1:* https://*.run.app; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; base-uri 'none';"
   },
   "side_panel": {
     "default_path": "sidepanel.html"
