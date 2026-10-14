@@ -33,7 +33,7 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = (process.env.PORT && process.env.PORT !== '8080') ? parseInt(process.env.PORT, 10) : 3000;
   const isProd = process.env.NODE_ENV === 'production';
 
   // Security headers & strict origin validation
@@ -180,14 +180,8 @@ async function startServer() {
     }
 
     const apiKey = clientApiKey || (process.env.GEMINI_API_KEY ? String(process.env.GEMINI_API_KEY).replace(/['"\s]/g, '').trim() : undefined);
-    if (!apiKey) {
-      return res.status(503).json({
-        error: 'GEMINI_API_KEY not configured on server or in request. Please configure a valid Gemini API key.',
-        fallback: false,
-      });
-    }
+    let hasActiveSlot = false;
 
-    activeConcurrentRequests++;
     try {
       const rawPayload = req.body?.rawPayload;
       const model = req.body?.model || 'gemini-3.1-flash-lite';
@@ -201,20 +195,27 @@ async function startServer() {
         'gemini-flash-latest',
       ].filter((m, i, a) => a.indexOf(m) === i);
 
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          timeout: 30000, // Bounded 30-second timeout deadline per attempt
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
-
       // SPECIALIST MULTI-AGENT RAW PAYLOAD PROXY PATH:
       // Preserves full systemInstruction, generationConfig (e.g. responseMimeType: "application/json"),
       // and tool definitions across the server proxy boundary.
       if (rawPayload && (rawPayload.contents || rawPayload.prompt)) {
+        if (!apiKey) {
+          return res.status(503).json({
+            error: 'GEMINI_API_KEY not configured on server or in request. Please configure a valid Gemini API key.',
+            fallback: false,
+          });
+        }
+        activeConcurrentRequests++;
+        hasActiveSlot = true;
+        const ai = new GoogleGenAI({
+          apiKey,
+          httpOptions: {
+            timeout: 30000, // Bounded 30-second timeout deadline per attempt
+            headers: {
+              'User-Agent': 'aistudio-build',
+            },
+          },
+        });
         const contentsPayload = rawPayload.contents || [{ role: 'user', parts: [{ text: rawPayload.prompt }] }];
         const configPayload: GenerateContentConfig = {};
 
@@ -778,6 +779,26 @@ ${GROUNDING_SYSTEM_POLICY}`;
         generateConfig.tools = activeTools;
       }
 
+      if (!apiKey) {
+        return res.status(503).json({
+          error: 'GEMINI_API_KEY not configured on server or in request. Please configure a valid Gemini API key.',
+          fallback: false,
+        });
+      }
+
+      activeConcurrentRequests++;
+      hasActiveSlot = true;
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          timeout: 30000, // Bounded 30-second timeout deadline per attempt
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
       // Model cascade: prioritize gemini-3.1-flash-lite
       let response: any = null;
       let lastError: any = null;
@@ -968,7 +989,9 @@ ${GROUNDING_SYSTEM_POLICY}`;
         fallback: false,
       });
     } finally {
-      activeConcurrentRequests = Math.max(0, activeConcurrentRequests - 1);
+      if (hasActiveSlot) {
+        activeConcurrentRequests = Math.max(0, activeConcurrentRequests - 1);
+      }
     }
   });
 

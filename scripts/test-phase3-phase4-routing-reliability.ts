@@ -156,11 +156,13 @@ async function runTestSuite() {
   console.log('\n--- SUITE 3: SERVER PROXY LIVE ROUTING & CONTRACTS ---');
 
   // Test 11: Server /api/health endpoint
+  let hasServerApiKey = false;
   try {
     const healthRes = await fetch('http://127.0.0.1:3000/api/health');
     assert(healthRes.ok, 'Server health check returns HTTP 200');
     const healthData = await healthRes.json();
     assert(healthData.status === 'ok' && typeof healthData.hasApiKey === 'boolean', 'Health endpoint returns valid status and hasApiKey boolean');
+    hasServerApiKey = Boolean(healthData.hasApiKey);
   } catch (e: any) {
     console.warn('Skipping live local port 3000 health check if server running on different interface:', e.message);
   }
@@ -214,10 +216,17 @@ async function runTestSuite() {
       },
     }),
   });
-  assert(rawProxyRes.ok, 'rawPayload proxy route returns HTTP 200 with JSON mime type configuration');
-  const rawProxyData = await rawProxyRes.json();
-  assert(rawProxyData.success === true, 'rawPayload proxy execution succeeded');
-  assert(rawProxyData.text.includes('READY'), 'rawPayload preserves structured response schema');
+  if (hasServerApiKey) {
+    assert(rawProxyRes.ok, 'rawPayload proxy route returns HTTP 200 with JSON mime type configuration');
+    const rawProxyData = await rawProxyRes.json();
+    assert(rawProxyData.success === true, 'rawPayload proxy execution succeeded');
+    assert(rawProxyData.text.includes('READY'), 'rawPayload preserves structured response schema');
+  } else {
+    assert(rawProxyRes.status === 503, 'rawPayload proxy route returns HTTP 503 when GEMINI_API_KEY is not configured on server');
+    const rawProxyData = await rawProxyRes.json();
+    assert(rawProxyData.fallback === false, 'rawPayload proxy returns expected fallback flag');
+    assert(typeof rawProxyData.error === 'string', 'rawPayload proxy returns informative error message');
+  }
 
   // -------------------------------------------------------------------------
   // SUITE 4: Zero Fake-Success & Truthful Error Handling Invariants
