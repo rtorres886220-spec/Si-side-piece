@@ -1821,7 +1821,14 @@ export default function App() {
       });
 
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        let errMsg = `HTTP ${res.status}`;
+        try {
+          const errData = await res.json();
+          errMsg = errData.error || errMsg;
+        } catch {}
+        const serverError = new Error(errMsg);
+        (serverError as any).status = res.status;
+        throw serverError;
       }
 
       const data = await res.json();
@@ -1883,14 +1890,44 @@ export default function App() {
         updateTurnAction("Rendering formatted response...", "Output complete", 4);
         setChatMessages((p) => [...p, { role: "assistant", text: data.text }]);
       } else {
-        await executeSimulatedAgentLoop(promptText.toLowerCase(), promptText);
+        setChatMessages((p) => [
+          ...p,
+          { role: "agent-badge", stepText: "Live Gemini: No response content generated", isSuccess: false },
+          { role: "assistant", text: "The model returned an empty response. Please verify the prompt or try again." }
+        ]);
       }
     } catch (err: any) {
       if (err.name === "AbortError" || signal?.aborted) {
+        setChatMessages((p) => [
+          ...p,
+          { role: "agent-badge", stepText: "Turn Cancelled [Stopped by user]", isSuccess: false }
+        ]);
         return;
       }
-      console.debug("Live Gemini server route notice:", err.message);
-      await executeSimulatedAgentLoop(promptText.toLowerCase(), promptText);
+      console.warn("Live Gemini route error:", err.message);
+      const statusCode = err?.status;
+      const isQuota = statusCode === 429 || (err.message && err.message.toLowerCase().includes("quota"));
+      const isAuth = statusCode === 401 || statusCode === 403 || (err.message && err.message.toLowerCase().includes("authentication"));
+      const isHighDemand = statusCode === 503 || (err.message && err.message.toLowerCase().includes("demand"));
+
+      let badgeTitle = "Live Gemini Error";
+      let errorHelp = err.message || "An unexpected error occurred while communicating with Gemini.";
+      if (isQuota) {
+        badgeTitle = "Gemini Quota Exceeded (429)";
+        errorHelp = "Gemini API rate limit or quota limit was reached. Please wait a moment before trying again, or configure a personal API key with dedicated quotas.";
+      } else if (isAuth) {
+        badgeTitle = "Gemini Authentication Failed";
+        errorHelp = "The Gemini API key is invalid or unauthorized. Please verify your GEMINI_API_KEY environment variable or settings.";
+      } else if (isHighDemand) {
+        badgeTitle = "Gemini Service Busy (503)";
+        errorHelp = "Google Gemini servers are currently experiencing high demand. Please try again or switch to gemini-3.1-flash-lite.";
+      }
+
+      setChatMessages((p) => [
+        ...p,
+        { role: "agent-badge", stepText: badgeTitle, isSuccess: false },
+        { role: "assistant", text: errorHelp }
+      ]);
     }
   };
 

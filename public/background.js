@@ -389,6 +389,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
+
+  if (message.type === "ABORT_PENDING_CDP") {
+    if (message.tabId && chrome.debugger) {
+      chrome.debugger.detach({ tabId: message.tabId }).catch(() => {});
+    }
+    sendResponse({ success: true, aborted: true });
+    return false;
+  }
 });
 
 /**

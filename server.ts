@@ -112,12 +112,124 @@ async function startServer() {
     }
 
     try {
+      const rawPayload = req.body?.rawPayload;
+      const model = req.body?.model || 'gemini-3.1-flash-lite';
+      const stream = Boolean(req.body?.stream);
+
+      const targetModel = (model === 'gemini-3.5-flash-lite' || !model) ? 'gemini-3.1-flash-lite' : model;
+      const cascade = [
+        targetModel,
+        'gemini-3.1-flash-lite',
+        'gemini-3.8-flash',
+        'gemini-flash-latest',
+      ].filter((m, i, a) => a.indexOf(m) === i);
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          timeout: 30000, // Bounded 30-second timeout deadline per attempt
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      });
+
+      // SPECIALIST MULTI-AGENT RAW PAYLOAD PROXY PATH:
+      // Preserves full systemInstruction, generationConfig (e.g. responseMimeType: "application/json"),
+      // and tool definitions across the server proxy boundary.
+      if (rawPayload && (rawPayload.contents || rawPayload.prompt)) {
+        const contentsPayload = rawPayload.contents || [{ role: 'user', parts: [{ text: rawPayload.prompt }] }];
+        const configPayload: GenerateContentConfig = {};
+
+        if (rawPayload.systemInstruction) {
+          if (typeof rawPayload.systemInstruction === 'string') {
+            configPayload.systemInstruction = rawPayload.systemInstruction;
+          } else if (Array.isArray(rawPayload.systemInstruction?.parts)) {
+            configPayload.systemInstruction = rawPayload.systemInstruction.parts
+              .filter((p: any) => p && typeof p.text === 'string')
+              .map((p: any) => p.text)
+              .join('\n');
+          } else if (rawPayload.systemInstruction.parts?.[0]?.text) {
+            configPayload.systemInstruction = rawPayload.systemInstruction.parts[0].text;
+          }
+        }
+
+        if (rawPayload.generationConfig) {
+          const gc = rawPayload.generationConfig;
+          if (gc.temperature !== undefined) configPayload.temperature = gc.temperature;
+          if (gc.responseMimeType) configPayload.responseMimeType = gc.responseMimeType;
+          if (gc.responseSchema) configPayload.responseSchema = gc.responseSchema;
+          if (gc.thinkingConfig) configPayload.thinkingConfig = gc.thinkingConfig;
+          if (gc.maxOutputTokens) configPayload.maxOutputTokens = gc.maxOutputTokens;
+        }
+
+        if (rawPayload.tools) {
+          configPayload.tools = rawPayload.tools;
+        }
+        if (rawPayload.toolConfig) {
+          configPayload.toolConfig = rawPayload.toolConfig;
+        }
+
+        let rawResponse: any = null;
+        let usedRawModel = targetModel;
+        let lastRawError: any = null;
+
+        for (const currentModel of cascade) {
+          try {
+            usedRawModel = currentModel;
+            rawResponse = await ai.models.generateContent({
+              model: currentModel,
+              contents: contentsPayload,
+              config: configPayload,
+            });
+            if (rawResponse) break;
+          } catch (err: any) {
+            lastRawError = err;
+            const errMsg = (err?.message || '').toLowerCase();
+            const isHighDemand =
+              err?.status === 503 ||
+              err?.status === 429 ||
+              errMsg.includes('high demand') ||
+              errMsg.includes('spikes in demand') ||
+              errMsg.includes('overloaded') ||
+              errMsg.includes('capacity');
+            if (isHighDemand) {
+              console.warn(`[server proxy] ${currentModel} encountered high demand, cascading to next model...`);
+              continue;
+            }
+            throw err;
+          }
+        }
+
+        if (!rawResponse && lastRawError) {
+          throw lastRawError;
+        }
+
+        const candidate = rawResponse?.candidates?.[0];
+        const functionCalls = candidate?.content?.parts?.filter((p: any) => p.functionCall).map((p: any) => p.functionCall) || [];
+        const textParts = candidate?.content?.parts?.filter((p: any) => p.text && !p.thought).map((p: any) => p.text).join('\n') || rawResponse?.text || '';
+
+        return res.json({
+          success: true,
+          rawResponse,
+          data: rawResponse,
+          candidates: rawResponse?.candidates || [],
+          text: textParts,
+          functionCall: functionCalls?.[0] || null,
+          usedModel: usedRawModel,
+          fromProxy: true,
+          timings: {
+            geminiApiMs: Math.round((performance.now() - tStart) * 10) / 10,
+            totalServerMs: Math.round((performance.now() - tStart) * 10) / 10,
+          },
+        });
+      }
+
+      // HIGH-LEVEL SIDEKICK CONVERSATIONAL & REASONING PASS:
       const {
         promptText,
         currentQuote,
         currentPage,
-        model = 'gemini-3.1-flash-lite',
-        stream = false,
       } = req.body;
 
       if (!promptText || typeof promptText !== 'string' || promptText.trim().length === 0) {
@@ -129,15 +241,6 @@ async function startServer() {
       }
 
       const tPayloadStart = performance.now();
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: {
-          timeout: 30000, // Bounded 30-second timeout deadline per attempt
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      });
       const enclaveId = Math.random().toString(36).substring(2, 10);
 
       // Deterministic Intent Routing
@@ -372,7 +475,10 @@ ${GROUNDING_SYSTEM_POLICY}`;
           !currentQuote &&
           !isBroadSummary &&
           !isShorthand &&
-          isPageReferential
+          isPageReferential &&
+          currentPage &&
+          (currentPage.content || currentPage.bodyText) &&
+          ((currentPage.content || currentPage.bodyText).trim().length > 50)
         ) {
           const tPayloadEnd = performance.now();
           const absentMsg = "That's unverified. This page has zero receipts or proof for that claim.";
@@ -589,15 +695,6 @@ ${GROUNDING_SYSTEM_POLICY}`;
       }
 
       // Model cascade: prioritize gemini-3.1-flash-lite
-      let targetModel = (model === 'gemini-3.5-flash-lite' || !model) ? 'gemini-3.1-flash-lite' : model;
-
-      const cascade = [
-        targetModel,
-        'gemini-3.1-flash-lite',
-        'gemini-3.8-flash',
-        'gemini-flash-latest',
-      ].filter((m, i, a) => a.indexOf(m) === i);
-
       let response: any = null;
       let lastError: any = null;
       let usedModel = targetModel;
@@ -779,7 +876,7 @@ ${GROUNDING_SYSTEM_POLICY}`;
       const statusCode = (err?.status && typeof err.status === 'number' && err.status >= 400 && err.status < 600) ? err.status : 500;
       const safeErrorMsg = err?.status === 429
         ? 'Gemini quota or rate limit exceeded. Please wait a moment before retrying.'
-        : (err?.status === 401 || err?.status === 403)
+        : (err?.status === 401 || err?.status === 403 || (err?.message && (err.message.includes('API_KEY_INVALID') || err.message.includes('API key not valid'))))
         ? 'Gemini authentication failed: Invalid or unauthorized API key.'
         : (err?.message ? String(err.message).replace(/AIza[0-9A-Za-z\-_]{35}/g, '[REDACTED_API_KEY]') : 'Error generating content from Gemini');
       return res.status(statusCode).json({

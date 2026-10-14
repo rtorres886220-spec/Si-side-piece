@@ -21,7 +21,8 @@
     "test:tabgroups": "tsx scripts/test-tabgroup-actionworker.ts",
     "test:scope": "tsx scripts/test-scope-resolution.ts",
     "test:pack": "tsx scripts/test-extension-packaging.ts",
-    "test": "npm run test:grounding && npm run test:benchmark && npm run test:tokens && npm run test:scope && npm run test:tabgroups && npm run test:multi-agent && npm run test:pack"
+    "test:routing": "tsx scripts/test-phase3-phase4-routing-reliability.ts",
+    "test": "npm run test:grounding && npm run test:benchmark && npm run test:tokens && npm run test:scope && npm run test:tabgroups && npm run test:multi-agent && npm run test:pack && npm run test:routing"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

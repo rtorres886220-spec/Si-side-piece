@@ -108,30 +108,34 @@
       };
 
       if (!this.apiKey) {
-        // Mode 2: Server-side proxy
+        // Mode 2: Authorized Server-Side Proxy with bounded retries for transient spikes
         const proxyBase = this.getResolvedProxyUrl();
         const proxyEndpoint = `${proxyBase}/api/gemini`;
-        const { signal: attemptSignal, cleanup } = createAttemptSignal();
+        let proxyAttempt = 0;
+        let proxyDelayMs = initialDelayMs;
 
-        try {
-          const proxyRes = await fetch(proxyEndpoint, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              promptText: requestBody?.contents?.[0]?.parts?.[0]?.text || "Request",
-              model: model || this.defaultModel,
-              rawPayload: requestBody,
-            }),
-            signal: attemptSignal,
-          });
+        while (proxyAttempt <= maxRetries) {
+          proxyAttempt++;
+          const { signal: attemptSignal, cleanup } = createAttemptSignal();
 
-          cleanup();
+          try {
+            const proxyRes = await fetch(proxyEndpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                promptText: requestBody?.promptText || requestBody?.contents?.[0]?.parts?.[0]?.text || "Request",
+                model: model || this.defaultModel,
+                rawPayload: requestBody,
+              }),
+              signal: attemptSignal,
+            });
 
-          if (proxyRes.ok) {
-            const proxyData = await proxyRes.json();
-            return {
-              data: proxyData.rawResponse || {
-                candidates: [
+            cleanup();
+
+            if (proxyRes.ok) {
+              const proxyData = await proxyRes.json();
+              const responseData = proxyData.rawResponse || proxyData.data || {
+                candidates: proxyData.candidates || [
                   {
                     content: {
                       parts: proxyData.functionCall
@@ -139,31 +143,73 @@
                         : [{ text: proxyData.text || "" }]
                     }
                   }
-                ]
-              },
-              usedModel: proxyData.usedModel || model,
-              wasFallback: false,
-              fromProxy: true,
-            };
-          }
+                ],
+                text: proxyData.text,
+                functionCall: proxyData.functionCall,
+              };
 
-          let proxyErrorText = "";
-          try {
-            const errJson = await proxyRes.json();
-            proxyErrorText = errJson?.error || JSON.stringify(errJson);
-          } catch {
-            proxyErrorText = await proxyRes.text().catch(() => proxyRes.statusText);
-          }
+              return {
+                data: responseData,
+                usedModel: proxyData.usedModel || model,
+                wasFallback: Boolean(proxyData.wasFallback),
+                fromProxy: true,
+              };
+            }
 
-          const proxyErr = new Error(`Server Proxy error (${proxyRes.status}): ${proxyErrorText || proxyRes.statusText}`);
-          proxyErr.status = proxyRes.status;
-          proxyErr.isNonRetryable = proxyRes.status === 400 || proxyRes.status === 401 || proxyRes.status === 403 || proxyRes.status === 404;
-          throw proxyErr;
-        } catch (proxyErr) {
-          cleanup();
-          if (proxyErr.name === "AbortError" || proxyErr.isNonRetryable) throw proxyErr;
-          throw new Error(`Proxy connection failed to ${proxyBase}: ${proxyErr.message}. Configure Gemini API key in Settings for direct access.`);
+            let proxyErrorText = "";
+            let errorCode = proxyRes.status;
+            try {
+              const errJson = await proxyRes.json();
+              proxyErrorText = errJson?.error || JSON.stringify(errJson);
+            } catch {
+              proxyErrorText = await proxyRes.text().catch(() => proxyRes.statusText);
+            }
+
+            const isTransient = errorCode === 429 || errorCode === 503 || errorCode === 500;
+            const isNonRetryable = errorCode === 400 || errorCode === 401 || errorCode === 403 || errorCode === 404;
+
+            if (isTransient && proxyAttempt <= maxRetries && !signal?.aborted) {
+              const jitter = (Math.random() - 0.5) * 0.5 * proxyDelayMs;
+              const waitTime = Math.max(300, Math.round(proxyDelayMs + jitter));
+              console.warn(`[ApiClient] Server proxy returned ${errorCode}. Retrying in ${waitTime}ms (attempt ${proxyAttempt}/${maxRetries}). Error: ${proxyErrorText}`);
+              await this._sleep(waitTime, signal);
+              proxyDelayMs *= 2;
+              continue;
+            }
+
+            const proxyErr = new Error(`Server Proxy error (${errorCode}): ${proxyErrorText || proxyRes.statusText}`);
+            proxyErr.status = errorCode;
+            proxyErr.isNonRetryable = isNonRetryable;
+            throw proxyErr;
+          } catch (proxyErr) {
+            cleanup();
+            if (signal?.aborted) throw proxyErr;
+            if (proxyErr.isNonRetryable) throw proxyErr;
+
+            const isTimeout = proxyErr.name === "TimeoutError" || attemptSignal.reason?.name === "TimeoutError";
+
+            if (proxyAttempt <= maxRetries && !signal?.aborted) {
+              const jitter = (Math.random() - 0.5) * 0.5 * proxyDelayMs;
+              const waitTime = Math.max(300, Math.round(proxyDelayMs + jitter));
+              console.warn(`[ApiClient] Server proxy attempt ${proxyAttempt}/${maxRetries} failed (${isTimeout ? 'timeout' : proxyErr.message}). Retrying in ${waitTime}ms...`);
+              await this._sleep(waitTime, signal);
+              proxyDelayMs *= 2;
+              continue;
+            }
+
+            if (isTimeout) {
+              const timeoutErr = new DOMException(`Request timed out after ${requestTimeoutMs / 1000} seconds`, "TimeoutError");
+              throw timeoutErr;
+            }
+
+            const connectionErr = new Error(`Proxy connection failed to ${proxyBase}: ${proxyErr.message}. If offline, please verify server status or configure a Gemini API key in Settings.`);
+            connectionErr.isOffline = true;
+            connectionErr.status = 503;
+            throw connectionErr;
+          }
         }
+
+        throw new Error(`Server proxy request failed after ${maxRetries} attempts.`);
       }
 
       // Mode 1: Direct Gemini API
@@ -317,13 +363,19 @@
      * Accurately filters out internal thought blocks from Gemini 2.0/3.x models.
      */
     static extractCandidate(data) {
+      if (!data) return { text: "", json: null, functionCall: null };
+
       const candidate = data?.candidates?.[0];
       const parts = candidate?.content?.parts || [];
-      if (!parts.length) return { text: "", json: null, functionCall: null };
 
-      // Look for functionCall first
+      // Extract functionCall
+      let functionCall = null;
       const functionCallPart = parts.find((p) => p && p.functionCall);
-      const functionCall = functionCallPart ? functionCallPart.functionCall : null;
+      if (functionCallPart) {
+        functionCall = functionCallPart.functionCall;
+      } else if (data.functionCall) {
+        functionCall = data.functionCall;
+      }
 
       // Filter out internal reasoning/thought parts (Gemini 2.0 Flash Thinking / Gemini 3)
       const nonThoughtParts = parts.filter(
@@ -333,15 +385,19 @@
       let text = "";
       if (nonThoughtParts.length > 0) {
         text = nonThoughtParts.map((p) => p.text).join("");
-      } else {
-        // Fallback: use all text parts if model only provided a single part without thought flag
+      } else if (parts.length > 0) {
         text = parts
           .filter((p) => p && typeof p.text === "string")
           .map((p) => p.text)
           .join("");
+      } else if (typeof data.text === "string") {
+        text = data.text;
       }
 
-      const json = SidekickApiClient.parseJsonFromText(text);
+      let json = SidekickApiClient.parseJsonFromText(text);
+      if (!json && functionCall && functionCall.args) {
+        json = functionCall.args;
+      }
 
       return {
         text,

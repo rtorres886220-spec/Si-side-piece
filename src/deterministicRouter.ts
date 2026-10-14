@@ -31,7 +31,7 @@ export interface RouterResult {
 }
 
 const GREETING_PATTERNS = [
-  /^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|howdy|yo)[\s,!.?]*$/i,
+  /^(?:hello|hi|hey|good\s+(?:morning|afternoon|evening|day)|greetings|howdy|yo)(?:\s+(?:there|sidekick|si|assistant|friend))?[\s,!.?]*$/i,
   /^(?:how\s+are\s+you(?:\s+doing)?|how's\s+it\s+going|what's\s+up)[\s,!.?]*$/i,
   /^(?:thank\s+you|thanks(?:\s+a\s+lot)?|bye|goodbye|see\s+ya)[\s,!.?]*$/i,
   /^(?:who\s+are\s+you|what\s+are\s+you|what\s+is\s+your\s+name)[\s,!.?]*$/i,

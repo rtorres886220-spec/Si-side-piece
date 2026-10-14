@@ -163,15 +163,30 @@ USER COMMAND: "${promptText}"`;
         },
       };
 
+      if (signal?.aborted) {
+        throw new DOMException("ActionWorker request aborted", "AbortError");
+      }
+
       let json = null;
       let rawText = "";
 
       try {
-        const { data } = await apiClient.executeRequest(requestBody, { signal });
+        if (signal?.aborted) {
+        throw new DOMException("AnswerWorker request aborted", "AbortError");
+      }
+
+      if (signal?.aborted) {
+        throw new DOMException("TransformWorker request aborted", "AbortError");
+      }
+
+      const { data } = await apiClient.executeRequest(requestBody, { signal });
         const extracted = extractCandidateSafe(apiClient, data);
         json = extracted.json;
         rawText = extracted.text || "";
       } catch (err) {
+        if (err.name === "AbortError" || signal?.aborted) {
+          throw err;
+        }
         console.warn("[ActionWorker] Request failed, attempting fallback recovery:", err.message);
       }
 
@@ -468,9 +483,15 @@ USER COMMAND: "${promptText}"`;
     }
   }
 
-  // Export to global scope
+  // Export to global scope across window, service worker (self), and globalThis (Node.js/browser)
+  if (typeof globalThis !== "undefined") {
+    globalThis.SidekickWorkers = SidekickWorkers;
+  }
   if (typeof window !== "undefined") {
     window.SidekickWorkers = SidekickWorkers;
+  }
+  if (typeof self !== "undefined") {
+    self.SidekickWorkers = SidekickWorkers;
   }
   if (typeof module !== "undefined" && module.exports) {
     module.exports = { SidekickWorkers };

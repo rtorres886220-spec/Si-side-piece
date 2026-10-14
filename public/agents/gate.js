@@ -308,9 +308,15 @@
     }
   }
 
-  // Export to global scope
+  // Export to global scope across window, service worker (self), and globalThis (Node.js/browser)
+  if (typeof globalThis !== "undefined") {
+    globalThis.SidekickGate = SidekickGate;
+  }
   if (typeof window !== "undefined") {
     window.SidekickGate = SidekickGate;
+  }
+  if (typeof self !== "undefined") {
+    self.SidekickGate = SidekickGate;
   }
   if (typeof module !== "undefined" && module.exports) {
     module.exports = { SidekickGate };

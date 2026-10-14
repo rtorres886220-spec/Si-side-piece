@@ -73,6 +73,10 @@ USER PROMPT: "${promptText}"`;
         },
       };
 
+      if (signal?.aborted) {
+        throw new DOMException("Router request aborted", "AbortError");
+      }
+
       try {
         const { data } = await apiClient.executeRequest(requestBody, {
           signal,
@@ -91,6 +95,9 @@ USER PROMPT: "${promptText}"`;
           };
         }
       } catch (err) {
+        if (err.name === "AbortError" || signal?.aborted) {
+          throw err;
+        }
         console.warn("[Router] Model routing failed, using fallback heuristic:", err);
       }
 
@@ -106,9 +113,15 @@ USER PROMPT: "${promptText}"`;
     }
   }
 
-  // Export to global scope
+  // Export to global scope across window, service worker (self), and globalThis (Node.js/browser)
+  if (typeof globalThis !== "undefined") {
+    globalThis.SidekickRouter = SidekickRouter;
+  }
   if (typeof window !== "undefined") {
     window.SidekickRouter = SidekickRouter;
+  }
+  if (typeof self !== "undefined") {
+    self.SidekickRouter = SidekickRouter;
   }
   if (typeof module !== "undefined" && module.exports) {
     module.exports = { SidekickRouter };

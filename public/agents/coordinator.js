@@ -25,6 +25,16 @@
         thinkingLevel = "HIGH",
       } = options;
 
+      if (signal?.aborted) {
+        throw new DOMException("Task aborted by user", "AbortError");
+      }
+
+      const router = typeof SidekickRouter !== "undefined" ? SidekickRouter : (typeof globalThis !== "undefined" ? globalThis.SidekickRouter : null);
+      const retriever = typeof SidekickRetriever !== "undefined" ? SidekickRetriever : (typeof globalThis !== "undefined" ? globalThis.SidekickRetriever : null);
+      const workers = typeof SidekickWorkers !== "undefined" ? SidekickWorkers : (typeof globalThis !== "undefined" ? globalThis.SidekickWorkers : null);
+      const gate = typeof SidekickGate !== "undefined" ? SidekickGate : (typeof globalThis !== "undefined" ? globalThis.SidekickGate : null);
+      const critic = typeof SidekickCritic !== "undefined" ? SidekickCritic : (typeof globalThis !== "undefined" ? globalThis.SidekickCritic : null);
+
       const tStart = performance.now();
       const telemetry = {
         routerMs: 0,
@@ -40,7 +50,7 @@
       };
 
       // 1. MECHANICAL BYPASS (0ms Zero-LLM)
-      const mechanical = SidekickRouter.checkMechanicalFastPath(promptText);
+      const mechanical = router ? router.checkMechanicalFastPath(promptText) : { isMechanical: false };
       if (mechanical.isMechanical) {
         telemetry.totalMs = Math.round(performance.now() - tStart);
         telemetry.intent = "mechanical_action";
@@ -53,19 +63,22 @@
       }
 
       // 2. DISCRETE RETRIEVAL STAGE PREP
-      const docSections = SidekickRetriever.parseDocumentSections(pageContext?.bodyText || "");
-      const sectionCatalog = SidekickRetriever.generateSectionCatalog(docSections);
+      const docSections = retriever ? retriever.parseDocumentSections(pageContext?.bodyText || "") : [];
+      const sectionCatalog = retriever ? retriever.generateSectionCatalog(docSections) : [];
 
       // 3. STAGE 1: ROUTER + RETRIEVER
+      if (signal?.aborted) throw new DOMException("Task aborted by user", "AbortError");
       onProgress("Routing intent & ranking sections…", "1. Router Agent", 1);
       const tRouterStart = performance.now();
 
-      const route = await SidekickRouter.routeRequest(this.apiClient, promptText, sectionCatalog, { signal, thinkingLevel });
+      const route = await (router || SidekickRouter).routeRequest(this.apiClient, promptText, sectionCatalog, { signal, thinkingLevel });
       telemetry.routerMs = Math.round(performance.now() - tRouterStart);
       telemetry.intent = route.intent;
 
+      if (signal?.aborted) throw new DOMException("Task aborted by user", "AbortError");
+
       // Execute discrete retrieval using selected section indices
-      const evidence = SidekickRetriever.retrieveEvidence(docSections, route.target_sections, {
+      const evidence = (retriever || SidekickRetriever).retrieveEvidence(docSections, route.target_sections, {
         selectedText: pageContext?.selectedText || "",
         pageTitle: pageContext?.title || "",
         pageUrl: pageContext?.url || "",
@@ -73,6 +86,7 @@
       telemetry.usedFullPageFallback = evidence.usedFullPageFallback;
 
       // 4. STAGE 2: SPECIALIST WORKER EXECUTION
+      if (signal?.aborted) throw new DOMException("Task aborted by user", "AbortError");
       const tWorkerStart = performance.now();
       let workerPayload = null;
       let workerType = route.intent;
@@ -81,7 +95,7 @@
       if (route.intent === "action") {
         onProgress("Targeting element & action type…", "2. Action Worker", 2);
         telemetry.workerUsed = "ActionWorker";
-        workerPayload = await SidekickWorkers.executeActionWorker(
+        workerPayload = await (workers || SidekickWorkers).executeActionWorker(
           this.apiClient,
           promptText,
           pageContext?.interactiveElements || [],
@@ -91,7 +105,7 @@
       } else if (route.intent === "answer") {
         onProgress("Synthesizing grounded facts & receipts…", "2. Answer Worker", 2);
         telemetry.workerUsed = "AnswerWorker";
-        workerPayload = await SidekickWorkers.executeAnswerWorker(
+        workerPayload = await (workers || SidekickWorkers).executeAnswerWorker(
           this.apiClient,
           promptText,
           evidence.evidenceText,
@@ -102,7 +116,7 @@
         // "transform" (open synthesis, rewrite, translate, draft, quiz, evaluate)
         onProgress("Generating synthesis & transform…", "2. Transform Worker", 2);
         telemetry.workerUsed = "TransformWorker";
-        workerPayload = await SidekickWorkers.executeTransformWorker(
+        workerPayload = await (workers || SidekickWorkers).executeTransformWorker(
           this.apiClient,
           promptText,
           evidence.evidenceText,
@@ -113,21 +127,23 @@
       telemetry.workerMs = Math.round(performance.now() - tWorkerStart);
 
       // 5. STAGE 3: DETERMINISTIC INVARIANT GATE
+      if (signal?.aborted) throw new DOMException("Task aborted by user", "AbortError");
       onProgress("Verifying safety & quality invariants…", "3. Deterministic Gate", 3);
       const tGateStart = performance.now();
 
       let gateResult = null;
       if (route.intent === "action") {
-        gateResult = SidekickGate.verifyActionWorker(workerPayload, pageContext?.interactiveElements || []);
+        gateResult = (gate || SidekickGate).verifyActionWorker(workerPayload, pageContext?.interactiveElements || []);
       } else if (route.intent === "answer") {
-        gateResult = SidekickGate.verifyAnswerWorker(workerPayload, promptText, evidence.evidenceText);
+        gateResult = (gate || SidekickGate).verifyAnswerWorker(workerPayload, promptText, evidence.evidenceText);
       } else {
-        gateResult = SidekickGate.verifyTransformWorker(workerPayload);
+        gateResult = (gate || SidekickGate).verifyTransformWorker(workerPayload);
       }
       telemetry.gateMs = Math.round(performance.now() - tGateStart);
 
       // 6. STAGE 4: CRITIC VERIFIER LOOP (Fires ONLY on gate violation)
       if (!gateResult.passed) {
+        if (signal?.aborted) throw new DOMException("Task aborted by user", "AbortError");
         telemetry.criticFired = true;
 
         if (gateResult.isSecurityViolation) {
@@ -144,7 +160,7 @@
         onProgress(`Gate flagged ${gateResult.code}; Critic repairing…`, "4. Critic Verifier", 4);
         const tCriticStart = performance.now();
 
-        const repair = await SidekickCritic.repairFailure(
+        const repair = await (critic || SidekickCritic).repairFailure(
           this.apiClient,
           route.intent,
           workerPayload,
@@ -377,9 +393,15 @@
     }
   }
 
-  // Export to global scope
+  // Export to global scope across window, service worker (self), and globalThis (Node.js/browser)
+  if (typeof globalThis !== "undefined") {
+    globalThis.SidekickCoordinator = SidekickCoordinator;
+  }
   if (typeof window !== "undefined") {
     window.SidekickCoordinator = SidekickCoordinator;
+  }
+  if (typeof self !== "undefined") {
+    self.SidekickCoordinator = SidekickCoordinator;
   }
   if (typeof module !== "undefined" && module.exports) {
     module.exports = { SidekickCoordinator };

@@ -3280,6 +3280,12 @@ function renderAssistantMarkdownMessage(markdownText, followUps = []) {
  * Handle Prompt Submission via Multi-Agent Pipeline Coordinator
  */
 async function submitPrompt(promptText) {
+  // Prevent overlapping tasks when a task is already executing
+  if (state.isBusy) {
+    console.warn("[Sidekick] Task already in progress. Ignoring overlapping submission.");
+    return;
+  }
+
   removeFollowUps();
   hideSafetyModal();
 
@@ -3312,7 +3318,14 @@ async function submitPrompt(promptText) {
     ? crypto.randomUUID()
     : ("enclave-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10));
 
+  // Bounded total task deadline (120 seconds maximum per user turn)
+  const taskDeadlineMs = 120000;
   state.abortController = new AbortController();
+  const taskDeadlineTimer = setTimeout(() => {
+    if (state.abortController) {
+      state.abortController.abort(new DOMException("Task exceeded maximum total execution deadline of 120 seconds", "TimeoutError"));
+    }
+  }, taskDeadlineMs);
 
   try {
     // Perform guaranteed live active tab extraction immediately before running turn
@@ -3629,6 +3642,7 @@ async function submitPrompt(promptText) {
       }
     }
   } finally {
+    clearTimeout(taskDeadlineTimer);
     setBusyState(false);
     hideSafetyModal();
     state.abortController = null;
@@ -3748,66 +3762,8 @@ async function handleResilientDirectActionFallback(promptText) {
     }
   }
 
-  // 4. Informational question answered from active tab text
-  if (state.pageContext.bodyText && state.pageContext.bodyText.length > 50) {
-    const trimmed = pLower.trim();
-    const isPureGreeting = /^(hi|hello|hey|good\s+(morning|afternoon|evening|day))[\s!.?]*$/i.test(trimmed);
-    const isConversationalInquiry = /^(how\s+are\s+you(\s+doing)?|who\s+are\s+you|what\s+are\s+you|what\s+can\s+you\s+do|how's\s+it\s+going|how\s+do\s+you\s+do)[\s!.?]*$/i.test(trimmed);
-
-    if (isPureGreeting || isConversationalInquiry) {
-      renderAssistantPlainMessage(
-        isConversationalInquiry && /who/i.test(trimmed)
-          ? "I'm Sidekick. I run browser actions, pull verified facts, and cut through the noise with zero fluff. Talk to me—what are we doing on this page?"
-          : "I'm locked in. What are we doing on this tab?"
-      );
-      return true;
-    }
-
-    const STOP_WORDS = new Set([
-      "how", "are", "you", "who", "what", "when", "where", "why",
-      "the", "and", "for", "with", "that", "this", "from", "have",
-      "has", "had", "can", "could", "will", "would", "should", "all",
-      "any", "some", "our", "your", "their", "its", "about", "into",
-      "more", "then", "them", "these", "those", "does", "been", "being",
-      "hello", "hey", "hi", "good", "morning", "afternoon", "evening",
-      "please", "tell", "show", "help", "thank", "thanks", "there", "here"
-    ]);
-
-    const body = state.pageContext.bodyText;
-    const sentences = body.split(/(?<=[.!?])\s+/);
-    const words = (pLower.match(/[a-z0-9_-]{3,}/g) || []).filter((w) => !STOP_WORDS.has(w));
-    if (words.length > 0) {
-      let bestSentence = "";
-      let bestMatches = 0;
-      for (const sent of sentences) {
-        const sLower = sent.toLowerCase();
-        let matchCount = 0;
-        for (const w of words) {
-          if (sLower.includes(w)) matchCount++;
-        }
-        if (matchCount > bestMatches) {
-          bestMatches = matchCount;
-          bestSentence = sent.trim();
-        }
-      }
-      if (bestMatches >= 2 && bestSentence) {
-        renderAgentStepBadge(`Grounded on active tab: ${state.pageContext.title.slice(0, 30)}`, true);
-        await renderAssistantResponse({
-          paragraphs: [
-            {
-              text: bestSentence,
-              citations: [
-                { quote: bestSentence.slice(0, 60), label: state.pageContext.title.slice(0, 25) || "Page Context" }
-              ]
-            }
-          ],
-          followUps: ["/actions", "/summarize", "/copy"]
-        });
-        return true;
-      }
-    }
-  }
-
+  // Pure manual mechanical commands (scroll, click, type, navigate) fall through if unhandled.
+  // Factual, informational, and reasoning errors are NOT fabricated and must be truthfully rendered to the user.
   return false;
 }
 
@@ -3919,6 +3875,9 @@ function resolveElementCoordinates(args, elements) {
  * Execute CDP Action via Background Service Worker
  */
 async function executeJITAction(toolName, args) {
+  if (state.abortController?.signal?.aborted) {
+    throw new DOMException("Action cancelled by user", "AbortError");
+  }
   if (!state.activeTabId) throw new Error("No active tab connected");
 
   // Navigation targets an external destination URL - verify the destination domain, NOT the source tab
@@ -4097,7 +4056,10 @@ function stopRequest() {
     }
   }
   if (state.abortController) {
-    state.abortController.abort();
+    state.abortController.abort(new DOMException("Task aborted by user", "AbortError"));
+  }
+  if (state.activeTabId && typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+    chrome.runtime.sendMessage({ type: "ABORT_PENDING_CDP", tabId: state.activeTabId }).catch(() => {});
   }
   hideActiveTaskLedger();
   setBusyState(false);
@@ -4586,10 +4548,82 @@ function renderErrorCard(error, promptText) {
     errorLower.includes("unauthenticated") ||
     (error?.status === 400 && errorLower.includes("api key"));
 
+  const isOfflineOrProxyUnavailable =
+    error?.isOffline ||
+    errorLower.includes("proxy connection failed") ||
+    errorLower.includes("failed to fetch") ||
+    errorLower.includes("network error") ||
+    errorLower.includes("econnrefused") ||
+    errorLower.includes("server proxy request failed") ||
+    errorLower.includes("server proxy error") ||
+    (error?.status === 503 && errorLower.includes("proxy"));
+
+  const isTimeout =
+    error?.name === "TimeoutError" ||
+    errorLower.includes("timed out") ||
+    errorLower.includes("deadline exceeded");
+
   const card = document.createElement("div");
   card.className = "error-recovery-card";
 
-  if (isHighDemand) {
+  if (isOfflineOrProxyUnavailable) {
+    const proxyBase = (typeof getResolvedProxyUrl === "function" ? getResolvedProxyUrl() : state.proxyUrl) || "http://localhost:3000";
+    card.innerHTML = `
+      <div class="error-recovery-header">
+        <span class="error-badge alert">📡 Server Proxy Unreachable</span>
+      </div>
+      <p class="error-recovery-desc">
+        Could not connect to the backend server proxy at <code>${escapeXml(proxyBase)}</code>.
+        If running locally, please ensure the backend server is running (e.g. <code>npm run dev</code>).
+        Alternatively, configure a direct Gemini API key in Settings.
+      </p>
+      <div class="error-recovery-actions">
+        <button type="button" class="error-action-btn primary" id="errRetryBtn">
+          Retry Connection ↻
+        </button>
+        <button type="button" class="error-action-btn" id="errOpenSettingsBtn">
+          Settings &amp; API Key ⚙
+        </button>
+      </div>
+    `;
+    card.querySelector("#errRetryBtn")?.addEventListener("click", () => {
+      card.remove();
+      submitPrompt(promptText);
+    });
+    card.querySelector("#errOpenSettingsBtn")?.addEventListener("click", () => {
+      elements.settingsDrawer?.classList.remove("hidden");
+      elements.apiKeyInput?.focus();
+    });
+  } else if (isTimeout) {
+    card.innerHTML = `
+      <div class="error-recovery-header">
+        <span class="error-badge warning">⏱️ Request Timed Out</span>
+      </div>
+      <p class="error-recovery-desc">
+        The request exceeded the bounded execution deadline without a response from the model.
+      </p>
+      <div class="error-recovery-actions">
+        <button type="button" class="error-action-btn primary" id="errRetryBtn">
+          Retry ↻
+        </button>
+        <button type="button" class="error-action-btn" id="errSwitchFlashBtn">
+          Try Gemini 3.1 Flash-Lite
+        </button>
+      </div>
+    `;
+    card.querySelector("#errRetryBtn")?.addEventListener("click", () => {
+      card.remove();
+      submitPrompt(promptText);
+    });
+    card.querySelector("#errSwitchFlashBtn")?.addEventListener("click", async () => {
+      card.remove();
+      state.model = FALLBACK_MODEL;
+      await storage.set({ [STORAGE_KEY_MODEL]: FALLBACK_MODEL });
+      updateModelToken(FALLBACK_MODEL);
+      if (elements.modelSelect) elements.modelSelect.value = FALLBACK_MODEL;
+      submitPrompt(promptText);
+    });
+  } else if (isHighDemand) {
     card.innerHTML = `
       <div class="error-recovery-header">
         <span class="error-badge warning">⚡ Model High Demand Spike</span>

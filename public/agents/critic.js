@@ -101,6 +101,10 @@ Provide the corrected JSON with "text":`;
         },
       };
 
+      if (signal?.aborted) {
+        throw new DOMException("Critic request aborted", "AbortError");
+      }
+
       try {
         const { data } = await apiClient.executeRequest(requestBody, { signal });
         const { json } = SidekickApiClient.extractCandidate(data);
@@ -126,6 +130,9 @@ Provide the corrected JSON with "text":`;
           }
         }
       } catch (err) {
+        if (err.name === "AbortError" || signal?.aborted) {
+          throw err;
+        }
         console.warn("[Critic] Repair attempt failed:", err);
       }
 
@@ -173,9 +180,15 @@ Provide the corrected JSON with "text":`;
     }
   }
 
-  // Export to global scope
+  // Export to global scope across window, service worker (self), and globalThis (Node.js/browser)
+  if (typeof globalThis !== "undefined") {
+    globalThis.SidekickCritic = SidekickCritic;
+  }
   if (typeof window !== "undefined") {
     window.SidekickCritic = SidekickCritic;
+  }
+  if (typeof self !== "undefined") {
+    self.SidekickCritic = SidekickCritic;
   }
   if (typeof module !== "undefined" && module.exports) {
     module.exports = { SidekickCritic };

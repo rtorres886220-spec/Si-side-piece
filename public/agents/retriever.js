@@ -123,9 +123,15 @@
     }
   }
 
-  // Export to global scope
+  // Export to global scope across window, service worker (self), and globalThis (Node.js/browser)
+  if (typeof globalThis !== "undefined") {
+    globalThis.SidekickRetriever = SidekickRetriever;
+  }
   if (typeof window !== "undefined") {
     window.SidekickRetriever = SidekickRetriever;
+  }
+  if (typeof self !== "undefined") {
+    self.SidekickRetriever = SidekickRetriever;
   }
   if (typeof module !== "undefined" && module.exports) {
     module.exports = { SidekickRetriever };
