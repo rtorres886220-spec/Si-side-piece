@@ -7,13 +7,14 @@
 
 (function () {
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-  const PRIMARY_MODEL = "gemini-3.5-flash-lite";
-  const TEMPORARY_FALLBACK_MODEL = "gemini-3.1-flash-lite";
+  const PRIMARY_MODEL = "gemini-3.1-flash-lite";
+  const TEMPORARY_FALLBACK_MODEL = "gemini-3.8-flash";
 
   class SidekickApiClient {
-    constructor(apiKey, defaultModel = PRIMARY_MODEL) {
+    constructor(apiKey, defaultModel = PRIMARY_MODEL, proxyBaseUrl = "") {
       this.apiKey = (apiKey || "").replace(/['"\s]/g, "").trim();
       this.defaultModel = defaultModel || PRIMARY_MODEL;
+      this.proxyBaseUrl = proxyBaseUrl || "";
       this._requestQueue = Promise.resolve(); // Serializes model calls within this client
     }
 
@@ -22,7 +23,24 @@
     }
 
     setModel(model) {
-      if (model) this.defaultModel = model;
+      if (model) {
+        this.defaultModel = model === "gemini-3.5-flash-lite" ? PRIMARY_MODEL : model;
+      }
+    }
+
+    setProxyBaseUrl(url) {
+      this.proxyBaseUrl = (url || "").trim().replace(/\/+$/, "");
+    }
+
+    getResolvedProxyUrl() {
+      if (this.proxyBaseUrl) return this.proxyBaseUrl;
+      if (typeof globalThis !== "undefined" && globalThis.__SIDEKICK_BACKEND_URL__) {
+        return String(globalThis.__SIDEKICK_BACKEND_URL__).trim().replace(/\/+$/, "");
+      }
+      if (typeof window !== "undefined" && window.location && window.location.protocol && window.location.protocol.startsWith("http")) {
+        return window.location.origin;
+      }
+      return "http://localhost:3000";
     }
 
     /**
@@ -56,20 +74,47 @@
     }
 
     /**
-     * Call with exponential backoff, jitter, and dual proxy fallback
+     * Call with exponential backoff, jitter, bounded timeouts, and truthful failure reporting
      */
     async _callWithRetry(requestBody, options = {}) {
+      const rawModel = options.model || this.defaultModel;
+      const model = rawModel === "gemini-3.5-flash-lite" ? PRIMARY_MODEL : rawModel;
       const {
-        model = this.defaultModel,
         signal = null,
         maxRetries = 3,
         initialDelayMs = 750,
+        requestTimeoutMs = 30000,
       } = options;
 
+      // Create bounded per-attempt timeout controller combined with external signal
+      const createAttemptSignal = () => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort(new DOMException("Request timed out after 30 seconds", "TimeoutError"));
+        }, requestTimeoutMs);
+
+        if (signal) {
+          if (signal.aborted) {
+            clearTimeout(timeoutId);
+            controller.abort(signal.reason);
+          } else {
+            signal.addEventListener("abort", () => {
+              clearTimeout(timeoutId);
+              controller.abort(signal.reason);
+            }, { once: true });
+          }
+        }
+        return { signal: controller.signal, cleanup: () => clearTimeout(timeoutId) };
+      };
+
       if (!this.apiKey) {
-        // Dual-mode: Attempt seamless fallback to server-side proxy
+        // Mode 2: Server-side proxy
+        const proxyBase = this.getResolvedProxyUrl();
+        const proxyEndpoint = `${proxyBase}/api/gemini`;
+        const { signal: attemptSignal, cleanup } = createAttemptSignal();
+
         try {
-          const proxyRes = await fetch("/api/gemini", {
+          const proxyRes = await fetch(proxyEndpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -77,8 +122,11 @@
               model: model || this.defaultModel,
               rawPayload: requestBody,
             }),
-            signal,
+            signal: attemptSignal,
           });
+
+          cleanup();
+
           if (proxyRes.ok) {
             const proxyData = await proxyRes.json();
             return {
@@ -94,15 +142,31 @@
                 ]
               },
               usedModel: proxyData.usedModel || model,
-              wasFallback: true,
+              wasFallback: false,
+              fromProxy: true,
             };
           }
+
+          let proxyErrorText = "";
+          try {
+            const errJson = await proxyRes.json();
+            proxyErrorText = errJson?.error || JSON.stringify(errJson);
+          } catch {
+            proxyErrorText = await proxyRes.text().catch(() => proxyRes.statusText);
+          }
+
+          const proxyErr = new Error(`Server Proxy error (${proxyRes.status}): ${proxyErrorText || proxyRes.statusText}`);
+          proxyErr.status = proxyRes.status;
+          proxyErr.isNonRetryable = proxyRes.status === 400 || proxyRes.status === 401 || proxyRes.status === 403 || proxyRes.status === 404;
+          throw proxyErr;
         } catch (proxyErr) {
-          console.debug("[ApiClient] Proxy route attempt notice:", proxyErr.message);
+          cleanup();
+          if (proxyErr.name === "AbortError" || proxyErr.isNonRetryable) throw proxyErr;
+          throw new Error(`Proxy connection failed to ${proxyBase}: ${proxyErr.message}. Configure Gemini API key in Settings for direct access.`);
         }
-        throw new Error("Missing Gemini API Key. Please configure your key in Settings.");
       }
 
+      // Mode 1: Direct Gemini API
       let currentModel = model;
       let attempt = 0;
       let delayMs = initialDelayMs;
@@ -110,6 +174,7 @@
       while (attempt <= maxRetries) {
         attempt++;
         const endpoint = `${GEMINI_BASE_URL}/${currentModel}:generateContent`;
+        const { signal: attemptSignal, cleanup } = createAttemptSignal();
 
         try {
           const res = await fetch(endpoint, {
@@ -119,8 +184,10 @@
               "x-goog-api-key": this.apiKey,
             },
             body: JSON.stringify(requestBody),
-            signal,
+            signal: attemptSignal,
           });
+
+          cleanup();
 
           if (res.ok) {
             const data = await res.json();
@@ -128,6 +195,7 @@
               data,
               usedModel: currentModel,
               wasFallback: currentModel !== model,
+              fromProxy: false,
             };
           }
 
@@ -145,27 +213,27 @@
             errorText = res.statusText || `HTTP ${status}`;
           }
 
-          // Handle 429 Too Many Requests or 503 Service Unavailable
+          // Handle 429 Too Many Requests or 503 Service Unavailable with bounded backoff
           if ((status === 429 || status === 503) && attempt <= maxRetries) {
-            // Apply jitter: ± 25% of delay
             const jitter = (Math.random() - 0.5) * 0.5 * delayMs;
             const waitTime = Math.max(300, Math.round(delayMs + jitter));
             console.warn(`[ApiClient] Received ${status} from ${currentModel}. Retrying in ${waitTime}ms (attempt ${attempt}/${maxRetries}). Error: ${errorText}`);
             await this._sleep(waitTime, signal);
             delayMs *= 2;
 
-            // If 503 or 429 persists on last retry attempt, try temporary fallback without persisting
             if (attempt === maxRetries && currentModel === PRIMARY_MODEL) {
-              console.warn(`[ApiClient] High load persisted. Testing temporary non-persisted fallback model: ${TEMPORARY_FALLBACK_MODEL}`);
+              console.warn(`[ApiClient] High load persisted on ${PRIMARY_MODEL}. Trying fallback model: ${TEMPORARY_FALLBACK_MODEL}`);
               currentModel = TEMPORARY_FALLBACK_MODEL;
             }
             continue;
           }
 
           const nonRetryError = new Error(`Gemini API error (${status}): ${errorText || res.statusText}`);
+          nonRetryError.status = status;
           nonRetryError.isNonRetryable = true;
           throw nonRetryError;
         } catch (err) {
+          cleanup();
           if (err.name === "AbortError" || err.isNonRetryable) throw err;
 
           // Network or transient errors

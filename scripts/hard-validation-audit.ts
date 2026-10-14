@@ -5,6 +5,7 @@
 
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
+import fs from "fs";
 import {
   routeUserRequest,
 } from "../src/deterministicRouter.ts";
@@ -59,10 +60,13 @@ async function auditSection1_Claims() {
   const claimResults: Record<string, { verified: boolean; evidence: string }> = {};
 
   // Claim 1: gemini-3.1-flash-lite is actually the primary model
-  const primaryModelName = "gemini-3.1-flash-lite";
+  const serverCode = fs.readFileSync("server.ts", "utf8");
+  const sidepanelCode = fs.readFileSync("public/sidepanel.js", "utf8");
+  const serverHasPrimary = serverCode.includes("'gemini-3.1-flash-lite'");
+  const sidepanelHasPrimary = sidepanelCode.includes('"gemini-3.1-flash-lite"');
   claimResults["Primary Model is gemini-3.1-flash-lite"] = {
-    verified: primaryModelName === "gemini-3.1-flash-lite",
-    evidence: "Configured in server.ts (line 48 defaultModel, line 74 model, line 458 targetModel) and sidepanel.js (line 12 DEFAULT_MODEL)",
+    verified: serverHasPrimary && sidepanelHasPrimary,
+    evidence: `Verified in server.ts (${serverHasPrimary}) and public/sidepanel.js (${sidepanelHasPrimary}) source code.`,
   };
 
   // Claim 2: Deterministic router is actually used before Gemini
@@ -127,21 +131,49 @@ async function auditSection1_Claims() {
   };
 
   // Claim 8: Tool schemas are gated
+  const convRoute = routeUserRequest("hello");
+  const actRoute = routeUserRequest("click submit");
+  const infoRoute = routeUserRequest("what is the thesis of this paper");
+  const toolsGated = convRoute.intent === "conversational" &&
+    !convRoute.requiresDomElements &&
+    actRoute.intent === "pure_action" &&
+    actRoute.requiresDomElements &&
+    infoRoute.intent === "informational" &&
+    infoRoute.requiresPageEvidence;
   claimResults["Tool schemas are gated"] = {
-    verified: true,
-    evidence: "server.ts lines 431-447: conversational = undefined (0 tools), pure action = CDP actions only (1-2 tools), informational = [finish_task] (1 tool).",
+    verified: toolsGated,
+    evidence: `Verified intent routing constraints: conversational requiresDom=${convRoute.requiresDomElements}, pure_action requiresDom=${actRoute.requiresDomElements}, informational requiresEvidence=${infoRoute.requiresPageEvidence}.`,
   };
 
   // Claim 9: Multi-step requests use state deltas
+  const sidepanelCodeStr = fs.readFileSync("public/sidepanel.js", "utf8");
+  const deltaVerified = sidepanelCodeStr.includes("cognitiveLedger") && sidepanelCodeStr.includes("completedMilestones");
   claimResults["Multi-step requests use state deltas"] = {
-    verified: true,
-    evidence: "sidepanel.js lines 2597-2608: when page URL & mutation version unchanged, original full page payload in contents[0] replaced with compact delta notice.",
+    verified: deltaVerified,
+    evidence: "Verified cognitiveLedger state and incremental step milestone tracking in public/sidepanel.js.",
   };
 
   // Claim 10: Grounding verification runs before factual responses reach UI
+  const ungroundedPayload: FinishTaskPayload = {
+    paragraphs: [{ text: "The sky is bright green with orange spots.", citations: [] }],
+    atomicClaims: [{
+      id: "claim-test-1",
+      subject: "sky",
+      assertion: "The sky is bright green with orange spots.",
+      contextScope: "Atmospheric test",
+      evidenceIds: [],
+      evidenceQuotes: ["The sky is bright green with orange spots."],
+      supportType: "direct",
+      isDirectlySupported: true,
+      status: "unverified"
+    }]
+  };
+  const testGroundingAudit = validateAndEnforceGrounding(ungroundedPayload, "The sky is clear blue.");
+  const groundingWorks = testGroundingAudit.auditReport.issuesDetected.length > 0 ||
+    testGroundingAudit.sanitizedPayload.paragraphs.some(p => p.text.includes("unverified"));
   claimResults["Grounding verification runs before UI display"] = {
-    verified: true,
-    evidence: "server.ts lines 570-607 runs validateAndEnforceGrounding and injects auditReport before returning JSON; sidepanel.js line 2550 enforces validateAndEnforceGroundingClient before renderAssistantResponse.",
+    verified: groundingWorks,
+    evidence: `validateAndEnforceGrounding caught ungrounded claim (issues detected: ${testGroundingAudit.auditReport.issuesDetected.length}) and sanitized response.`,
   };
 
   // Claim 11: 429/503 handling uses bounded backoff
@@ -154,10 +186,41 @@ async function auditSection1_Claims() {
   };
 
   // Claim 12: Instrumentation measures what report claims
-  new TelemetryCollector();
-  claimResults["Instrumentation measures required metrics"] = {
+  const testCollector = new TelemetryCollector();
+  testCollector.record({
+    id: "test-req-1",
+    timestamp: Date.now(),
+    model: "gemini-3.1-flash-lite",
+    intent: "informational",
+    requestType: "lite_synthesis",
+    tokens: {
+      system: 30,
+      tools: 20,
+      page: 50,
+      evidence: 10,
+      selection: 5,
+      history: 5,
+      inputTotal: 120,
+      outputEstimated: 25,
+    },
+    toolsCount: 1,
+    geminiCallsCount: 1,
+    timings: {
+      payloadMs: 10,
+      inferenceMs: 120,
+      validationMs: 20,
+      totalMs: 150,
+    },
+    httpStatus: 200,
+    retries: 0,
     verified: true,
-    evidence: "TelemetryCollector in src/instrumentation.ts tracks token breakdown (system, tools, page, evidence, selection, history, output), timings, route, call counts, conflation catches.",
+    conflationIssuesCount: 0,
+    isSuccess: true,
+  });
+  const testSummary = testCollector.getAggregateSummary();
+  claimResults["Instrumentation measures required metrics"] = {
+    verified: testSummary.totalRequests === 1 && testSummary.avgLatencyMs === 150,
+    evidence: `TelemetryCollector recorded ${testSummary.totalRequests} request, avg latency ${testSummary.avgLatencyMs}ms.`,
   };
 
   for (const [claim, res] of Object.entries(claimResults)) {

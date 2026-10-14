@@ -7,7 +7,7 @@
     "dev": "tsx server.ts",
     "build:cosmos": "esbuild src/cosmosEngine.ts --bundle --minify --format=iife --outfile=public/cosmos.bundle.js",
     "pack:extension": "npm run build:cosmos && tsx scripts/pack-extension.ts",
-    "build": "npm run build:cosmos && vite build",
+    "build": "npm run build:cosmos && tsx scripts/pack-extension.ts && vite build",
     "start": "node server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
@@ -20,7 +20,8 @@
     "test:multi-agent": "tsx scripts/benchmark-multi-agent.ts",
     "test:tabgroups": "tsx scripts/test-tabgroup-actionworker.ts",
     "test:scope": "tsx scripts/test-scope-resolution.ts",
-    "test": "npm run test:grounding && npm run test:benchmark && npm run test:tokens && npm run test:scope && npm run test:tabgroups && npm run test:multi-agent"
+    "test:pack": "tsx scripts/test-extension-packaging.ts",
+    "test": "npm run test:grounding && npm run test:benchmark && npm run test:tokens && npm run test:scope && npm run test:tabgroups && npm run test:multi-agent && npm run test:pack"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

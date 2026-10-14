@@ -698,14 +698,33 @@ function runSuite10_UnseenWorkload() {
   }
   console.log(`Unseen Hybrid Tasks: ${uhPass}/10 passed`);
 
-  // 4. 10 Unseen Multi-Step Tasks
+  // 4. 10 Unseen Multi-Step Tasks (Real sequential execution and target resolution)
+  const unseenMultiStepTasks: { cmd: string; elements: InteractiveElementCandidate[]; expectedAction: "click" | "navigate" | "scroll" | "type" | "upload" }[] = [
+    { cmd: "Click search input", elements: [{ id: 101, role: "input", label: "search input", x: 100, y: 50, selector: "#search" }], expectedAction: "click" },
+    { cmd: "Type 'wireless headphones' into search", elements: [{ id: 101, role: "input", label: "search input", x: 100, y: 50, selector: "#search" }], expectedAction: "type" },
+    { cmd: "Click Search button", elements: [{ id: 102, role: "button", label: "Search button", x: 250, y: 50, selector: "#btn-search" }], expectedAction: "click" },
+    { cmd: "Scroll down", elements: [], expectedAction: "scroll" },
+    { cmd: "Click Brand Sony", elements: [{ id: 103, role: "checkbox", label: "Brand Sony", x: 50, y: 200, selector: "#filter-sony" }], expectedAction: "click" },
+    { cmd: "Click Sony WH-1000XM5 result", elements: [{ id: 104, role: "link", label: "Sony WH-1000XM5 result", x: 300, y: 250, selector: ".result-item-1" }], expectedAction: "click" },
+    { cmd: "Click Add to Cart", elements: [{ id: 105, role: "button", label: "Add to Cart", x: 400, y: 350, selector: "#add-cart" }], expectedAction: "click" },
+    { cmd: "Click View Cart", elements: [{ id: 106, role: "button", label: "View Cart", x: 450, y: 350, selector: "#view-cart" }], expectedAction: "click" },
+    { cmd: "Click Proceed to Checkout", elements: [{ id: 107, role: "button", label: "Proceed to Checkout", x: 500, y: 400, selector: "#checkout-btn" }], expectedAction: "click" },
+    { cmd: "Scroll up", elements: [], expectedAction: "scroll" },
+  ];
+
   let umPass = 0;
-  for (let i = 0; i < 10; i++) {
-    const cmd = `Step ${i+1}: Action sequence`;
-    // Simulate step delta verification
-    const pass = true;
+  for (let i = 0; i < unseenMultiStepTasks.length; i++) {
+    const task = unseenMultiStepTasks[i];
+    const r = routeUserRequest(task.cmd);
+    let pass = false;
+    if (task.expectedAction === "scroll") {
+      pass = r.actionTypes.has("scroll") && r.intent === "pure_action";
+    } else {
+      const resolution = resolveActionTarget(r.targetTerms, r.actionTypes, task.elements);
+      pass = r.actionTypes.has(task.expectedAction) && resolution.isUnambiguous && resolution.directTarget?.id === task.elements[0].id;
+    }
     if (pass) umPass++;
-    recordTest(`UM-${i+1}`, "Unseen Multi-Step", cmd, "Multi-step turn execution", "Execute step with delta observation", "Verified", pass);
+    recordTest(`UM-${i+1}`, "Unseen Multi-Step", task.cmd, "Multi-step turn execution", `Route ${task.expectedAction} and resolve target`, pass ? "Verified" : "Failed", pass);
   }
   console.log(`Unseen Multi-Step Tasks: ${umPass}/10 passed`);
 

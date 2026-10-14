@@ -7,10 +7,12 @@
 const STORAGE_KEY_API_KEY = "gemini_sidekick_api_key";
 const STORAGE_KEY_MODEL = "gemini_sidekick_model";
 const STORAGE_KEY_SESSIONS = "gemini_sidekick_sessions";
+const STORAGE_KEY_PROXY_URL = "gemini_sidekick_proxy_url";
 
 // Configuration
-const DEFAULT_MODEL = "gemini-3.5-flash-lite";
-const FALLBACK_MODEL = "gemini-3.1-flash-lite";
+const DEFAULT_MODEL = "gemini-3.1-flash-lite";
+const FALLBACK_MODEL = "gemini-3.8-flash";
+const LATEST_FLASH_MODEL = "gemini-flash-latest";
 const MAX_AGENT_STEPS = 5;
 
 // Domain Deny-List (Automation is strictly prohibited on sensitive platforms)
@@ -293,6 +295,7 @@ const elements = {
 
   settingsDrawer: document.getElementById("settingsDrawer"),
   apiKeyInput: document.getElementById("apiKeyInput"),
+  proxyUrlInput: document.getElementById("proxyUrlInput"),
   toggleKeyVisibilityBtn: document.getElementById("toggleKeyVisibilityBtn"),
   modelSelect: document.getElementById("modelSelect"),
   saveSettingsBtn: document.getElementById("saveSettingsBtn"),
@@ -434,15 +437,25 @@ function updateTabGroupUI() {
 
   // Populate drawer tab list
   if (elements.groupTabsList) {
-    elements.groupTabsList.innerHTML = "";
+    elements.groupTabsList.textContent = "";
     if (tg.tabs && tg.tabs.length > 0) {
       tg.tabs.forEach((t) => {
         const item = document.createElement("div");
         item.className = `group-tab-item ${t.id === state.activeTabId ? "active" : ""}`;
-        item.innerHTML = `
-          <span class="tab-title-text" title="${t.title} (${t.url})">${t.title || "Untitled"}</span>
-          ${t.id === state.activeTabId ? '<span class="tab-active-dot" title="Active Tab"></span>' : ''}
-        `;
+        
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "tab-title-text";
+        titleSpan.title = `${t.title || "Untitled"} (${t.url || ""})`;
+        titleSpan.textContent = t.title || "Untitled";
+        item.appendChild(titleSpan);
+
+        if (t.id === state.activeTabId) {
+          const dot = document.createElement("span");
+          dot.className = "tab-active-dot";
+          dot.title = "Active Tab";
+          item.appendChild(dot);
+        }
+
         item.addEventListener("click", () => {
           chrome.tabs.update(t.id, { active: true }, () => {
             elements.tabGroupDrawer?.classList.add("hidden");
@@ -453,7 +466,10 @@ function updateTabGroupUI() {
         elements.groupTabsList.appendChild(item);
       });
     } else {
-      elements.groupTabsList.innerHTML = '<div style="color: var(--mute); font-size: 10px; padding: 6px;">No tabs in this workgroup.</div>';
+      const emptyNotice = document.createElement("div");
+      emptyNotice.style.cssText = "color: var(--mute); font-size: 10px; padding: 6px;";
+      emptyNotice.textContent = "No tabs in this workgroup.";
+      elements.groupTabsList.appendChild(emptyNotice);
     }
   }
 }
@@ -516,17 +532,30 @@ async function toggleIsolation(enabled) {
 /**
  * Initialize
  */
+function getResolvedProxyUrl() {
+  if (state.proxyUrl) return state.proxyUrl;
+  if (typeof globalThis !== "undefined" && globalThis.__SIDEKICK_BACKEND_URL__) {
+    return String(globalThis.__SIDEKICK_BACKEND_URL__).trim().replace(/\/+$/, "");
+  }
+  if (typeof window !== "undefined" && window.location && window.location.protocol && window.location.protocol.startsWith("http")) {
+    return window.location.origin;
+  }
+  return "http://localhost:3000";
+}
+
 async function init() {
   const saved = await storage.get({
     [STORAGE_KEY_API_KEY]: "",
     [STORAGE_KEY_MODEL]: DEFAULT_MODEL,
+    [STORAGE_KEY_PROXY_URL]: "",
     si_custom_assistant_name: ""
   });
 
   state.apiKey = (saved[STORAGE_KEY_API_KEY] || "").replace(/['"\s]/g, "").trim();
+  state.proxyUrl = (saved[STORAGE_KEY_PROXY_URL] || "").trim().replace(/\/+$/, "");
   state.customAssistantName = saved.si_custom_assistant_name || "";
   let loadedModel = saved[STORAGE_KEY_MODEL] || DEFAULT_MODEL;
-  if (!loadedModel || (loadedModel !== DEFAULT_MODEL && loadedModel !== FALLBACK_MODEL)) {
+  if (loadedModel === "gemini-3.5-flash-lite" || (loadedModel !== DEFAULT_MODEL && loadedModel !== FALLBACK_MODEL && loadedModel !== LATEST_FLASH_MODEL)) {
     loadedModel = DEFAULT_MODEL;
     await storage.set({ [STORAGE_KEY_MODEL]: DEFAULT_MODEL });
   }
@@ -536,6 +565,7 @@ async function init() {
     : ("enclave-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10));
 
   if (elements.apiKeyInput) elements.apiKeyInput.value = state.apiKey;
+  if (elements.proxyUrlInput) elements.proxyUrlInput.value = state.proxyUrl;
   if (elements.modelSelect) elements.modelSelect.value = state.model;
   updateModelToken(state.model);
   updateOnboardingVisibility();
@@ -554,7 +584,8 @@ let _serverProxyAvailable = false;
 
 async function checkServerProxyHealth() {
   try {
-    const res = await fetch("/api/health");
+    const proxyBase = getResolvedProxyUrl();
+    const res = await fetch(`${proxyBase}/api/health`);
     if (res.ok) {
       const data = await res.json();
       _serverProxyAvailable = !!data.hasApiKey;
@@ -591,8 +622,9 @@ async function verifyApiKey(rawKey, preferredModel = state.model) {
     return { valid: false, error: "Please enter your Gemini API key." };
   }
 
-  const baseModel = preferredModel || DEFAULT_MODEL;
-  const modelsToTry = [baseModel, FALLBACK_MODEL].filter((m, i, a) => a.indexOf(m) === i);
+  const rawModel = preferredModel || DEFAULT_MODEL;
+  const baseModel = rawModel === "gemini-3.5-flash-lite" ? DEFAULT_MODEL : rawModel;
+  const modelsToTry = [baseModel, FALLBACK_MODEL, LATEST_FLASH_MODEL].filter((m, i, a) => a.indexOf(m) === i);
   
   let keyIsExplicitlyInvalid = false;
   let lastDetailedError = "";
@@ -792,8 +824,10 @@ function bindEvents() {
     const rawKey = elements.apiKeyInput.value || "";
     const key = rawKey.replace(/['"\s]/g, "").trim();
     const mdl = elements.modelSelect.value;
+    const proxyUrl = (elements.proxyUrlInput?.value || "").trim().replace(/\/+$/, "");
     state.apiKey = key;
     state.model = mdl;
+    state.proxyUrl = proxyUrl;
 
     elements.saveStatus.textContent = key ? "Verifying key…" : "Saved";
     elements.saveStatus.style.color = "var(--sky)";
@@ -812,7 +846,8 @@ function bindEvents() {
 
     await storage.set({
       [STORAGE_KEY_API_KEY]: key,
-      [STORAGE_KEY_MODEL]: mdl
+      [STORAGE_KEY_MODEL]: mdl,
+      [STORAGE_KEY_PROXY_URL]: proxyUrl
     });
 
     updateModelToken(mdl);
@@ -2554,7 +2589,7 @@ function openAuditModal() {
         <span style="font-family:var(--font-mono);font-size:10px;color:#34d399;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.2);padding:2px 6px;border-radius:4px;">All Clear ✓</span>
       </div>
       <div style="font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column;gap:4px;margin-top:4px;">
-        <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>1. Default Model:</span><span style="color:#6ee7b7;">gemini-3.5-flash-lite ✓</span></div>
+        <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>1. Default Model:</span><span style="color:#6ee7b7;">gemini-3.1-flash-lite ✓</span></div>
         <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>2. Manifest CSP:</span><span style="color:#6ee7b7;">Google API + Proxy Allowed ✓</span></div>
         <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>3. Dual Proxy Fallback:</span><span style="color:#6ee7b7;">Auto /api/gemini Fallback ✓</span></div>
         <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>4. CDP Navigation Guard:</span><span style="color:#6ee7b7;">Guarded Mouse Release ✓</span></div>
@@ -3283,7 +3318,7 @@ async function submitPrompt(promptText) {
     // Perform guaranteed live active tab extraction immediately before running turn
     await extractContext();
 
-    const apiClient = new SidekickApiClient(state.apiKey, state.model);
+    const apiClient = new SidekickApiClient(state.apiKey, state.model, state.proxyUrl || getResolvedProxyUrl());
     const coordinator = new SidekickCoordinator(apiClient);
 
     state.hasExecutedPhysicalAction = false;

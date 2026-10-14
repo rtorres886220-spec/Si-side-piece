@@ -579,7 +579,7 @@ export default function App() {
   const [engineMode, setEngineMode] = useState<"server-live" | "workbench-sim">("server-live");
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("gemini-3.5-flash-lite");
+  const [selectedModel, setSelectedModel] = useState("gemini-3.1-flash-lite");
   const [tabReadState, setTabReadState] = useState<"reading" | "ready" | "off" | "failed">("ready");
   const [tabEnabled, setTabEnabled] = useState(true);
   const [activeSelectionQuote, setActiveSelectionQuote] = useState<string>("");
@@ -1450,14 +1450,16 @@ export default function App() {
 
     // 14. /model
     if (cmdToken === "/model") {
-      const targetModel = (argLower.includes("fallback") || argLower.includes("3.1")) ? "gemini-3.1-flash-lite" : "gemini-3.5-flash-lite";
+      const targetModel = (argLower.includes("3.8") || argLower.includes("standard"))
+        ? "gemini-3.8-flash"
+        : (argLower.includes("latest") ? "gemini-flash-latest" : "gemini-3.1-flash-lite");
       setSelectedModel(targetModel);
       showToast(`Model switched to ${targetModel}`);
       setChatMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: `⚡ Active model set to **${targetModel}** (${targetModel.includes("3.5") ? "Default Fast Responsive Companion" : "High Availability Resilient Fallback"}).`
+          text: `⚡ Active model set to **${targetModel}** (${targetModel === "gemini-3.1-flash-lite" ? "Default Fast Responsive Companion" : "Deep Reasoning Multimodal Model"}).`
         }
       ]);
       setIsBusy(false);
@@ -1544,7 +1546,7 @@ export default function App() {
         ...prev,
         {
           role: "assistant",
-          text: `🌐 Executable cURL Request:\n\n\`\`\`bash\ncurl https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$GEMINI_API_KEY \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "contents": [{\n      "parts": [{\n        "text": "Summarize this research paper: ${currentPage.url}"\n      }]\n    }]\n  }'\n\`\`\``
+          text: `🌐 Executable cURL Request:\n\n\`\`\`bash\ncurl https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=$GEMINI_API_KEY \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "contents": [{\n      "parts": [{\n        "text": "Summarize this research paper: ${currentPage.url}"\n      }]\n    }]\n  }'\n\`\`\``
         }
       ]);
       setIsBusy(false);
@@ -2430,7 +2432,7 @@ export default function App() {
             const url = URL.createObjectURL(blob);
             const link = document.createElement("a");
             link.href = url;
-            link.download = "sidekick-chrome-extension.zip";
+            link.download = "sidekick-extension.zip";
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
@@ -2531,7 +2533,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
 ## Key Upgrades:
 1. **Option B Chrome DevTools Protocol (CDP)**: Dispatches true OS-level trusted mouse clicks and keyboard keystrokes via \`chrome.debugger\`.
 2. **Ephemeral JIT Attachment**: Calls \`chrome.debugger.attach\` only for milliseconds during approved actions and detaches immediately so the yellow warning banner does not linger.
-3. **High-Demand Auto-Fallback**: Automatically retries and moves down from gemini-3.5-flash-lite to gemini-3.1-flash-lite if Google servers experience high demand spikes.
+3. **High-Demand Auto-Fallback**: Automatically retries and cascades through gemini-3.1-flash-lite to gemini-3.8-flash and gemini-flash-latest if Google servers experience high demand spikes.
 4. **Defense-in-Depth Sanitization**: Strips hidden/invisible DOM elements, zero-width injection attacks, and automatically masks Credit Cards (Luhn validated), SSNs, and Bearer tokens.
 5. **Cryptographic UUID Enclaves**: Page contents are sealed in \`<<<UNTRUSTED_CONTENT_[UUID]>>>\` to neutralize Indirect Prompt Injection (IPI).
 6. **Human-in-the-Loop (HITL) Gate**: High-risk actions (Submit, Pay, Delete, Confirm) require explicit user approval.
@@ -2550,13 +2552,15 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
       const url = URL.createObjectURL(content);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "sidekick-chrome-extension-option-b.zip";
+      link.download = "sidekick-extension.zip";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
+      showToast("Extension package downloaded");
     } catch (err) {
       console.error("Failed to generate zip:", err);
+      showToast("Failed to package extension");
     } finally {
       setIsZipping(false);
     }
@@ -2810,8 +2814,9 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                       onChange={(e) => setSelectedModel(e.target.value)}
                       className="w-full bg-white/[0.04] border border-white/[0.06] rounded-lg px-3 py-1.5 text-xs text-[#eceef4] font-mono outline-none"
                     >
-                      <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Default)</option>
-                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Fallback)</option>
+                      <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Default Flash-Lite)</option>
+                      <option value="gemini-3.8-flash">gemini-3.8-flash (Standard Flash)</option>
+                      <option value="gemini-flash-latest">gemini-flash-latest (Latest Flash)</option>
                     </select>
                     <div className="mt-1 flex items-center justify-between text-[11px] font-mono text-[#777c8a]">
                       <span>Thinking Level</span>
@@ -3537,7 +3542,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                       <div className="space-y-1.5 text-[11px] font-mono">
                         <div className="flex items-center justify-between p-1.5 rounded bg-black/30 border border-white/[0.03]">
                           <span className="text-white/80">1. Default Model Endpoint</span>
-                          <span className="text-emerald-300">gemini-3.5-flash-lite ✓</span>
+                          <span className="text-emerald-300">gemini-3.1-flash-lite ✓</span>
                         </div>
                         <div className="flex items-center justify-between p-1.5 rounded bg-black/30 border border-white/[0.03]">
                           <span className="text-white/80">2. Manifest CSP connect-src</span>
@@ -4480,7 +4485,7 @@ ${currentPage.content.slice(0, 320)}...
                 </li>
                 <li>
                   <strong className="text-white">Upload Package:</strong> Click <em>"New Item"</em> and drag & drop the downloaded{" "}
-                  <code className="text-sky-400 font-mono">sidekick-chrome-extension-option-b.zip</code>.
+                  <code className="text-sky-400 font-mono">sidekick-extension.zip</code>.
                 </li>
                 <li>
                   <strong className="text-white">Fill Metadata:</strong> Copy-paste the Extension Name, Short Summary, and Descriptions from above.

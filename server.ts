@@ -36,14 +36,59 @@ async function startServer() {
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   const isProd = process.env.NODE_ENV === 'production';
 
-  app.use(express.json({ limit: '10mb' }));
+  // Security headers & CORS for extension and authorized web origins
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      if (
+        origin.startsWith('chrome-extension://') ||
+        origin.includes('localhost') ||
+        origin.includes('127.0.0.1') ||
+        origin.endsWith('.run.app')
+      ) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+      }
+    } else {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-goog-api-key');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
+  app.use(express.json({ limit: '2mb' }));
+
+  // In-memory sliding window rate limiter for proxy abuse protection
+  const rateLimitWindowMs = 60000; // 1 minute
+  const maxRequestsPerWindow = 60;
+  const requestHistory = new Map<string, number[]>();
+
+  const rateLimiter = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const timestamps = (requestHistory.get(ip) || []).filter((t) => now - t < rateLimitWindowMs);
+    if (timestamps.length >= maxRequestsPerWindow) {
+      return res.status(429).json({
+        error: 'Rate limit exceeded: Maximum 60 requests per minute allowed on server proxy.',
+        fallback: false,
+      });
+    }
+    timestamps.push(now);
+    requestHistory.set(ip, timestamps);
+    next();
+  };
 
   // Status & Health endpoint
   app.get('/api/health', (_req, res) => {
     res.json({
       status: 'ok',
       hasApiKey: !!process.env.GEMINI_API_KEY,
-      defaultModel: 'gemini-3.5-flash-lite',
+      defaultModel: 'gemini-3.1-flash-lite',
       thinkingLevel: 'HIGH',
       temperature: 0.5,
     });
@@ -54,15 +99,15 @@ async function startServer() {
     res.sendFile(path.resolve(__dirname, isProd ? 'dist/privacy.html' : 'public/privacy.html'));
   });
 
-  // Server-side Gemini API proxy route with streaming and timing instrumentation
-  app.post('/api/gemini', async (req, res) => {
+  // Server-side Gemini API proxy route with rate limiting, input validation, and bounded deadlines
+  app.post('/api/gemini', rateLimiter, async (req, res) => {
     const tStart = performance.now();
     const rawKey = req.body?.apiKey || process.env.GEMINI_API_KEY;
     const apiKey = rawKey ? String(rawKey).replace(/['"\s]/g, '').trim() : undefined;
     if (!apiKey) {
       return res.status(503).json({
-        error: 'GEMINI_API_KEY not configured on server or in request',
-        fallback: true,
+        error: 'GEMINI_API_KEY not configured on server or in request. Please configure a valid Gemini API key.',
+        fallback: false,
       });
     }
 
@@ -71,19 +116,23 @@ async function startServer() {
         promptText,
         currentQuote,
         currentPage,
-        model = 'gemini-3.5-flash-lite',
+        model = 'gemini-3.1-flash-lite',
         stream = false,
       } = req.body;
 
-      if (!promptText) {
-        return res.status(400).json({ error: 'Missing promptText' });
+      if (!promptText || typeof promptText !== 'string' || promptText.trim().length === 0) {
+        return res.status(400).json({ error: 'Missing or invalid promptText: must be a non-empty string' });
+      }
+
+      if (promptText.length > 32000) {
+        return res.status(400).json({ error: 'Payload too large: promptText exceeds maximum 32,000 characters' });
       }
 
       const tPayloadStart = performance.now();
       const ai = new GoogleGenAI({
         apiKey,
         httpOptions: {
-          timeout: 300000, // 5-minute timeout deadline per attempt
+          timeout: 30000, // Bounded 30-second timeout deadline per attempt
           headers: {
             'User-Agent': 'aistudio-build',
           },
@@ -539,12 +588,11 @@ ${GROUNDING_SYSTEM_POLICY}`;
         generateConfig.tools = activeTools;
       }
 
-      // Model cascade: prioritize gemini-3.5-flash-lite
-      let targetModel = model || 'gemini-3.5-flash-lite';
+      // Model cascade: prioritize gemini-3.1-flash-lite
+      let targetModel = (model === 'gemini-3.5-flash-lite' || !model) ? 'gemini-3.1-flash-lite' : model;
 
       const cascade = [
         targetModel,
-        targetModel !== 'gemini-3.5-flash-lite' ? 'gemini-3.5-flash-lite' : 'gemini-3.1-flash-lite',
         'gemini-3.1-flash-lite',
         'gemini-3.8-flash',
         'gemini-flash-latest',
@@ -727,10 +775,16 @@ ${GROUNDING_SYSTEM_POLICY}`;
         },
       });
     } catch (err: any) {
-      console.error('Gemini API Error:', err);
-      return res.status(500).json({
-        error: err.message || 'Error generating content from Gemini',
-        fallback: true,
+      console.error('Gemini API Error:', err?.message || err);
+      const statusCode = (err?.status && typeof err.status === 'number' && err.status >= 400 && err.status < 600) ? err.status : 500;
+      const safeErrorMsg = err?.status === 429
+        ? 'Gemini quota or rate limit exceeded. Please wait a moment before retrying.'
+        : (err?.status === 401 || err?.status === 403)
+        ? 'Gemini authentication failed: Invalid or unauthorized API key.'
+        : (err?.message ? String(err.message).replace(/AIza[0-9A-Za-z\-_]{35}/g, '[REDACTED_API_KEY]') : 'Error generating content from Gemini');
+      return res.status(statusCode).json({
+        error: safeErrorMsg,
+        fallback: false,
       });
     }
   });
