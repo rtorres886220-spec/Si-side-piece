@@ -12,8 +12,13 @@ const STORAGE_KEY_PROXY_URL = "gemini_sidekick_proxy_url";
 // Configuration
 const DEFAULT_MODEL = "gemini-3.1-flash-lite";
 const FALLBACK_MODEL = "gemini-3.8-flash";
-const LATEST_FLASH_MODEL = "gemini-flash-latest";
-const MAX_AGENT_STEPS = 5;
+// Safety Budget Configuration (Continuous execution loop)
+const DEFAULT_SAFETY_BUDGET = {
+  maxActions: 50,
+  maxTimeMs: 600000, // 10 minutes total task budget
+  maxConsecutiveFailures: 3,
+};
+const MAX_AGENT_STEPS = DEFAULT_SAFETY_BUDGET.maxActions;
 
 // Domain Deny-List (Automation is strictly prohibited on sensitive platforms)
 const AUTOMATION_DENYLIST = [
@@ -4143,21 +4148,53 @@ function resolveElementCoordinates(args, elements) {
     const found = elements.find((e) => String(e.id) === String(targetId));
     if (found) return found;
   }
-  const desc = (args.element_description || args.label || args.text || "").toLowerCase().trim();
-  if (desc) {
-    let found = elements.find((e) => (e.label || "").toLowerCase().trim() === desc);
-    if (found) return found;
-    found = elements.find((e) => (e.label || "").toLowerCase().includes(desc) || desc.includes((e.label || "").toLowerCase()));
-    if (found) return found;
-  }
+
   if (args.selector) {
-    const found = elements.find((e) => e.selector === args.selector);
+    const found = elements.find((e) => e.selector === args.selector || e.labelSelector === args.selector);
     if (found) return found;
   }
-  if (args.text !== undefined) {
-    const inputEl = elements.find((e) => (e.role || "").includes("input") || (e.role || "").includes("text"));
-    if (inputEl) return inputEl;
+
+  const desc = (args.element_description || args.label || "").toLowerCase().trim();
+  const group = (args.group || args.context || "").toLowerCase().trim();
+
+  if (desc) {
+    // 1. Exact label + group match
+    if (group) {
+      const groupMatches = elements.filter((e) => {
+        const eLabel = (e.label || e.associatedLabel || "").toLowerCase().trim();
+        const eGroup = (e.group || e.context || "").toLowerCase().trim();
+        return (eLabel === desc || eLabel.includes(desc) || desc.includes(eLabel)) &&
+               (eGroup.includes(group) || group.includes(eGroup));
+      });
+      if (groupMatches.length === 1) return groupMatches[0];
+      if (groupMatches.length > 1) {
+        return { ambiguous: true, label: desc, matches: groupMatches };
+      }
+    }
+
+    // 2. Exact label match across elements
+    const exactMatches = elements.filter((e) => {
+      const eLabel = (e.label || e.associatedLabel || "").toLowerCase().trim();
+      return eLabel === desc;
+    });
+
+    if (exactMatches.length === 1) return exactMatches[0];
+    if (exactMatches.length > 1) {
+      // Multiple candidates with identical label and no distinguishing group: reject as ambiguous!
+      return { ambiguous: true, label: desc, matches: exactMatches };
+    }
+
+    // 3. Substring match
+    const subMatches = elements.filter((e) => {
+      const eLabel = (e.label || e.associatedLabel || "").toLowerCase().trim();
+      return (eLabel.includes(desc) || desc.includes(eLabel)) && eLabel.length > 0;
+    });
+    if (subMatches.length === 1) return subMatches[0];
+    if (subMatches.length > 1) {
+      return { ambiguous: true, label: desc, matches: subMatches };
+    }
   }
+
   return null;
 }
 

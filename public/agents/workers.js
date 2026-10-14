@@ -66,11 +66,12 @@
       const { signal, elementHint, cognitiveLedger, thinkingLevel = "HIGH" } = options;
       const enclaveId = getSafeEnclaveId(options);
 
-      const elementListStr = (interactiveElements || []).slice(0, 45).map((el) => {
+      const elementListStr = (interactiveElements || []).slice(0, 80).map((el) => {
         const cleanLabel = sanitizeElementLabel(el.label);
         const valStr = el.value ? ` [value: "${sanitizeElementLabel(el.value).slice(0, 30)}"]` : "";
         const checkedStr = el.checked ? ` [checked]` : "";
-        return `[#${el.id}] ${el.role.toUpperCase()}: "${cleanLabel}"${valStr}${checkedStr}`;
+        const groupStr = el.group ? ` [group: "${sanitizeElementLabel(el.group).slice(0, 40)}"]` : "";
+        return `[#${el.id}] ${el.role.toUpperCase()}: "${cleanLabel}"${groupStr}${valStr}${checkedStr}`;
       }).join("\n");
 
       let continuousSection = "";

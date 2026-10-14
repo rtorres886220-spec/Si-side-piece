@@ -701,13 +701,41 @@
         for (const op of matchPlan.operations) {
           const updated = postOptions.find((o) => o.id === op.optionId);
           if (updated) {
-            const isCheckedNow = Boolean(updated.checked || updated.selected);
+            let isCheckedNow = Boolean(updated.checked || updated.selected);
             if (isCheckedNow !== op.desiredChecked) {
-              return {
-                success: false,
-                reason: `Verification failed: Checkbox "${op.control.label}" expected ${op.desiredChecked} but observed ${isCheckedNow}.`,
-                verified: false,
-              };
+              // Recovery Attempt 1: Bounded delay for async DOM state reflection
+              await new Promise((r) => setTimeout(r, 150));
+              const recheckState = await verifyStateFn(question.id);
+              const recheckOpt = (recheckState?.options || []).find((o) => o.id === op.optionId);
+              isCheckedNow = Boolean(recheckOpt?.checked || recheckOpt?.selected);
+
+              if (isCheckedNow !== op.desiredChecked) {
+                // Recovery Attempt 2: Target visible label or direct fallback interaction
+                const altPayload = {
+                  action: op.desiredChecked ? "check" : "uncheck",
+                  selector: op.control.labelSelector || op.control.selector,
+                  x: op.control.x,
+                  y: op.control.y,
+                  optionId: op.control.id,
+                  questionId: question.id,
+                  targetType: op.control.labelSelector ? "label" : "control",
+                  useFallback: true,
+                };
+                const altRes = await executeActionFn(altPayload);
+                if (altRes && altRes.success !== false) {
+                  const recState = await verifyStateFn(question.id);
+                  const recOpt = (recState?.options || []).find((o) => o.id === op.optionId);
+                  isCheckedNow = Boolean(recOpt?.checked || recOpt?.selected);
+                }
+              }
+
+              if (isCheckedNow !== op.desiredChecked) {
+                return {
+                  success: false,
+                  reason: `Verification failed: Checkbox "${op.control.label}" expected ${op.desiredChecked} but observed ${isCheckedNow}.`,
+                  verified: false,
+                };
+              }
             }
           }
         }
@@ -783,10 +811,58 @@
           };
         } else {
           // Radio or custom radio
-          const updatedOpt =
+          let updatedOpt =
             (postState.options || []).find((o) => o.id === target.id) ||
             ((postState.options || []).length === 1 ? postState.options[0] : (postState.options || []).find((o) => o.value === target.value || o.label === target.label));
-          const isChecked = Boolean(updatedOpt?.checked || updatedOpt?.selected);
+          let isChecked = Boolean(updatedOpt?.checked || updatedOpt?.selected);
+
+          if (!isChecked) {
+            // Recovery Attempt 1: Bounded wait for asynchronous DOM state reflection
+            await new Promise((r) => setTimeout(r, 150));
+            const recheckState = await verifyStateFn(question.id);
+            if (recheckState) {
+              const recheckOpt = (recheckState.options || []).find((o) => o.id === target.id) ||
+                ((recheckState.options || []).find((o) => o.value === target.value || o.label === target.label));
+              if (Boolean(recheckOpt?.checked || recheckOpt?.selected)) {
+                return {
+                  success: true,
+                  verified: true,
+                  reason: "Radio checked (verified after async DOM update)",
+                  outcome: "radio_verified_delayed",
+                };
+              }
+            }
+
+            // Recovery Attempt 2: Target visible label or direct fallback interaction
+            const altPayload = {
+              action: "click",
+              selector: target.labelSelector || target.selector,
+              x: target.x,
+              y: target.y,
+              optionId: target.id,
+              questionId: question.id,
+              targetType: target.labelSelector ? "label" : "control",
+              useFallback: true,
+            };
+            const altRes = await executeActionFn(altPayload);
+            if (altRes && altRes.success !== false) {
+              const recoveryState = await verifyStateFn(question.id);
+              if (recoveryState) {
+                const recOpt = (recoveryState.options || []).find((o) => o.id === target.id) ||
+                  ((recoveryState.options || []).find((o) => o.value === target.value || o.label === target.label));
+                if (Boolean(recOpt?.checked || recOpt?.selected)) {
+                  return {
+                    success: true,
+                    verified: true,
+                    recovered: true,
+                    reason: "Radio checked (verified after intelligent alternative click recovery)",
+                    outcome: "radio_verified_recovered",
+                  };
+                }
+              }
+            }
+          }
+
           return {
             success: isChecked,
             verified: isChecked,
@@ -816,12 +892,17 @@
         onRequiresSubmitApproval = () => {},
         onComplete = () => {},
         evidenceText = "",
+        signal = null,
+        maxSteps = 100,
       } = callbacks;
 
       let loopCount = 0;
-      const MAX_SURVEY_STEPS = 50;
 
-      while (loopCount < MAX_SURVEY_STEPS) {
+      while (loopCount < maxSteps) {
+        if (signal?.aborted) {
+          onComplete({ status: "STOPPED_BY_USER", message: "Survey execution stopped by user.", record: this.executionRecord });
+          return { status: "STOPPED_BY_USER", record: this.executionRecord };
+        }
         loopCount++;
 
         // 1. OBSERVE & PARSE
@@ -872,6 +953,9 @@
           }
 
           if (surveyData.nextButton) {
+            if (signal?.aborted) {
+              return { status: "STOPPED_BY_USER", record: this.executionRecord };
+            }
             // Advance to next page
             const advRes = await advancePageFn("next", surveyData.nextButton);
             onPageAdvanced({ advanced: true, progress: currentProgress, result: advRes });
@@ -881,6 +965,10 @@
           // Complete
           onComplete({ status: "SURVEY_COMPLETED", record: this.executionRecord });
           return { status: "SURVEY_COMPLETED", record: this.executionRecord };
+        }
+
+        if (signal?.aborted) {
+          return { status: "STOPPED_BY_USER", record: this.executionRecord };
         }
 
         // Process first unanswered question

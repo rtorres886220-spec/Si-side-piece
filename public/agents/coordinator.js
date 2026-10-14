@@ -259,6 +259,16 @@
       }
 
       // 2. CONTINUOUS ACTION LOOP PREPARATION
+      const safetyBudget = {
+        maxActions: options.safetyBudget?.maxActions || 50,
+        maxTimeMs: options.safetyBudget?.maxTimeMs || 600000,
+        maxConsecutiveFailures: options.safetyBudget?.maxConsecutiveFailures || 3,
+        ...options.safetyBudget
+      };
+      const loopStartTime = Date.now();
+      let consecutiveFailures = 0;
+      let controllerState = "RUNNING";
+
       const cognitiveLedger = {
         taskObjective: promptText,
         stepNumber: 1,
@@ -267,13 +277,57 @@
         lastAction: null,
         domDelta: "Initial viewport state captured",
         historySignatures: [],
+        actionLog: [],
+        state: "RUNNING",
       };
 
       onProgress("Decomposing objective into sub-goals…", "Action Planner", 1);
 
       while (!signal?.aborted) {
-        if (signal?.aborted) break;
+        if (signal?.aborted) {
+          controllerState = "STOPPED_BY_USER";
+          break;
+        }
 
+        // Safety Budget Checks
+        if (cognitiveLedger.stepNumber > safetyBudget.maxActions) {
+          controllerState = "PAUSED_FOR_USER";
+          onVerificationUpdate(`Safety budget reached: Task exceeded maximum limit of ${safetyBudget.maxActions} actions. Paused for safety.`);
+          return {
+            type: "safety_budget_reached",
+            status: "PAUSED_FOR_USER",
+            stepsCompleted: cognitiveLedger.stepNumber - 1,
+            reason: `Exceeded action safety budget (${safetyBudget.maxActions} actions). You can resume or refine instructions.`,
+            actionLog: cognitiveLedger.actionLog
+          };
+        }
+
+        if (Date.now() - loopStartTime > safetyBudget.maxTimeMs) {
+          controllerState = "PAUSED_FOR_USER";
+          onVerificationUpdate(`Safety budget reached: Elapsed time exceeded limit of ${Math.round(safetyBudget.maxTimeMs / 1000)}s.`);
+          return {
+            type: "safety_budget_reached",
+            status: "PAUSED_FOR_USER",
+            stepsCompleted: cognitiveLedger.stepNumber - 1,
+            reason: `Exceeded execution time budget (${Math.round(safetyBudget.maxTimeMs / 1000)}s).`,
+            actionLog: cognitiveLedger.actionLog
+          };
+        }
+
+        if (consecutiveFailures >= safetyBudget.maxConsecutiveFailures) {
+          controllerState = "FAILED";
+          onVerificationUpdate(`Task paused: ${consecutiveFailures} consecutive recovery attempts failed on target interactions.`);
+          return {
+            type: "recovery_exhausted",
+            status: "FAILED",
+            stepsCompleted: cognitiveLedger.stepNumber - 1,
+            reason: `${consecutiveFailures} consecutive interaction failures. Halting to protect page integrity.`,
+            actionLog: cognitiveLedger.actionLog
+          };
+        }
+
+        controllerState = "RUNNING";
+        cognitiveLedger.state = controllerState;
         onProgress(`Deliberating Step ${cognitiveLedger.stepNumber}…`, `Step ${cognitiveLedger.stepNumber}`, 2);
 
         // Execute Action Worker with cognitive ledger
@@ -285,18 +339,25 @@
           { signal, elementHint: route.element_hint, enclaveId, cognitiveLedger }
         );
 
-        if (signal?.aborted) break;
+        if (signal?.aborted) {
+          controllerState = "STOPPED_BY_USER";
+          break;
+        }
 
         // Check if task is already complete or no more action needed
         if (workerPayload.is_task_complete || workerPayload.action === "none") {
+          controllerState = "COMPLETED";
+          cognitiveLedger.state = "COMPLETED";
           const completionSummary = workerPayload.completion_summary || workerPayload.explanation || "Task completed successfully.";
           onChecklistUpdate(workerPayload.plan_checklist || [], cognitiveLedger.stepNumber, workerPayload.situational_thought || "Task objective reached.");
           onComplete(completionSummary, workerPayload);
           return {
             type: "continuous_complete",
+            status: "COMPLETED",
             stepsCompleted: cognitiveLedger.stepNumber - 1,
             summary: completionSummary,
             checklist: workerPayload.plan_checklist,
+            actionLog: cognitiveLedger.actionLog,
           };
         }
 
@@ -312,7 +373,7 @@
         if (!gateResult.passed) {
           if (gateResult.isSecurityViolation) {
             onVerificationUpdate(`Security policy blocked action: ${gateResult.reason}`);
-            return { type: "security_blocked", reason: gateResult.reason };
+            return { type: "security_blocked", status: "FAILED", reason: gateResult.reason, actionLog: cognitiveLedger.actionLog };
           }
           // Attempt Critic Repair
           onProgress(`Refining action invariant (${gateResult.code})…`, "Critic Verifier", 3);
@@ -356,11 +417,33 @@
           ? `${workerPayload.action === "click" ? "Clicked" : "Typed into"} "${workerPayload.element_label}"`
           : `${workerPayload.action} dispatched`;
         
-        onStepExecuted(cognitiveLedger.stepNumber, desc, execRes?.success !== false);
+        const actionSucceeded = execRes?.success !== false;
+        if (!actionSucceeded || execRes?.verified === false) {
+          consecutiveFailures++;
+        } else {
+          consecutiveFailures = 0;
+        }
+
+        // Record into compact action log
+        cognitiveLedger.actionLog.push({
+          step: cognitiveLedger.stepNumber,
+          action: workerPayload.action,
+          target: workerPayload.element_label || `[#${workerPayload.target_id}]`,
+          executionSuccess: actionSucceeded,
+          verified: execRes?.verified !== false,
+          recoveryAttempt: execRes?.recovered || false,
+          status: execRes?.verified !== false ? "VERIFIED" : "UNVERIFIED"
+        });
+
+        onStepExecuted(cognitiveLedger.stepNumber, desc, actionSucceeded);
 
         // Verification pause for live DOM mutation / network responses
+        controllerState = "WAITING_FOR_PAGE";
         await new Promise((r) => setTimeout(r, postActionDelay));
-        if (signal?.aborted) break;
+        if (signal?.aborted) {
+          controllerState = "STOPPED_BY_USER";
+          break;
+        }
 
         // Re-extract fresh page context
         const prevContext = pageContext;
@@ -381,14 +464,16 @@
         cognitiveLedger.stepNumber++;
       }
 
-      if (signal?.aborted) {
+      if (signal?.aborted || controllerState === "STOPPED_BY_USER") {
         onVerificationUpdate("🛑 Emergency stop activated: Continuous task loop stopped.");
-        return { type: "aborted", stepsCompleted: cognitiveLedger.stepNumber - 1 };
+        return { type: "aborted", status: "STOPPED_BY_USER", stepsCompleted: cognitiveLedger.stepNumber - 1, actionLog: cognitiveLedger.actionLog };
       }
 
       return {
         type: "continuous_finished",
+        status: controllerState,
         stepsCompleted: cognitiveLedger.stepNumber - 1,
+        actionLog: cognitiveLedger.actionLog
       };
     }
   }

@@ -1,0 +1,6 @@
+{
+  "summary": "Architectural plan for First-Try Click Precision Engine in Si by PROMPTWORKS.\nResolves ambiguous targeting among similar buttons and links using hierarchical DOM semantic grounding, pre-click auto-centering, occlusion clearance, and dual-strategy click execution.",
+  "updatedAt": "2026-10-14T18:47:20.983578231Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

@@ -110,7 +110,7 @@
 
     if (message.action === "verifyPostState") {
       try {
-        const result = verifyPostActionOutcome(message.cdpAction, message.selector, message.preState);
+        const result = verifyPostActionOutcome(message.cdpAction, message.selector, message.preState, message.expectedPostcondition);
         sendResponse({ success: true, result });
       } catch (e) {
         sendResponse({ success: false, error: e.message });
@@ -341,7 +341,7 @@
       structuredEvidence: structuredUnits,
       tables: structuredTables,
       charCount: formattedBody.length,
-      interactiveElements: interactiveElements.slice(0, 45),
+      interactiveElements: interactiveElements.slice(0, 80),
       surveyData: (typeof SurveyDOMEngine !== "undefined") ? SurveyDOMEngine.parseQuestions() : null,
       extractionTimeMs: (typeof performance !== "undefined" ? performance.now() : Date.now()) - startTime,
       fromCache: false,
@@ -901,7 +901,7 @@
     });
 
     const candidates = document.querySelectorAll(
-      'button, a[href], input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"]'
+      'button, a[href], input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="radio"], [role="checkbox"], [role="combobox"], [role="listbox"], [role="option"], [role="switch"], summary'
     );
 
     const indexed = [];
@@ -913,76 +913,157 @@
       const el = candidates[i];
 
       if (el.hidden) continue;
-      if (el.offsetParent === null) {
-        const computedPos = window.getComputedStyle(el).position;
-        if (computedPos !== "fixed" && computedPos !== "sticky") {
-          continue;
-        }
-      }
 
       // Check payment widget exclusion
       if (isPaymentWidgetOrSensitiveField(el)) {
         continue;
       }
 
-      const rect = el.getBoundingClientRect();
-
-      if (
-        rect.width < 6 ||
-        rect.height < 6 ||
-        rect.bottom < 0 ||
-        rect.top > viewportHeight ||
-        rect.right < 0 ||
-        rect.left > viewportWidth
-      ) {
-        continue;
-      }
-
-      if (el.disabled) continue;
-
-      if (!isVisible(el)) continue;
-
-      // Determine descriptive label without leaking sensitive input values
-      let label = el.innerText || el.getAttribute("aria-label") || el.getAttribute("title") || el.placeholder || "";
-      if (!label && el.tagName.toLowerCase() === "input") {
-        label = el.getAttribute("name") || el.getAttribute("id") || el.getAttribute("type") || "[Input field]";
-      }
-      label = sanitizeString(label).slice(0, 50);
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") continue;
 
       const tag = el.tagName.toLowerCase();
-      const type = el.type || "";
+      const type = (el.type || "").toLowerCase();
       let role = tag;
       if (tag === "input") role = `${type || "text"} input`;
       else if (tag === "a") role = "link";
+      else if (el.getAttribute("role")) role = el.getAttribute("role");
+
+      // Label Resolution (with label[for], parent label, aria-labelledby, sibling text)
+      let label = "";
+      let assocLabelEl = null;
+
+      if (tag === "input" && (type === "radio" || type === "checkbox")) {
+        if (el.id) {
+          try { assocLabelEl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); } catch {}
+        }
+        if (!assocLabelEl) {
+          assocLabelEl = el.closest("label");
+        }
+        if (assocLabelEl) {
+          try {
+            const clone = assocLabelEl.cloneNode(true);
+            clone.querySelectorAll("input, select, textarea").forEach((c) => c.remove());
+            label = (clone.innerText || clone.textContent || "").trim();
+          } catch {}
+        }
+      }
+
+      if (!label) {
+        if (el.getAttribute("aria-label")) {
+          label = el.getAttribute("aria-label");
+        } else if (el.getAttribute("aria-labelledby")) {
+          const ids = el.getAttribute("aria-labelledby").split(/\s+/);
+          const parts = ids.map((id) => {
+            const partEl = document.getElementById(id);
+            return partEl ? (partEl.innerText || partEl.textContent || "") : "";
+          }).filter(Boolean);
+          if (parts.length > 0) label = parts.join(" ");
+        }
+      }
+
+      if (!label && assocLabelEl) {
+        label = assocLabelEl.innerText || assocLabelEl.textContent || "";
+      }
+
+      if (!label) {
+        label = el.innerText || el.textContent || el.getAttribute("title") || el.placeholder || "";
+      }
+
+      if (!label && tag === "input") {
+        label = el.getAttribute("name") || el.getAttribute("id") || el.getAttribute("type") || "[Input field]";
+      }
+      label = sanitizeString(label).slice(0, 60);
+
+      // Question / Section Group Context Extraction
+      let groupText = "";
+      try {
+        const groupContainer = el.closest('fieldset, [role="radiogroup"], [role="group"], .question, [data-question-id], .survey-question, [class*="question"], tr, [role="row"], .form-group, form');
+        if (groupContainer) {
+          const headerEl = groupContainer.querySelector('legend, h1, h2, h3, h4, h5, h6, .question-title, [class*="title"], [class*="label"], th');
+          if (headerEl && headerEl !== el && !el.contains(headerEl)) {
+            groupText = sanitizeString(headerEl.innerText || headerEl.textContent || "");
+          } else if (groupContainer.getAttribute("aria-label")) {
+            groupText = sanitizeString(groupContainer.getAttribute("aria-label"));
+          }
+        }
+      } catch {}
+
+      // Target bounds computation: for hidden inputs with visible label, use label rect
+      let rect = el.getBoundingClientRect();
+      let targetElForCoords = el;
+      if ((rect.width < 6 || rect.height < 6 || window.getComputedStyle(el).opacity === "0") && assocLabelEl) {
+        const labelRect = assocLabelEl.getBoundingClientRect();
+        if (labelRect.width >= 6 && labelRect.height >= 6) {
+          rect = labelRect;
+          targetElForCoords = assocLabelEl;
+        }
+      }
+
+      // Check visibility & bounds
+      if (rect.width < 4 && rect.height < 4) continue;
+      if (rect.bottom < -200 || rect.top > viewportHeight + 1500) continue; // within reasonable page scroll reach
+
+      if (el.offsetParent === null && targetElForCoords.offsetParent === null) {
+        const computedPos = window.getComputedStyle(el).position;
+        if (computedPos !== "fixed" && computedPos !== "sticky") {
+          continue;
+        }
+      }
 
       let inputValue = "";
       if (tag === "input" || tag === "textarea" || tag === "select") {
-        if (el.type !== "password") {
+        if (type !== "password") {
           inputValue = (el.value || "").slice(0, 50);
         }
       }
-      const isChecked = typeof el.checked === "boolean" ? el.checked : false;
+      const isChecked = Boolean(el.checked || el.getAttribute("aria-checked") === "true" || el.getAttribute("aria-selected") === "true");
 
       const centerX = Math.round(rect.left + rect.width / 2);
       const centerY = Math.round(rect.top + rect.height / 2);
 
-      // A8: Generate unforgeable unique ID
+      // Check pointer-events overlay interception
+      let isIntercepted = false;
+      let interceptedBy = "";
+      if (centerX >= 0 && centerX <= viewportWidth && centerY >= 0 && centerY <= viewportHeight) {
+        try {
+          const topEl = document.elementFromPoint(centerX, centerY);
+          if (topEl && topEl !== targetElForCoords && !targetElForCoords.contains(topEl) && !topEl.contains(targetElForCoords)) {
+            isIntercepted = true;
+            interceptedBy = topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : "");
+          }
+        } catch {}
+      }
+
+      // Generate unforgeable unique ID
       const uniqueId = `sk-${Date.now()}-${Math.random().toString(36).substring(2, 9)}-${idCounter}`;
       el.setAttribute("data-sidekick-id", uniqueId);
       const uniqueSelector = `[data-sidekick-id="${uniqueId}"]`;
+
+      let labelSelector = undefined;
+      if (assocLabelEl) {
+        const labelUniqueId = `sk-lbl-${Date.now()}-${idCounter}`;
+        assocLabelEl.setAttribute("data-sidekick-id", labelUniqueId);
+        labelSelector = `[data-sidekick-id="${labelUniqueId}"]`;
+      }
 
       indexed.push({
         id: idCounter++,
         role: role,
         label: label || `Unnamed ${role}`,
+        associatedLabel: assocLabelEl ? sanitizeString(assocLabelEl.innerText || assocLabelEl.textContent || "").slice(0, 60) : undefined,
+        group: groupText ? groupText.slice(0, 60) : undefined,
+        context: groupText ? groupText.slice(0, 60) : undefined,
         value: inputValue,
         checked: isChecked,
         x: centerX,
         y: centerY,
-        selector: uniqueSelector
+        selector: uniqueSelector,
+        labelSelector: labelSelector,
+        isIntercepted,
+        interceptedBy: isIntercepted ? interceptedBy : undefined
       });
 
-      if (indexed.length >= 45) break;
+      if (indexed.length >= 80) break;
     }
 
     return indexed;
@@ -1168,43 +1249,64 @@
         if (isPaymentWidgetOrSensitiveField(el)) {
           return { x: fallbackX, y: fallbackY, verified: false, blocked: true, reason: "Payment widget lockout" };
         }
+
+        // Scroll element into view smoothly and securely
+        if (typeof el.scrollIntoView === "function") {
+          try {
+            el.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
+          } catch {}
+        }
+
         const style = window.getComputedStyle(el);
         if (style.display === "none" || style.visibility === "hidden" || el.hidden) {
           return { x: fallbackX, y: fallbackY, verified: false, stale: true, reason: "Target element is hidden or detached (display:none/hidden)" };
         }
-        const rect = el.getBoundingClientRect();
+
+        let rect = el.getBoundingClientRect();
+        let targetElForCoords = el;
+
+        // If target is a zero-dimension or opacity:0 input, locate its associated label
+        if (rect.width <= 0 || rect.height <= 0 || style.opacity === "0") {
+          let assocLabel = null;
+          if (el.id) {
+            try { assocLabel = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); } catch {}
+          }
+          if (!assocLabel && typeof el.closest === "function") {
+            assocLabel = el.closest("label");
+          }
+          if (assocLabel) {
+            const lRect = assocLabel.getBoundingClientRect();
+            if (lRect.width > 0 && lRect.height > 0) {
+              rect = lRect;
+              targetElForCoords = assocLabel;
+            }
+          }
+        }
+
         if (rect.width <= 0 || rect.height <= 0) {
           return { x: fallbackX, y: fallbackY, verified: false, stale: true, reason: "Target element has zero dimensions in viewport" };
         }
+
         const liveX = Math.round(rect.left + rect.width / 2);
         const liveY = Math.round(rect.top + rect.height / 2);
 
-        // Check coordinate drift if fallback was provided
-        if (fallbackX !== undefined && fallbackY !== undefined && !isNaN(fallbackX) && !isNaN(fallbackY)) {
-          const drift = Math.hypot(liveX - fallbackX, liveY - fallbackY);
-          if (drift > 200) {
-            return {
-              x: liveX,
-              y: liveY,
-              verified: false,
-              stale: true,
-              driftPx: Math.round(drift),
-              reason: `Excessive coordinate drift (${Math.round(drift)}px) detected due to dynamic page shift`
-            };
+        // Check if pointer events are intercepted by a sticky header, dialog, or backdrop overlay
+        let isIntercepted = false;
+        let interceptedBy = "";
+        try {
+          const topEl = document.elementFromPoint(liveX, liveY);
+          if (topEl && topEl !== targetElForCoords && !targetElForCoords.contains(topEl) && !topEl.contains(targetElForCoords)) {
+            isIntercepted = true;
+            interceptedBy = topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : "");
           }
-          return {
-            x: liveX,
-            y: liveY,
-            verified: true,
-            drifted: drift > 15,
-            driftPx: Math.round(drift)
-          };
-        }
+        } catch {}
 
         return {
           x: liveX,
           y: liveY,
-          verified: true
+          verified: true,
+          isIntercepted,
+          interceptedBy: isIntercepted ? interceptedBy : undefined
         };
       } catch (err) {
         return { x: fallbackX, y: fallbackY, verified: false, error: err.message };
@@ -1235,17 +1337,143 @@
       scrollY: window.scrollY || 0,
       elementState: el ? {
         disabled: Boolean(el.disabled),
-        checked: Boolean(el.checked),
+        checked: Boolean(el.checked || el.getAttribute("aria-checked") === "true" || el.getAttribute("aria-selected") === "true"),
         text: (el.innerText || el.textContent || "").trim().slice(0, 100)
       } : null
     };
   }
 
   /**
-   * Verifies post-action outcomes against pre-action state.
-   * Catches dead clicks and reports truthful execution status.
+   * Verifies post-action outcomes against pre-action state and expected postconditions.
+   * Catches dead clicks, intercepted clicks, and reports truthful execution status.
    */
-  function verifyPostActionOutcome(cdpAction, selector, preState) {
+  function verifyPostActionOutcome(cdpAction, selector, preState, expectedPostcondition) {
+    let el = null;
+    if (selector) {
+      try { el = document.querySelector(selector); } catch {}
+    }
+
+    // Overlay interception check
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        const cx = Math.round(rect.left + rect.width / 2);
+        const cy = Math.round(rect.top + rect.height / 2);
+        if (cx >= 0 && cx <= window.innerWidth && cy >= 0 && cy <= window.innerHeight) {
+          try {
+            const topEl = document.elementFromPoint(cx, cy);
+            if (topEl && topEl !== el && !el.contains(topEl) && !topEl.contains(el)) {
+              const isOver = topEl.matches?.('.modal-backdrop, .overlay, [role="dialog"], [role="alertdialog"], .sticky-header, header, .banner, [class*="modal"], [class*="overlay"]') ||
+                window.getComputedStyle(topEl).position === "fixed";
+              if (isOver) {
+                return {
+                  success: false,
+                  outcome: "intercepted",
+                  isIntercepted: true,
+                  interceptedBy: topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : ""),
+                  reason: `Click intercepted by pointer overlay (${topEl.tagName.toLowerCase()})`
+                };
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+
+    // Explicit postcondition verification
+    if (expectedPostcondition) {
+      // Resolve input element if target is a <label> or wrapper
+      let targetInput = el;
+      if (el && el.tagName === "LABEL") {
+        targetInput = (el.htmlFor ? document.getElementById(el.htmlFor) : null) || el.querySelector("input") || el;
+      } else if (el && !("checked" in el) && el.querySelector("input")) {
+        targetInput = el.querySelector("input") || el;
+      }
+
+      if (expectedPostcondition.type === "radio_checked" || expectedPostcondition.type === "radio") {
+        const isChecked = targetInput ? Boolean(targetInput.checked || targetInput.getAttribute?.("aria-checked") === "true" || targetInput.getAttribute?.("aria-selected") === "true") : false;
+        return {
+          success: isChecked,
+          outcome: isChecked ? "radio_verified" : "radio_not_checked",
+          reason: isChecked ? "Radio button verified checked" : "Radio button was not checked after click"
+        };
+      }
+
+      if (expectedPostcondition.type === "checkbox_state" || expectedPostcondition.type === "checkbox") {
+        const isChecked = targetInput ? Boolean(targetInput.checked || targetInput.getAttribute?.("aria-checked") === "true") : false;
+        const matches = expectedPostcondition.expectedChecked !== undefined ? isChecked === expectedPostcondition.expectedChecked : isChecked;
+        return {
+          success: matches,
+          outcome: matches ? "checkbox_verified" : "checkbox_state_mismatch",
+          reason: matches ? "Checkbox verified" : `Checkbox expected ${expectedPostcondition.expectedChecked} but observed ${isChecked}`
+        };
+      }
+
+      if (expectedPostcondition.type === "dropdown_selected" || expectedPostcondition.type === "select") {
+        if (el) {
+          let val = el.value;
+          let text = el.options && el.selectedIndex >= 0 ? el.options[el.selectedIndex]?.text : (el.innerText || el.textContent || "").trim();
+          
+          // Check custom dropdown components with hidden inputs or aria-selected
+          if (!val) {
+            const container = el.closest(".dropdown, .custom-select, [role='combobox'], [role='listbox'], form") || el.parentElement;
+            const hiddenInput = container ? container.querySelector('input[type="hidden"]') : null;
+            if (hiddenInput && hiddenInput.value) {
+              val = hiddenInput.value;
+            }
+            const selectedOpt = container ? container.querySelector('[aria-selected="true"], [role="option"][aria-selected="true"]') : null;
+            if (selectedOpt) {
+              text = (selectedOpt.innerText || selectedOpt.textContent || "").trim();
+              if (!val) val = selectedOpt.getAttribute("data-value") || selectedOpt.getAttribute("value") || text;
+            }
+          }
+
+          const verified = (expectedPostcondition.expectedValue !== undefined && val === expectedPostcondition.expectedValue) ||
+            (expectedPostcondition.expectedLabel && text && text.toLowerCase().includes(expectedPostcondition.expectedLabel.toLowerCase())) ||
+            (el.getAttribute?.("aria-selected") === "true");
+
+          return {
+            success: Boolean(verified),
+            outcome: verified ? "select_verified" : "select_mismatch",
+            reason: verified ? "Dropdown option selected" : `Dropdown mismatch: expected ${expectedPostcondition.expectedValue || expectedPostcondition.expectedLabel}, got val=${val}, text=${text}`
+          };
+        }
+      }
+
+      if (expectedPostcondition.type === "text_value" || expectedPostcondition.type === "type") {
+        if (targetInput && ("value" in targetInput)) {
+          const verified = expectedPostcondition.expectedValue !== undefined
+            ? targetInput.value.includes(expectedPostcondition.expectedValue)
+            : targetInput.value.length > 0;
+          return {
+            success: Boolean(verified),
+            outcome: verified ? "text_verified" : "text_mismatch",
+            reason: verified ? "Text input verified" : `Text input did not contain expected value "${expectedPostcondition.expectedValue}". Observed: "${targetInput.value}"`
+          };
+        }
+      }
+
+      if (expectedPostcondition.type === "expand_collapse" || expectedPostcondition.type === "accordion") {
+        const isExpanded = el ? Boolean(el.getAttribute?.("aria-expanded") === "true" || el.open === true) : false;
+        const matches = expectedPostcondition.expectedExpanded !== undefined ? isExpanded === expectedPostcondition.expectedExpanded : isExpanded;
+        return {
+          success: matches,
+          outcome: matches ? "expand_verified" : "expand_mismatch",
+          reason: matches ? "Expand/collapse state verified" : `Expected expanded=${expectedPostcondition.expectedExpanded}, observed=${isExpanded}`
+        };
+      }
+
+      if (expectedPostcondition.type === "navigation") {
+        const currentUrl = window.location.href;
+        const navigated = !preState || currentUrl !== preState.url;
+        return {
+          success: navigated,
+          outcome: navigated ? "navigation_verified" : "navigation_pending",
+          reason: navigated ? `Navigated to ${currentUrl}` : "Page URL did not change"
+        };
+      }
+    }
+
     if (!preState) {
       return { success: true, outcome: "unverified", reason: "Pre-state snapshot was unavailable for comparison." };
     }
@@ -1260,11 +1488,6 @@
     );
     if (currentModals.length > preState.openModalCount) {
       return { success: true, outcome: "modal_opened", reason: "Modal or overlay dialog appeared in viewport." };
-    }
-
-    let el = null;
-    if (selector) {
-      try { el = document.querySelector(selector); } catch {}
     }
 
     if (cdpAction === "type" && el && ("value" in el)) {
@@ -1283,7 +1506,8 @@
     }
 
     if (el && preState.elementState) {
-      if (Boolean(el.disabled) !== preState.elementState.disabled || Boolean(el.checked) !== preState.elementState.checked) {
+      const curChecked = Boolean(el.checked || el.getAttribute("aria-checked") === "true" || el.getAttribute("aria-selected") === "true");
+      if (Boolean(el.disabled) !== preState.elementState.disabled || curChecked !== preState.elementState.checked) {
         return { success: true, outcome: "element_state_changed", reason: "Target element state changed (disabled/checked)." };
       }
       const curText = (el.innerText || el.textContent || "").trim().slice(0, 100);
@@ -1358,6 +1582,31 @@
         } else {
           targetEl.dispatchEvent(new MouseEvent("click", evtInit));
         }
+
+        // Guarantee radio, checkbox, and label target state mutation
+        if (targetEl.type === "radio") {
+          targetEl.checked = true;
+          targetEl.setAttribute("aria-checked", "true");
+          targetEl.dispatchEvent(new Event("change", { bubbles: true }));
+          targetEl.dispatchEvent(new Event("input", { bubbles: true }));
+        } else if (targetEl.type === "checkbox") {
+          targetEl.checked = !targetEl.checked;
+          targetEl.setAttribute("aria-checked", targetEl.checked ? "true" : "false");
+          targetEl.dispatchEvent(new Event("change", { bubbles: true }));
+          targetEl.dispatchEvent(new Event("input", { bubbles: true }));
+        } else if (targetEl.tagName === "LABEL") {
+          const inp = (targetEl.htmlFor ? document.getElementById(targetEl.htmlFor) : null) || targetEl.querySelector("input");
+          if (inp) {
+            if (inp.type === "radio") {
+              inp.checked = true;
+              inp.dispatchEvent(new Event("change", { bubbles: true }));
+            } else if (inp.type === "checkbox") {
+              inp.checked = !inp.checked;
+              inp.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+          }
+        }
+
         showActionIndicator(params.x || 100, params.y || 100, params.selector || targetEl.innerText || "clicked");
         return { clicked: true, domFallback: true };
       }
@@ -2108,9 +2357,27 @@
       } else if (el.type === "checkbox") {
         if (action === "check") el.checked = true;
         else if (action === "uncheck") el.checked = false;
+        else el.checked = !el.checked;
         el.setAttribute("aria-checked", el.checked ? "true" : "false");
         el.dispatchEvent(new Event("change", { bubbles: true }));
         el.dispatchEvent(new Event("input", { bubbles: true }));
+      } else if (el.tagName === "LABEL" || el.querySelector("input")) {
+        const inp = (el.htmlFor ? document.getElementById(el.htmlFor) : null) || el.querySelector("input");
+        if (inp) {
+          if (inp.type === "radio") {
+            inp.checked = true;
+            inp.setAttribute("aria-checked", "true");
+            inp.dispatchEvent(new Event("change", { bubbles: true }));
+            inp.dispatchEvent(new Event("input", { bubbles: true }));
+          } else if (inp.type === "checkbox") {
+            if (action === "check") inp.checked = true;
+            else if (action === "uncheck") inp.checked = false;
+            else inp.checked = !inp.checked;
+            inp.setAttribute("aria-checked", inp.checked ? "true" : "false");
+            inp.dispatchEvent(new Event("change", { bubbles: true }));
+            inp.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+        }
       } else if (el.getAttribute("role") === "option" || el.getAttribute("role") === "radio" || el.getAttribute("role") === "checkbox") {
         const role = el.getAttribute("role");
         if (role === "option") {
@@ -2121,6 +2388,18 @@
             });
           }
           el.setAttribute("aria-selected", "true");
+          // Sync associated hidden input or custom dropdown container
+          const container = el.closest(".dropdown, .custom-select, [role='combobox'], [role='listbox']") || el.parentElement;
+          const hiddenInput = container ? container.querySelector('input[type="hidden"]') : null;
+          if (hiddenInput) {
+            hiddenInput.value = el.getAttribute("data-value") || el.getAttribute("value") || el.innerText.trim();
+            hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
+            hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+          const combobox = container ? (container.getAttribute("role") === "combobox" ? container : container.querySelector('[role="combobox"]')) : null;
+          if (combobox) {
+            combobox.setAttribute("aria-expanded", "false");
+          }
         } else if (role === "radio") {
           el.setAttribute("aria-checked", "true");
         } else if (role === "checkbox") {
@@ -2131,9 +2410,19 @@
         el.dispatchEvent(new Event("input", { bubbles: true }));
       }
 
+      // Check whether el or any associated input is checked
+      const associatedInp = el.tagName === "LABEL" ? ((el.htmlFor ? document.getElementById(el.htmlFor) : null) || el.querySelector("input")) : null;
+      const isNowChecked = Boolean(
+        el.checked ||
+        el.getAttribute("aria-checked") === "true" ||
+        el.getAttribute("aria-selected") === "true" ||
+        (associatedInp && associatedInp.checked)
+      );
+
       return {
         success: true,
-        checked: Boolean(el.checked || el.getAttribute("aria-checked") === "true" || el.getAttribute("aria-selected") === "true"),
+        checked: isNowChecked,
+        value: el.value !== undefined ? el.value : undefined
       };
     }
 

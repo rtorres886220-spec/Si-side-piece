@@ -78,20 +78,24 @@ async function startServer() {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
 
-    // 1. Minute burst limit (60 req/min)
+    const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip === 'localhost';
+    const effectiveBurstLimit = isLoopback ? 300 : maxRequestsPerWindow;
+    const effectiveHourlyLimit = isLoopback ? 1000 : maxRequestsPerHour;
+
+    // 1. Minute burst limit
     const timestamps = (requestHistory.get(ip) || []).filter((t) => now - t < rateLimitWindowMs);
-    if (timestamps.length >= maxRequestsPerWindow) {
+    if (timestamps.length >= effectiveBurstLimit) {
       return res.status(429).json({
-        error: 'Rate limit exceeded: Maximum 60 requests per minute allowed on server proxy.',
+        error: `Rate limit exceeded: Maximum ${effectiveBurstLimit} requests per minute allowed on server proxy.`,
         fallback: false,
       });
     }
 
-    // 2. Hourly quota limit (120 req/hour)
+    // 2. Hourly quota limit
     const hourlyStamps = (hourlyHistory.get(ip) || []).filter((t) => now - t < hourlyWindowMs);
-    if (hourlyStamps.length >= maxRequestsPerHour) {
+    if (hourlyStamps.length >= effectiveHourlyLimit) {
       return res.status(429).json({
-        error: 'Hourly quota limit exceeded: Maximum 120 requests per hour allowed on server proxy.',
+        error: `Hourly quota limit exceeded: Maximum ${effectiveHourlyLimit} requests per hour allowed on server proxy.`,
         fallback: false,
       });
     }

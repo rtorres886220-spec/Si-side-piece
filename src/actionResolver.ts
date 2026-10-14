@@ -22,6 +22,16 @@ export interface InteractiveElementCandidate {
   disabled?: boolean;
   tagName?: string;
   context?: string;
+  group?: string;
+  associatedLabel?: string;
+  inputSelector?: string;
+  labelSelector?: string;
+  inputType?: string;
+  checked?: boolean;
+  selected?: boolean;
+  value?: string;
+  isIntercepted?: boolean;
+  interceptedBy?: string;
 }
 
 export interface ActionResolutionResult {
@@ -253,14 +263,30 @@ export function resolveActionTarget(
     for (const rawTerm of targetTerms) {
       const term = cleanTerm(rawTerm);
       if (!term) continue;
-      const score = computeSimilarity(el.label, term);
+      let score = computeSimilarity(el.label, term);
+      if (el.associatedLabel) {
+        const assocScore = computeSimilarity(el.associatedLabel, term);
+        if (assocScore > score) score = assocScore;
+      }
       if (score > maxScore) maxScore = score;
+    }
+
+    // Question / section group matching bonus
+    if (el.group || el.context) {
+      const groupText = cleanTerm(`${el.group || ""} ${el.context || ""}`);
+      for (const rawTerm of targetTerms) {
+        const term = cleanTerm(rawTerm);
+        if (term.length >= 3 && (groupText.includes(term) || term.includes(groupText))) {
+          maxScore += 0.25;
+          break;
+        }
+      }
     }
 
     // Role bonus for specific action types
     if (actionTypes.has("type") && (el.role.includes("input") || el.role.includes("text"))) {
       maxScore += 0.05;
-    } else if (actionTypes.has("click") && (el.role.includes("button") || el.role.includes("link"))) {
+    } else if (actionTypes.has("click") && (el.role.includes("button") || el.role.includes("link") || el.role.includes("radio") || el.role.includes("checkbox"))) {
       maxScore += 0.02;
     }
 
@@ -392,3 +418,139 @@ export function validateModelActionSelection(
     consequentialReason: consCheck.reason,
   };
 }
+
+/**
+ * Re-identifies a target element from a fresh live DOM candidate list
+ * after a rerender, dynamic shift, or failed postcondition verification.
+ */
+export function reIdentifyTarget(
+  targetSpec: {
+    id?: number;
+    selector?: string;
+    label?: string;
+    associatedLabel?: string;
+    role?: string;
+    group?: string;
+    context?: string;
+    inputSelector?: string;
+    labelSelector?: string;
+  },
+  freshElements: InteractiveElementCandidate[]
+): { found: boolean; candidate: InteractiveElementCandidate | null; reason?: string } {
+  if (!freshElements || freshElements.length === 0) {
+    return { found: false, candidate: null, reason: "Live element index is empty" };
+  }
+
+  // 1. Selector match
+  if (targetSpec.selector) {
+    const bySel = freshElements.find((e) => e.selector === targetSpec.selector);
+    if (bySel && !bySel.disabled) return { found: true, candidate: bySel };
+  }
+
+  // 2. Exact Label + Group match
+  const targetLabel = cleanTerm(targetSpec.label || targetSpec.associatedLabel || "");
+  const targetGroup = cleanTerm(targetSpec.group || targetSpec.context || "");
+
+  if (targetLabel && targetGroup) {
+    const groupMatches = freshElements.filter((e) => {
+      const eLabel = cleanTerm(e.label || e.associatedLabel || "");
+      const eGroup = cleanTerm(e.group || e.context || "");
+      return eLabel === targetLabel && (eGroup.includes(targetGroup) || targetGroup.includes(eGroup));
+    });
+    if (groupMatches.length === 1 && !groupMatches[0].disabled) {
+      return { found: true, candidate: groupMatches[0] };
+    }
+  }
+
+  // 3. Exact Label + Role match
+  if (targetLabel) {
+    const labelMatches = freshElements.filter((e) => {
+      const eLabel = cleanTerm(e.label || e.associatedLabel || "");
+      const roleMatches = !targetSpec.role || e.role.includes(targetSpec.role) || targetSpec.role.includes(e.role);
+      return eLabel === targetLabel && roleMatches && !e.disabled;
+    });
+    if (labelMatches.length === 1) {
+      return { found: true, candidate: labelMatches[0] };
+    }
+    if (labelMatches.length > 1) {
+      return {
+        found: false,
+        candidate: null,
+        reason: `Ambiguous target: Multiple elements match label "${targetSpec.label}". Clarification required.`
+      };
+    }
+  }
+
+  return { found: false, candidate: null, reason: "Target could not be re-identified in fresh DOM" };
+}
+
+/**
+ * Classifies an interaction failure to determine intelligent, evidence-driven recovery strategy.
+ */
+export function classifyInteractionFailure(
+  action: string,
+  target: InteractiveElementCandidate,
+  postVerification: { outcome?: string; reason?: string; isIntercepted?: boolean; interceptedBy?: string }
+): {
+  type: "INTERCEPTED_BY_OVERLAY" | "DEAD_CLICK" | "STALE_TARGET" | "VALUE_MISMATCH" | "STATE_UNCHANGED" | "UNKNOWN";
+  recoverable: boolean;
+  strategy: "SCROLL_AND_RETRY" | "CLICK_LABEL_ALTERNATIVE" | "DIRECT_DOM_FALLBACK" | "REIDENTIFY_TARGET" | "WAIT_AND_REVERIFY" | "ABORT";
+  reason: string;
+} {
+  const reason = postVerification?.reason || "Post-action verification failed";
+
+  if (postVerification?.isIntercepted || (postVerification?.outcome === "intercepted") || reason.includes("intercepted") || target.isIntercepted) {
+    return {
+      type: "INTERCEPTED_BY_OVERLAY",
+      recoverable: true,
+      strategy: "DIRECT_DOM_FALLBACK",
+      reason: `Target was intercepted by pointer overlay (${postVerification?.interceptedBy || target.interceptedBy || "sticky element"}). Applying direct DOM interaction fallback.`
+    };
+  }
+
+  if (target.role.includes("radio") || target.role.includes("checkbox")) {
+    if (target.labelSelector || target.associatedLabel) {
+      return {
+        type: "STATE_UNCHANGED",
+        recoverable: true,
+        strategy: "CLICK_LABEL_ALTERNATIVE",
+        reason: "Input state was not updated by click. Retrying via associated visible label target."
+      };
+    }
+  }
+
+  if (postVerification?.outcome === "no_op" || reason.includes("no DOM mutation") || reason.includes("completely unchanged")) {
+    return {
+      type: "DEAD_CLICK",
+      recoverable: true,
+      strategy: "DIRECT_DOM_FALLBACK",
+      reason: "Dead click detected (UI state did not mutate). Retrying with direct DOM event sequence."
+    };
+  }
+
+  if (reason.includes("stale") || reason.includes("no longer exists") || reason.includes("detached")) {
+    return {
+      type: "STALE_TARGET",
+      recoverable: true,
+      strategy: "REIDENTIFY_TARGET",
+      reason: "Target element became stale due to DOM rerender. Re-identifying in live DOM."
+    };
+  }
+
+  if (action === "type" && reason.includes("mismatch")) {
+    return {
+      type: "VALUE_MISMATCH",
+      recoverable: true,
+      strategy: "DIRECT_DOM_FALLBACK",
+      reason: "Input value did not persist. Retrying via direct property setter + input event."
+    };
+  }
+
+  return {
+    type: "UNKNOWN",
+    recoverable: false,
+    strategy: "ABORT",
+    reason
+  };
+}
+
