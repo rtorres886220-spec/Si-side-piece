@@ -36,7 +36,7 @@ async function startServer() {
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   const isProd = process.env.NODE_ENV === 'production';
 
-  // Security headers & CORS for extension and authorized web origins
+  // Security headers & strict origin validation
   app.use((req, res, next) => {
     const origin = req.headers.origin;
     if (origin) {
@@ -48,29 +48,37 @@ async function startServer() {
       ) {
         res.setHeader('Access-Control-Allow-Origin', origin);
       }
-    } else {
-      res.setHeader('Access-Control-Allow-Origin', '*');
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-goog-api-key');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-goog-api-key, x-sidekick-auth');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(204);
     }
     next();
   });
 
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '1mb' }));
 
-  // In-memory sliding window rate limiter for proxy abuse protection
+  // In-memory sliding window rate limiter & hourly quota for proxy abuse protection
   const rateLimitWindowMs = 60000; // 1 minute
   const maxRequestsPerWindow = 60;
   const requestHistory = new Map<string, number[]>();
 
+  const hourlyWindowMs = 3600000; // 1 hour
+  const maxRequestsPerHour = 120;
+  const hourlyHistory = new Map<string, number[]>();
+
+  let activeConcurrentRequests = 0;
+  const MAX_CONCURRENT_REQUESTS = 5;
+
   const rateLimiter = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
+
+    // 1. Minute burst limit (60 req/min)
     const timestamps = (requestHistory.get(ip) || []).filter((t) => now - t < rateLimitWindowMs);
     if (timestamps.length >= maxRequestsPerWindow) {
       return res.status(429).json({
@@ -78,8 +86,28 @@ async function startServer() {
         fallback: false,
       });
     }
+
+    // 2. Hourly quota limit (120 req/hour)
+    const hourlyStamps = (hourlyHistory.get(ip) || []).filter((t) => now - t < hourlyWindowMs);
+    if (hourlyStamps.length >= maxRequestsPerHour) {
+      return res.status(429).json({
+        error: 'Hourly quota limit exceeded: Maximum 120 requests per hour allowed on server proxy.',
+        fallback: false,
+      });
+    }
+
+    // 3. Concurrency limiter
+    if (activeConcurrentRequests >= MAX_CONCURRENT_REQUESTS) {
+      return res.status(429).json({
+        error: 'Concurrency limit reached: Maximum 5 concurrent Gemini inference streams in progress. Please retry in a moment.',
+        fallback: false,
+      });
+    }
+
     timestamps.push(now);
     requestHistory.set(ip, timestamps);
+    hourlyStamps.push(now);
+    hourlyHistory.set(ip, hourlyStamps);
     next();
   };
 
@@ -91,6 +119,8 @@ async function startServer() {
       defaultModel: 'gemini-3.1-flash-lite',
       thinkingLevel: 'HIGH',
       temperature: 0.5,
+      activeConcurrent: activeConcurrentRequests,
+      maxConcurrent: MAX_CONCURRENT_REQUESTS,
     });
   });
 
@@ -99,11 +129,57 @@ async function startServer() {
     res.sendFile(path.resolve(__dirname, isProd ? 'dist/privacy.html' : 'public/privacy.html'));
   });
 
+  // Allowed request body schema for /api/gemini
+  const ALLOWED_BODY_FIELDS = new Set([
+    'apiKey', 'model', 'promptText', 'currentQuote', 'currentPage', 'rawPayload', 'stream'
+  ]);
+
   // Server-side Gemini API proxy route with rate limiting, input validation, and bounded deadlines
   app.post('/api/gemini', rateLimiter, async (req, res) => {
     const tStart = performance.now();
-    const rawKey = req.body?.apiKey || process.env.GEMINI_API_KEY;
-    const apiKey = rawKey ? String(rawKey).replace(/['"\s]/g, '').trim() : undefined;
+
+    // 1. Request Body Schema Validation
+    if (req.body && typeof req.body === 'object') {
+      const extraFields = Object.keys(req.body).filter((key) => !ALLOWED_BODY_FIELDS.has(key));
+      if (extraFields.length > 0) {
+        return res.status(400).json({
+          error: `Invalid request payload: unpermitted field(s) detected: ${extraFields.join(', ')}`,
+          fallback: false,
+        });
+      }
+    }
+
+    // 2. Server-owned key access control policy
+    const clientApiKey = req.body?.apiKey ? String(req.body.apiKey).replace(/['"\s]/g, '').trim() : undefined;
+    const isUsingServerKey = !clientApiKey && !!process.env.GEMINI_API_KEY;
+
+    if (isUsingServerKey) {
+      const authHeader = req.headers['authorization'] || req.headers['x-sidekick-auth'];
+      const expectedSecret = process.env.SIDEKICK_PROXY_SECRET;
+      const origin = req.headers.origin;
+      const isExtensionOrigin = origin && origin.startsWith('chrome-extension://');
+      const isLocalOrigin = origin && (origin.includes('localhost') || origin.includes('127.0.0.1'));
+      const isAiStudioOrigin = origin && origin.endsWith('.run.app');
+      const host = req.headers.host || '';
+      const isAuthorizedHost = host.includes('localhost') || host.includes('127.0.0.1') || host.endsWith('.run.app');
+
+      if (expectedSecret) {
+        const token = String(authHeader || '').replace(/^Bearer\s+/i, '').trim();
+        if (token !== expectedSecret) {
+          return res.status(401).json({
+            error: 'Unauthorized: Missing or invalid proxy authorization token.',
+            fallback: false,
+          });
+        }
+      } else if (!isExtensionOrigin && !isLocalOrigin && !isAiStudioOrigin && !isAuthorizedHost) {
+        return res.status(403).json({
+          error: 'Forbidden: Proxy access restricted to authorized Sidekick extension and local clients.',
+          fallback: false,
+        });
+      }
+    }
+
+    const apiKey = clientApiKey || (process.env.GEMINI_API_KEY ? String(process.env.GEMINI_API_KEY).replace(/['"\s]/g, '').trim() : undefined);
     if (!apiKey) {
       return res.status(503).json({
         error: 'GEMINI_API_KEY not configured on server or in request. Please configure a valid Gemini API key.',
@@ -111,6 +187,7 @@ async function startServer() {
       });
     }
 
+    activeConcurrentRequests++;
     try {
       const rawPayload = req.body?.rawPayload;
       const model = req.body?.model || 'gemini-3.1-flash-lite';
@@ -312,8 +389,15 @@ async function startServer() {
               actionArgs.press_enter = intentResult.typeTextPayload.pressEnter ?? true;
             }
 
+            if (resolution.requiresConfirmation) {
+              actionArgs.requiresConfirmation = true;
+              actionArgs.consequentialReason = resolution.consequentialReason;
+            }
+
             return res.json({
               success: true,
+              requiresConfirmation: Boolean(resolution.requiresConfirmation),
+              consequentialReason: resolution.consequentialReason,
               text: null,
               functionCall: {
                 name: actionName,
@@ -883,6 +967,8 @@ ${GROUNDING_SYSTEM_POLICY}`;
         error: safeErrorMsg,
         fallback: false,
       });
+    } finally {
+      activeConcurrentRequests = Math.max(0, activeConcurrentRequests - 1);
     }
   });
 

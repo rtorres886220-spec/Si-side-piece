@@ -96,6 +96,26 @@
       return false;
     }
 
+    if (message.action === "capturePreState") {
+      try {
+        const state = capturePreStateSnapshot(message.selector);
+        sendResponse({ success: true, state });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+      return false;
+    }
+
+    if (message.action === "verifyPostState") {
+      try {
+        const result = verifyPostActionOutcome(message.cdpAction, message.selector, message.preState);
+        sendResponse({ success: true, result });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+      return false;
+    }
+
     if (message.action === "executeDOMAction") {
       try {
         const result = executeDOMFallback(message.cdpAction, message.params);
@@ -1078,6 +1098,7 @@
   /**
    * JIT Coordinate Re-verification
    * A8: Verifies selector uniqueness to prevent forged selector collisions
+   * Detects stale elements, coordinate drift, and ambiguous targets
    */
   function getLiveCoordinates(selector, fallbackX, fallbackY) {
     if (fallbackX !== undefined && fallbackY !== undefined) {
@@ -1091,25 +1112,154 @@
     if (selector) {
       try {
         const matched = document.querySelectorAll(selector);
-        if (matched.length === 1) {
-          const el = matched[0];
-          if (isPaymentWidgetOrSensitiveField(el)) {
-            return { x: fallbackX, y: fallbackY, verified: false, blocked: true, reason: "Payment widget lockout" };
-          }
-          const rect = el.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
+        if (matched.length === 0) {
+          return { x: fallbackX, y: fallbackY, verified: false, stale: true, reason: "Element no longer exists in DOM (stale target)" };
+        }
+        if (matched.length > 1) {
+          return { x: fallbackX, y: fallbackY, verified: false, ambiguous: true, reason: `Target selector matched ${matched.length} elements (ambiguous target)` };
+        }
+        const el = matched[0];
+        if (isPaymentWidgetOrSensitiveField(el)) {
+          return { x: fallbackX, y: fallbackY, verified: false, blocked: true, reason: "Payment widget lockout" };
+        }
+        const style = window.getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden" || el.hidden) {
+          return { x: fallbackX, y: fallbackY, verified: false, stale: true, reason: "Target element is hidden or detached (display:none/hidden)" };
+        }
+        const rect = el.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) {
+          return { x: fallbackX, y: fallbackY, verified: false, stale: true, reason: "Target element has zero dimensions in viewport" };
+        }
+        const liveX = Math.round(rect.left + rect.width / 2);
+        const liveY = Math.round(rect.top + rect.height / 2);
+
+        // Check coordinate drift if fallback was provided
+        if (fallbackX !== undefined && fallbackY !== undefined && !isNaN(fallbackX) && !isNaN(fallbackY)) {
+          const drift = Math.hypot(liveX - fallbackX, liveY - fallbackY);
+          if (drift > 200) {
             return {
-              x: Math.round(rect.left + rect.width / 2),
-              y: Math.round(rect.top + rect.height / 2),
-              verified: true
+              x: liveX,
+              y: liveY,
+              verified: false,
+              stale: true,
+              driftPx: Math.round(drift),
+              reason: `Excessive coordinate drift (${Math.round(drift)}px) detected due to dynamic page shift`
             };
           }
-        } else if (matched.length > 1) {
-          return { x: fallbackX, y: fallbackY, verified: false, ambiguous: true };
+          return {
+            x: liveX,
+            y: liveY,
+            verified: true,
+            drifted: drift > 15,
+            driftPx: Math.round(drift)
+          };
         }
-      } catch {}
+
+        return {
+          x: liveX,
+          y: liveY,
+          verified: true
+        };
+      } catch (err) {
+        return { x: fallbackX, y: fallbackY, verified: false, error: err.message };
+      }
     }
     return { x: fallbackX, y: fallbackY, verified: false };
+  }
+
+  /**
+   * Captures a comprehensive pre-action state snapshot for truthful post-action verification.
+   */
+  function capturePreStateSnapshot(selector) {
+    let el = null;
+    if (selector) {
+      try { el = document.querySelector(selector); } catch {}
+    }
+    const openModals = document.querySelectorAll(
+      '[role="dialog"], [role="alertdialog"], dialog[open], .modal:not(.hidden), .popup:not(.hidden), .overlay:not(.hidden)'
+    );
+
+    return {
+      url: window.location.href,
+      mutationVersion: docMutationVersion,
+      openModalCount: openModals.length,
+      inputValue: el && ("value" in el) ? el.value : undefined,
+      elementsCount: document.querySelectorAll("button, a, input, select, textarea").length,
+      scrollX: window.scrollX || 0,
+      scrollY: window.scrollY || 0,
+      elementState: el ? {
+        disabled: Boolean(el.disabled),
+        checked: Boolean(el.checked),
+        text: (el.innerText || el.textContent || "").trim().slice(0, 100)
+      } : null
+    };
+  }
+
+  /**
+   * Verifies post-action outcomes against pre-action state.
+   * Catches dead clicks and reports truthful execution status.
+   */
+  function verifyPostActionOutcome(cdpAction, selector, preState) {
+    if (!preState) {
+      return { success: true, outcome: "unverified", reason: "Pre-state snapshot was unavailable for comparison." };
+    }
+
+    const currentUrl = window.location.href;
+    if (currentUrl !== preState.url) {
+      return { success: true, outcome: "navigation", reason: `Navigated from ${preState.url} to ${currentUrl}` };
+    }
+
+    const currentModals = document.querySelectorAll(
+      '[role="dialog"], [role="alertdialog"], dialog[open], .modal:not(.hidden), .popup:not(.hidden), .overlay:not(.hidden)'
+    );
+    if (currentModals.length > preState.openModalCount) {
+      return { success: true, outcome: "modal_opened", reason: "Modal or overlay dialog appeared in viewport." };
+    }
+
+    let el = null;
+    if (selector) {
+      try { el = document.querySelector(selector); } catch {}
+    }
+
+    if (cdpAction === "type" && el && ("value" in el)) {
+      if (el.value !== preState.inputValue) {
+        return { success: true, outcome: "input_updated", reason: `Input value updated to "${el.value.slice(0, 30)}"` };
+      }
+    }
+
+    if (cdpAction === "scroll") {
+      const curScrollX = window.scrollX || 0;
+      const curScrollY = window.scrollY || 0;
+      const deltaScroll = Math.abs(curScrollY - (preState.scrollY || 0)) + Math.abs(curScrollX - (preState.scrollX || 0));
+      if (deltaScroll > 10) {
+        return { success: true, outcome: "scrolled", reason: `Viewport scrolled by ${Math.round(deltaScroll)}px.` };
+      }
+    }
+
+    if (el && preState.elementState) {
+      if (Boolean(el.disabled) !== preState.elementState.disabled || Boolean(el.checked) !== preState.elementState.checked) {
+        return { success: true, outcome: "element_state_changed", reason: "Target element state changed (disabled/checked)." };
+      }
+      const curText = (el.innerText || el.textContent || "").trim().slice(0, 100);
+      if (curText !== preState.elementState.text) {
+        return { success: true, outcome: "element_text_changed", reason: `Target element text changed to "${curText.slice(0, 30)}"` };
+      }
+    }
+
+    const currentElementsCount = document.querySelectorAll("button, a, input, select, textarea").length;
+    if (currentElementsCount !== preState.elementsCount) {
+      return { success: true, outcome: "dom_elements_changed", reason: `Interactive elements changed (${preState.elementsCount} -> ${currentElementsCount}).` };
+    }
+
+    if (docMutationVersion > preState.mutationVersion) {
+      return { success: true, outcome: "dom_mutated", reason: `DOM mutated (${preState.mutationVersion} -> ${docMutationVersion}).` };
+    }
+
+    return {
+      success: false,
+      outcome: "no_op",
+      reason: "Action completed event dispatch, but page state was completely unchanged (no DOM mutation, no navigation, no modal)"
+    };
   }
 
   /**

@@ -320,6 +320,29 @@ if (chrome.debugger && chrome.debugger.onDetach) {
   });
 }
 
+const ALLOWED_MESSAGE_TYPES = new Set([
+  "EXECUTE_CDP_ACTION",
+  "CAPTURE_VISION_SCREENSHOT",
+  "GET_MANAGED_GROUP_STATE",
+  "CREATE_OR_BIND_GROUP",
+  "ADD_TAB_TO_MANAGED_GROUP",
+  "OPEN_TAB_IN_MANAGED_GROUP",
+  "UNBIND_MANAGED_GROUP",
+  "SET_GROUP_ISOLATION",
+  "ABORT_PENDING_CDP"
+]);
+
+const ALLOWED_CDP_ACTIONS = new Set([
+  "click",
+  "type",
+  "scroll",
+  "navigate",
+  "uploadFile",
+  "upload_file",
+  "waitForNetworkIdle",
+  "setDeviceMetrics"
+]);
+
 // Message Handler for Side Panel Requests
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // A13: Enforce caller security: only allow extension UI (sidepanel), never webpage content scripts
@@ -332,7 +355,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
+  // Schema & message structure validation
+  if (!message || typeof message !== "object" || typeof message.type !== "string") {
+    sendResponse({ success: false, error: "Malformed message schema: expected object with string type property." });
+    return false;
+  }
+
+  if (!ALLOWED_MESSAGE_TYPES.has(message.type)) {
+    sendResponse({ success: false, error: `Unauthorized or unpermitted message type: "${message.type}".` });
+    return false;
+  }
+
   if (message.type === "EXECUTE_CDP_ACTION") {
+    if (!message.action || !ALLOWED_CDP_ACTIONS.has(message.action)) {
+      sendResponse({ success: false, error: `Invalid CDP action: "${message.action}". Allowed actions: ${Array.from(ALLOWED_CDP_ACTIONS).join(", ")}` });
+      return false;
+    }
     handleCDPAction(message)
       .then((result) => sendResponse({ success: true, result }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
@@ -771,9 +809,14 @@ async function waitForNetworkIdle(debugTarget, timeoutMs = 2500, maxInflight = 0
   });
 }
 
-function sendCommand(target, method, commandParams) {
+function sendCommand(target, method, commandParams, timeoutMs = 8000) {
   return new Promise((resolve, reject) => {
+    let timer = setTimeout(() => {
+      reject(new Error(`CDP command '${method}' timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
     chrome.debugger.sendCommand(target, method, commandParams, (result) => {
+      clearTimeout(timer);
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
       } else {

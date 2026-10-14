@@ -17,6 +17,11 @@ export interface InteractiveElementCandidate {
   y: number;
   selector?: string;
   matchScore?: number;
+  ariaLabel?: string;
+  accessibleName?: string;
+  disabled?: boolean;
+  tagName?: string;
+  context?: string;
 }
 
 export interface ActionResolutionResult {
@@ -26,12 +31,107 @@ export interface ActionResolutionResult {
   directTarget: InteractiveElementCandidate | null;
   candidates: InteractiveElementCandidate[];
   rejectionReason?: string;
+  isConsequential?: boolean;
+  requiresConfirmation?: boolean;
+  consequentialReason?: string;
+}
+
+export interface FreshnessVerification {
+  isFresh: boolean;
+  driftPx: number;
+  reason?: string;
+  freshCandidate?: InteractiveElementCandidate;
 }
 
 const PAYMENT_KEYWORDS = [
   "stripe", "paypal", "braintree", "credit-card", "cardnumber",
   "cvv", "cvc", "exp-date", "cc-number", "payment-widget", "checkout-card"
 ];
+
+const CONSEQUENTIAL_KEYWORDS = [
+  "submit", "send", "post", "tweet", "publish", "share",
+  "buy", "purchase", "order", "place order", "checkout", "subscribe", "upgrade", "pay",
+  "delete", "remove", "destroy", "drop", "erase", "trash", "purge", "clear all",
+  "change password", "reset password", "deactivate", "close account", "terminate",
+  "transfer", "wire", "withdraw", "authorize", "grant access", "revoke"
+];
+
+export function isConsequentialAction(
+  actionType: string,
+  target: { label?: string; role?: string; selector?: string; ariaLabel?: string },
+  additionalText?: string
+): { isConsequential: boolean; reason?: string } {
+  const combined = `${actionType || ""} ${target.label || ""} ${target.role || ""} ${target.selector || ""} ${target.ariaLabel || ""} ${additionalText || ""}`.toLowerCase();
+
+  // Benign UI exemptions
+  if (/\b(?:filter|filters|sort|sorting|cookie|cookies|continue\s+reading|next\s+page|theme|view|learn\s+more)\b/i.test(combined)) {
+    return { isConsequential: false };
+  }
+
+  for (const kw of CONSEQUENTIAL_KEYWORDS) {
+    const wordRegex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    if (wordRegex.test(combined)) {
+      return {
+        isConsequential: true,
+        reason: `Consequential action detected: "${kw}" on target [${target.label || actionType}]`,
+      };
+    }
+  }
+
+  return { isConsequential: false };
+}
+
+export function verifyElementFreshness(
+  candidate: InteractiveElementCandidate,
+  currentLiveElements: InteractiveElementCandidate[],
+  maxDriftPx = 25
+): FreshnessVerification {
+  if (!currentLiveElements || currentLiveElements.length === 0) {
+    return { isFresh: false, driftPx: 0, reason: "Live interactive element index is empty (DOM reloaded or blank)." };
+  }
+
+  // 1. Match by unique selector or ID
+  const matched = currentLiveElements.find((el) =>
+    (candidate.selector && el.selector && el.selector === candidate.selector) ||
+    el.id === candidate.id
+  );
+
+  if (!matched) {
+    return { isFresh: false, driftPx: 0, reason: `Target element [#${candidate.id}] was removed from the active DOM (stale reference).` };
+  }
+
+  // 2. Coordinate drift check
+  const dx = Math.abs(matched.x - candidate.x);
+  const dy = Math.abs(matched.y - candidate.y);
+  const drift = Math.sqrt(dx * dx + dy * dy);
+
+  if (drift > maxDriftPx) {
+    return {
+      isFresh: false,
+      driftPx: Math.round(drift),
+      reason: `Element moved by ${Math.round(drift)}px due to page scroll or layout shift.`,
+      freshCandidate: matched,
+    };
+  }
+
+  // 3. Label/role mutation check
+  const normOld = (candidate.label || "").toLowerCase().trim();
+  const normNew = (matched.label || "").toLowerCase().trim();
+  if (normOld && normNew && normOld !== normNew && !normNew.includes(normOld) && !normNew.includes(normOld)) {
+    return {
+      isFresh: false,
+      driftPx: Math.round(drift),
+      reason: `Element accessible label changed from "${candidate.label}" to "${matched.label}".`,
+      freshCandidate: matched,
+    };
+  }
+
+  return {
+    isFresh: true,
+    driftPx: Math.round(drift),
+    freshCandidate: matched,
+  };
+}
 
 export function isElementRestricted(el: { label?: string; role?: string; selector?: string }): boolean {
   const combined = `${el.label || ""} ${el.role || ""} ${el.selector || ""}`.toLowerCase();
@@ -192,33 +292,42 @@ export function resolveActionTarget(
   // Unambiguous condition:
   // 1. Single candidate found with score >= 0.65, OR
   // 2. Best candidate has score >= 0.85 and significantly outscores second best (gap >= 0.25)
+  // CRITICAL: If second candidate is within 0.20 score difference or has near-identical label, it is ambiguous!
+  const isCloseContender = secondBest && (best.score - secondBest.score < 0.20);
   const isClearSingle = scoredCandidates.length === 1 && best.score >= 0.65;
-  const isDominantWinner = best.score >= 0.85 && (!secondBest || best.score - secondBest.score >= 0.25);
+  const isDominantWinner = !isCloseContender && best.score >= 0.85 && (!secondBest || best.score - secondBest.score >= 0.25);
 
-  if (isClearSingle || isDominantWinner) {
+  if ((isClearSingle || isDominantWinner) && !isCloseContender) {
+    const actTypeStr = Array.from(actionTypes).join(" ");
+    const consCheck = isConsequentialAction(actTypeStr, best.element);
+
     return {
       isUnambiguous: true,
       isAmbiguous: false,
       hasTarget: true,
       directTarget: best.element,
       candidates: [best.element],
+      isConsequential: consCheck.isConsequential,
+      requiresConfirmation: consCheck.isConsequential,
+      consequentialReason: consCheck.reason,
     };
   }
 
-  // Multiple plausible candidates: ambiguous, requires Flash-Lite semantic choice
+  // Multiple plausible candidates: ambiguous, requires Flash-Lite semantic choice or explicit user clarification
   return {
     isUnambiguous: false,
     isAmbiguous: true,
     hasTarget: true,
     directTarget: null,
     candidates: scoredCandidates.slice(0, 5).map((sc) => sc.element),
+    rejectionReason: isCloseContender ? `Multiple similar targets found: "${best.element.label}" and "${secondBest?.element.label}". Clarification required.` : undefined,
   };
 }
 
 export function validateModelActionSelection(
   target: number | { id?: number; x?: number; y?: number; element_description?: string; selector?: string },
   allowedCandidates: InteractiveElementCandidate[]
-): { isValid: boolean; validatedTarget: InteractiveElementCandidate | null; error?: string } {
+): { isValid: boolean; validatedTarget: InteractiveElementCandidate | null; isConsequential?: boolean; requiresConfirmation?: boolean; consequentialReason?: string; error?: string } {
   if (!allowedCandidates || allowedCandidates.length === 0) {
     return {
       isValid: false,
@@ -265,8 +374,21 @@ export function validateModelActionSelection(
     };
   }
 
+  if (match.disabled) {
+    return {
+      isValid: false,
+      validatedTarget: null,
+      error: `Element [#${match.id}] "${match.label}" is currently disabled in the DOM.`,
+    };
+  }
+
+  const consCheck = isConsequentialAction("click", match);
+
   return {
     isValid: true,
     validatedTarget: match,
+    isConsequential: consCheck.isConsequential,
+    requiresConfirmation: consCheck.isConsequential,
+    consequentialReason: consCheck.reason,
   };
 }

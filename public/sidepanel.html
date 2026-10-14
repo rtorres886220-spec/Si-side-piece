@@ -283,6 +283,19 @@
         <div id="slashList" class="slash-list"></div>
       </div>
 
+      <!-- HITL Consequential Action Safety Gate Modal -->
+      <div id="safetyModal" class="safety-gate hidden">
+        <div class="safety-gate-header">
+          <span class="safety-gate-badge">⚠ Consequential Action Approval</span>
+          <span id="safetyStepBadge" class="safety-step-count">Step 1</span>
+        </div>
+        <div id="safetyActionDesc" class="safety-gate-desc"></div>
+        <div class="safety-gate-actions">
+          <button id="approveActionBtn" class="safety-btn approve" type="button">Approve &amp; Execute</button>
+          <button id="denyActionBtn" class="safety-btn deny" type="button">Deny Action</button>
+        </div>
+      </div>
+
       <!-- Rounded Composer Box with Choreographic Conic Border -->
       <div id="composerBox" class="composer-box">
         <!-- Ultra-thin choreographic conic gradient - midnight with cyan blue hint, no off glow -->

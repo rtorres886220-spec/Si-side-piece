@@ -2375,7 +2375,7 @@ function hideSlashMenu() {
 
 function renderSlashList() {
   if (!elements.slashList) return;
-  elements.slashList.innerHTML = "";
+  elements.slashList.replaceChildren();
   slashState.filtered.forEach((cmd, idx) => {
     const item = document.createElement("div");
     item.className = `slash-item ${idx === slashState.selectedIndex ? "selected" : ""}`;
@@ -2387,13 +2387,28 @@ function renderSlashList() {
         : cmd.syntax
       : "";
 
-    item.innerHTML = `
-      <div class="slash-item-top">
-        <span class="slash-item-name">${escapeXml(cmd.name)}</span>
-        ${argHint ? `<span class="slash-item-syntax">${escapeXml(argHint)}</span>` : ""}
-      </div>
-      <div class="slash-item-desc">${escapeXml(cmd.desc)}</div>
-    `;
+    const topDiv = document.createElement("div");
+    topDiv.className = "slash-item-top";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "slash-item-name";
+    nameSpan.textContent = cmd.name;
+    topDiv.appendChild(nameSpan);
+
+    if (argHint) {
+      const syntaxSpan = document.createElement("span");
+      syntaxSpan.className = "slash-item-syntax";
+      syntaxSpan.textContent = argHint;
+      topDiv.appendChild(syntaxSpan);
+    }
+
+    const descDiv = document.createElement("div");
+    descDiv.className = "slash-item-desc";
+    descDiv.textContent = cmd.desc;
+
+    item.appendChild(topDiv);
+    item.appendChild(descDiv);
+
     item.addEventListener("click", () => selectSlashCommand(cmd, !cmd.requiresArg));
     item.addEventListener("mouseenter", () => {
       slashState.selectedIndex = idx;
@@ -2463,7 +2478,7 @@ function closeHelpModal() {
 
 function renderHelpList(q = "") {
   if (!elements.helpModalList) return;
-  elements.helpModalList.innerHTML = "";
+  elements.helpModalList.replaceChildren();
   const query = q.toLowerCase().trim();
   const list = SLASH_COMMANDS.filter((c) => 
     !query ||
@@ -2476,23 +2491,47 @@ function renderHelpList(q = "") {
     const card = document.createElement("div");
     card.className = "modal-cmd-card";
     const badgeClass = c.tier === 1 ? "t1" : c.tier === 2 ? "t2" : "t3";
-    card.innerHTML = `
-      <div class="modal-cmd-top">
-        <div style="display:flex;align-items:center;gap:6px;">
-          <span style="font-family:var(--font-mono);font-size:12px;color:var(--sky);font-weight:500;">${c.name}</span>
-          <span class="slash-item-badge ${badgeClass}">${c.tierLabel}</span>
-        </div>
-        <button type="button" class="modal-run-btn">Run</button>
-      </div>
-      <div style="font-size:11.5px;color:rgba(236,238,244,0.8);">${c.desc}</div>
-      <div style="font-family:var(--font-mono);font-size:10px;color:var(--mute);">
-        Syntax: <span style="color:#7dd3fc;">${c.syntax}</span> • Ex: <span style="color:#fde68a;">${c.example}</span>
-      </div>
-    `;
-    card.querySelector(".modal-run-btn")?.addEventListener("click", () => {
+
+    const topRow = document.createElement("div");
+    topRow.className = "modal-cmd-top";
+
+    const titleGroup = document.createElement("div");
+    titleGroup.style.cssText = "display:flex;align-items:center;gap:6px;";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.style.cssText = "font-family:var(--font-mono);font-size:12px;color:var(--sky);font-weight:500;";
+    nameSpan.textContent = c.name;
+
+    const badge = document.createElement("span");
+    badge.className = `slash-item-badge ${badgeClass}`;
+    badge.textContent = c.tierLabel;
+
+    titleGroup.appendChild(nameSpan);
+    titleGroup.appendChild(badge);
+
+    const runBtn = document.createElement("button");
+    runBtn.type = "button";
+    runBtn.className = "modal-run-btn";
+    runBtn.textContent = "Run";
+    runBtn.addEventListener("click", () => {
       closeHelpModal();
       selectSlashCommand(c, !c.requiresArg);
     });
+
+    topRow.appendChild(titleGroup);
+    topRow.appendChild(runBtn);
+
+    const descDiv = document.createElement("div");
+    descDiv.style.cssText = "font-size:11.5px;color:rgba(236,238,244,0.8);";
+    descDiv.textContent = c.desc;
+
+    const syntaxDiv = document.createElement("div");
+    syntaxDiv.style.cssText = "font-family:var(--font-mono);font-size:10px;color:var(--mute);";
+    syntaxDiv.textContent = `Syntax: ${c.syntax} • Ex: ${c.example}`;
+
+    card.appendChild(topRow);
+    card.appendChild(descDiv);
+    card.appendChild(syntaxDiv);
     elements.helpModalList.appendChild(card);
   });
 }
@@ -2515,14 +2554,28 @@ function showActiveTaskLedger(objective) {
     elements.ledgerTimer.textContent = "0.0s";
   }
   if (elements.ledgerChecklist) {
-    elements.ledgerChecklist.innerHTML = `
-      <div class="checklist-item active">
-        <svg class="checklist-icon active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="9"></circle>
-        </svg>
-        <span>Deliberating objective and extracting live interactive candidates…</span>
-      </div>
-    `;
+    elements.ledgerChecklist.replaceChildren();
+    const initialItem = document.createElement("div");
+    initialItem.className = "checklist-item active";
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "checklist-icon active");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("cx", "12");
+    circle.setAttribute("cy", "12");
+    circle.setAttribute("r", "9");
+    svg.appendChild(circle);
+
+    const span = document.createElement("span");
+    span.textContent = "Deliberating objective and extracting live interactive candidates…";
+
+    initialItem.appendChild(svg);
+    initialItem.appendChild(span);
+    elements.ledgerChecklist.appendChild(initialItem);
   }
   if (elements.ledgerThoughtsText) {
     elements.ledgerThoughtsText.textContent = "Synthesizing page context into actionable sub-goals…";
@@ -2547,22 +2600,45 @@ function updateTaskLedger(checklist, stepNum, situationalThought) {
     elements.ledgerThoughtsText.textContent = situationalThought;
   }
   if (elements.ledgerChecklist && Array.isArray(checklist) && checklist.length > 0) {
-    elements.ledgerChecklist.innerHTML = "";
+    elements.ledgerChecklist.replaceChildren();
     checklist.forEach((item, idx) => {
       const div = document.createElement("div");
       const status = item.status || (idx + 1 < stepNum ? "completed" : idx + 1 === stepNum ? "active" : "pending");
       div.className = `checklist-item ${status}`;
 
-      let iconSvg = "";
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("class", `checklist-icon ${status}`);
+      svg.setAttribute("viewBox", "0 0 24 24");
+      svg.setAttribute("fill", "none");
+      svg.setAttribute("stroke", "currentColor");
+
       if (status === "completed") {
-        iconSvg = `<svg class="checklist-icon completed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+        svg.setAttribute("stroke-width", "2.5");
+        const poly = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        poly.setAttribute("points", "20 6 9 17 4 12");
+        svg.appendChild(poly);
       } else if (status === "active") {
-        iconSvg = `<svg class="checklist-icon active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"></circle></svg>`;
+        svg.setAttribute("stroke-width", "2");
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", "12");
+        circle.setAttribute("cy", "12");
+        circle.setAttribute("r", "9");
+        svg.appendChild(circle);
       } else {
-        iconSvg = `<svg class="checklist-icon pending" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9" stroke-dasharray="2 2"></circle></svg>`;
+        svg.setAttribute("stroke-width", "1.5");
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("cx", "12");
+        circle.setAttribute("cy", "12");
+        circle.setAttribute("r", "9");
+        circle.setAttribute("stroke-dasharray", "2 2");
+        svg.appendChild(circle);
       }
 
-      div.innerHTML = `${iconSvg}<span>${escapeHtml(item.title || item.name || `Sub-goal ${idx + 1}`)}</span>`;
+      const labelSpan = document.createElement("span");
+      labelSpan.textContent = item.title || item.name || `Sub-goal ${idx + 1}`;
+
+      div.appendChild(svg);
+      div.appendChild(labelSpan);
       elements.ledgerChecklist.appendChild(div);
     });
   }
@@ -2582,37 +2658,92 @@ function openAuditModal() {
   if (!elements.auditModalBody) return;
   const chars = state.pageContext.charCount || 0;
   const elementsCount = state.pageContext.interactiveElements?.length || 0;
-  elements.auditModalBody.innerHTML = `
-    <div style="padding:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;display:flex;flex-direction:column;gap:6px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-family:var(--font-mono);font-size:11px;color:var(--sky);text-transform:uppercase;letter-spacing:0.05em;font-weight:600;">System Health Audit (8/8 Verified)</span>
-        <span style="font-family:var(--font-mono);font-size:10px;color:#34d399;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.2);padding:2px 6px;border-radius:4px;">All Clear ✓</span>
-      </div>
-      <div style="font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column;gap:4px;margin-top:4px;">
-        <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>1. Default Model:</span><span style="color:#6ee7b7;">gemini-3.1-flash-lite ✓</span></div>
-        <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>2. Manifest CSP:</span><span style="color:#6ee7b7;">Google API + Proxy Allowed ✓</span></div>
-        <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>3. Dual Proxy Fallback:</span><span style="color:#6ee7b7;">Auto /api/gemini Fallback ✓</span></div>
-        <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>4. CDP Navigation Guard:</span><span style="color:#6ee7b7;">Guarded Mouse Release ✓</span></div>
-        <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>5. Debugger State Sync:</span><span style="color:#6ee7b7;">chrome.debugger.onDetach ✓</span></div>
-        <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>6. Content Script Injection:</span><span style="color:#6ee7b7;">Sub-second Proactive Retry ✓</span></div>
-        <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>7. Zip Packaging Parity:</span><span style="color:#6ee7b7;">Synchronized V1.1.3 ✓</span></div>
-        <div style="display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;"><span>8. Privacy & Defense-in-Depth:</span><span style="color:#6ee7b7;">Luhn Card + SSN Masking ✓</span></div>
-      </div>
-    </div>
-    <div style="padding:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;display:flex;flex-direction:column;gap:6px;">
-      <div><strong>Enclave UUID:</strong> <span style="color:var(--sky);font-family:var(--font-mono);">${escapeHtml(state.activeEnclaveId || "enclave-active")}</span></div>
-      <div><strong>Isolated Domain:</strong> <span style="color:#6ee7b7;font-family:var(--font-mono);">${escapeHtml(state.pageContext.url || "active tab")}</span></div>
-      <div><strong>Sanitized DOM Elements:</strong> ${elementsCount} interactive nodes</div>
-      <div><strong>Sanitized Text Size:</strong> ${chars} characters</div>
-    </div>
-    <div style="padding:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;display:flex;flex-direction:column;gap:4px;">
-      <div style="color:var(--sky);font-weight:500;">Sanitization Defense Pipeline:</div>
-      <div>✓ Hidden DOM stripped (display:none, opacity:0)</div>
-      <div>✓ Zero-width Unicode characters stripped (\\u200B)</div>
-      <div>✓ Credit card numbers masked ([REDACTED_CREDIT_CARD])</div>
-      <div>✓ SSN &amp; Bearer Auth tokens masked</div>
-    </div>
-  `;
+
+  elements.auditModalBody.replaceChildren();
+
+  // Card 1: System Health Audit
+  const card1 = document.createElement("div");
+  card1.style.cssText = "padding:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;display:flex;flex-direction:column;gap:6px;";
+
+  const topRow = document.createElement("div");
+  topRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;";
+  const title1 = document.createElement("span");
+  title1.style.cssText = "font-family:var(--font-mono);font-size:11px;color:var(--sky);text-transform:uppercase;letter-spacing:0.05em;font-weight:600;";
+  title1.textContent = "System Health Audit (8/8 Verified)";
+  const badge1 = document.createElement("span");
+  badge1.style.cssText = "font-family:var(--font-mono);font-size:10px;color:#34d399;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.2);padding:2px 6px;border-radius:4px;";
+  badge1.textContent = "All Clear ✓";
+  topRow.appendChild(title1);
+  topRow.appendChild(badge1);
+  card1.appendChild(topRow);
+
+  const auditItems = [
+    ["1. Default Model:", "gemini-3.1-flash-lite ✓"],
+    ["2. Manifest CSP:", "Google API + Proxy Allowed ✓"],
+    ["3. Dual Proxy Fallback:", "Auto /api/gemini Fallback ✓"],
+    ["4. CDP Navigation Guard:", "Guarded Mouse Release ✓"],
+    ["5. Debugger State Sync:", "chrome.debugger.onDetach ✓"],
+    ["6. Content Script Injection:", "Sub-second Proactive Retry ✓"],
+    ["7. Zip Packaging Parity:", "Synchronized V1.1.3 ✓"],
+    ["8. Privacy & Defense-in-Depth:", "Luhn Card + SSN Masking ✓"]
+  ];
+  const listCol = document.createElement("div");
+  listCol.style.cssText = "font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column;gap:4px;margin-top:4px;";
+  auditItems.forEach(([label, status]) => {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;justify-content:space-between;padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px;";
+    const lSpan = document.createElement("span");
+    lSpan.textContent = label;
+    const sSpan = document.createElement("span");
+    sSpan.style.color = "#6ee7b7";
+    sSpan.textContent = status;
+    row.appendChild(lSpan);
+    row.appendChild(sSpan);
+    listCol.appendChild(row);
+  });
+  card1.appendChild(listCol);
+  elements.auditModalBody.appendChild(card1);
+
+  // Card 2: Enclave & Context Metrics (Safe DOM textContent)
+  const card2 = document.createElement("div");
+  card2.style.cssText = "padding:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;display:flex;flex-direction:column;gap:6px;";
+
+  const r1 = document.createElement("div");
+  const s1 = document.createElement("strong"); s1.textContent = "Enclave UUID: ";
+  const val1 = document.createElement("span"); val1.style.cssText = "color:var(--sky);font-family:var(--font-mono);"; val1.textContent = state.activeEnclaveId || "enclave-active";
+  r1.appendChild(s1); r1.appendChild(val1);
+
+  const r2 = document.createElement("div");
+  const s2 = document.createElement("strong"); s2.textContent = "Isolated Domain: ";
+  const val2 = document.createElement("span"); val2.style.cssText = "color:#6ee7b7;font-family:var(--font-mono);"; val2.textContent = state.pageContext.url || "active tab";
+  r2.appendChild(s2); r2.appendChild(val2);
+
+  const r3 = document.createElement("div");
+  const s3 = document.createElement("strong"); s3.textContent = "Sanitized DOM Elements: ";
+  const val3 = document.createTextNode(`${elementsCount} interactive nodes`);
+  r3.appendChild(s3); r3.appendChild(val3);
+
+  const r4 = document.createElement("div");
+  const s4 = document.createElement("strong"); s4.textContent = "Sanitized Text Size: ";
+  const val4 = document.createTextNode(`${chars} characters`);
+  r4.appendChild(s4); r4.appendChild(val4);
+
+  card2.appendChild(r1); card2.appendChild(r2); card2.appendChild(r3); card2.appendChild(r4);
+  elements.auditModalBody.appendChild(card2);
+
+  // Card 3: Defense pipeline rules
+  const card3 = document.createElement("div");
+  card3.style.cssText = "padding:10px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;display:flex;flex-direction:column;gap:4px;";
+  const head3 = document.createElement("div");
+  head3.style.cssText = "color:var(--sky);font-weight:500;";
+  head3.textContent = "Sanitization Defense Pipeline:";
+  card3.appendChild(head3);
+  ["✓ Hidden DOM stripped (display:none, opacity:0)", "✓ Zero-width Unicode characters stripped (\\u200B)", "✓ Credit card numbers masked ([REDACTED_CREDIT_CARD])", "✓ SSN & Bearer Auth tokens masked"].forEach((t) => {
+    const row = document.createElement("div");
+    row.textContent = t;
+    card3.appendChild(row);
+  });
+  elements.auditModalBody.appendChild(card3);
 }
 
 function closeAuditModal() {
@@ -3829,16 +3960,36 @@ function checkHighRiskAction(toolName, args = {}, targetLabel = "") {
 
 /**
  * Human-in-the-Loop Approval Modal Trigger
- * A7: Surfaces exact file path in upload_file modal description
+ * Consequential action authorization: requires explicit user confirmation
+ * Renders action details safely via textContent to prevent HTML injection.
  */
-function requestSafetyApproval(toolName, args, stepNumber) {
-  // Automatically approve user-prompted actions directly without interrupt modal box
-  return Promise.resolve(true);
+function requestSafetyApproval(toolName, args, stepNumber = 1) {
+  return new Promise((resolve) => {
+    if (!elements.safetyModal || !elements.safetyActionDesc) {
+      console.warn("[Safety Gate] Safety modal element missing, blocking action by default.");
+      resolve(false);
+      return;
+    }
+
+    state.pendingSafetyApproval = { resolve };
+
+    if (elements.safetyStepBadge) {
+      elements.safetyStepBadge.textContent = `Step ${stepNumber}`;
+    }
+
+    const desc = formatActionSummary(toolName, args);
+    elements.safetyActionDesc.textContent = `Sidekick is requesting permission to execute a consequential action:\n${desc}\n\nDo you authorize this action?`;
+    elements.safetyModal.classList.remove("hidden");
+    elements.approveActionBtn?.focus();
+  });
 }
 
 function hideSafetyModal() {
   if (elements.safetyModal) {
     elements.safetyModal.classList.add("hidden");
+  }
+  if (elements.safetyActionDesc) {
+    elements.safetyActionDesc.textContent = "";
   }
   state.pendingSafetyApproval = null;
 }
@@ -4851,9 +5002,39 @@ function initWordmarkAndRenaming() {
   let currentEffectIdx = 0;
   wrapper.classList.add("effect-0");
 
+  const renderCustomWordmark = (name) => {
+    wrapper.replaceChildren();
+    const span = document.createElement("span");
+    span.className = "wordmark-custom";
+    span.textContent = name;
+    wrapper.appendChild(span);
+  };
+
+  const renderDefaultWordmark = () => {
+    wrapper.replaceChildren();
+    const s = document.createElement("span");
+    s.id = "wordmarkS";
+    s.textContent = "S";
+    const uper = document.createElement("span");
+    uper.id = "wordmarkUper";
+    uper.className = "wordmark-foldable";
+    uper.textContent = "uper ";
+    const i = document.createElement("span");
+    i.id = "wordmarkI";
+    i.textContent = "i";
+    const ntell = document.createElement("span");
+    ntell.id = "wordmarkNtelligence";
+    ntell.className = "wordmark-foldable";
+    ntell.textContent = "ntelligence";
+    wrapper.appendChild(s);
+    wrapper.appendChild(uper);
+    wrapper.appendChild(i);
+    wrapper.appendChild(ntell);
+  };
+
   const savedName = state.customAssistantName || "";
   if (savedName) {
-    wrapper.innerHTML = `<span class="wordmark-custom">${escapeXml(savedName)}</span>`;
+    renderCustomWordmark(savedName);
   } else {
     setTimeout(() => {
       wrapper.classList.add("collapsed");
@@ -4894,11 +5075,11 @@ function initWordmarkAndRenaming() {
     if (val) {
       state.customAssistantName = val;
       await storage.set({ si_custom_assistant_name: val });
-      wrapper.innerHTML = `<span class="wordmark-custom">${escapeXml(val)}</span>`;
+      renderCustomWordmark(val);
     } else {
       state.customAssistantName = "";
       await storage.set({ si_custom_assistant_name: "" });
-      wrapper.innerHTML = `<span id="wordmarkS">S</span><span id="wordmarkUper" class="wordmark-foldable">uper </span><span id="wordmarkI">i</span><span id="wordmarkNtelligence" class="wordmark-foldable">ntelligence</span>`;
+      renderDefaultWordmark();
       wrapper.classList.add("collapsed");
     }
     input.classList.add("hidden");
