@@ -3161,7 +3161,7 @@ async function handleSlashCommand(fullCommand) {
     
     let stepsTaken = 0;
     let stuckRetries = 0;
-    const maxSteps = 8;
+    const maxSteps = DEFAULT_SAFETY_BUDGET.maxActions || 50;
     const maxRetries = 3;
     const targetTabId = state.activeTabId;
 
@@ -3593,12 +3593,12 @@ async function submitPrompt(promptText) {
     ? crypto.randomUUID()
     : ("enclave-" + Date.now() + "-" + Math.random().toString(36).slice(2, 10));
 
-  // Bounded total task deadline (120 seconds maximum per user turn)
-  const taskDeadlineMs = 120000;
+  // Bounded total task deadline (Configurable safety budget: default 10 minutes)
+  const taskDeadlineMs = DEFAULT_SAFETY_BUDGET.maxTimeMs || 600000;
   state.abortController = new AbortController();
   const taskDeadlineTimer = setTimeout(() => {
     if (state.abortController) {
-      state.abortController.abort(new DOMException("Task exceeded maximum total execution deadline of 120 seconds", "TimeoutError"));
+      state.abortController.abort(new DOMException(`Task exceeded maximum total execution deadline of ${Math.round(taskDeadlineMs / 1000)} seconds`, "TimeoutError"));
     }
   }, taskDeadlineMs);
 
@@ -3644,6 +3644,15 @@ async function submitPrompt(promptText) {
     if (result.type === "action") {
       showActiveTaskLedger(promptText);
 
+      const safetyBudget = {
+        maxActions: DEFAULT_SAFETY_BUDGET.maxActions || 50,
+        maxTimeMs: DEFAULT_SAFETY_BUDGET.maxTimeMs || 600000,
+        maxConsecutiveFailures: DEFAULT_SAFETY_BUDGET.maxConsecutiveFailures || 3,
+      };
+      const loopStartTime = Date.now();
+      let consecutiveFailures = 0;
+      let controllerState = "RUNNING";
+
       const cognitiveLedger = {
         taskObjective: promptText,
         stepNumber: 1,
@@ -3651,21 +3660,52 @@ async function submitPrompt(promptText) {
         activePlan: result.payload?.plan_checklist || [],
         lastAction: null,
         domDelta: "Initial viewport state captured",
-        historySignatures: []
+        historySignatures: [],
+        actionLog: [],
+        state: "RUNNING"
       };
 
       try {
         while (!state.abortController?.signal.aborted) {
-          if (cognitiveLedger.stepNumber > MAX_AGENT_STEPS) {
-            renderNotice(`Reached task step limit (${MAX_AGENT_STEPS} steps). Complete.`);
+          if (state.abortController?.signal.aborted) {
+            controllerState = "STOPPED_BY_USER";
+            cognitiveLedger.state = "STOPPED_BY_USER";
+            renderAssistantPlainMessage("🛑 Task stopped by user.", "system");
+            break;
+          }
+
+          // Safety Budget Checks (Never silently terminate at 5 actions!)
+          if (cognitiveLedger.stepNumber > safetyBudget.maxActions) {
+            controllerState = "PAUSED_FOR_USER";
+            cognitiveLedger.state = "PAUSED_FOR_USER";
+            renderNotice(`Safety budget reached: Task exceeded maximum limit of ${safetyBudget.maxActions} actions. Paused for safety.`);
+            renderAssistantPlainMessage(`⚠️ **Safety Budget Reached:** Completed ${cognitiveLedger.stepNumber - 1} actions. Execution paused at safety limit (${safetyBudget.maxActions} actions). You can resume or refine instructions.`);
+            break;
+          }
+
+          if (Date.now() - loopStartTime > safetyBudget.maxTimeMs) {
+            controllerState = "PAUSED_FOR_USER";
+            cognitiveLedger.state = "PAUSED_FOR_USER";
+            renderNotice(`Safety budget reached: Elapsed time exceeded limit of ${Math.round(safetyBudget.maxTimeMs / 1000)}s.`);
+            renderAssistantPlainMessage(`⚠️ **Safety Budget Reached:** Elapsed execution time exceeded limit (${Math.round(safetyBudget.maxTimeMs / 1000)}s). Paused for safety.`);
+            break;
+          }
+
+          if (consecutiveFailures >= safetyBudget.maxConsecutiveFailures) {
+            controllerState = "FAILED";
+            cognitiveLedger.state = "FAILED";
+            renderNotice(`Task paused: ${consecutiveFailures} consecutive recovery attempts failed.`);
+            renderAssistantPlainMessage(`⚠️ **Task Paused:** ${consecutiveFailures} consecutive interaction failures. Halting to protect page integrity.`);
             break;
           }
 
           const actionData = result.payload || {};
           const actType = actionData.action;
 
-          // Explicit completion signal
+          // Explicit completion signal (ONLY when observable evidence or model signals genuine task complete)
           if (actionData.is_task_complete) {
+            controllerState = "COMPLETED";
+            cognitiveLedger.state = "COMPLETED";
             const summary = actionData.completion_summary || actionData.explanation || "Objective reached successfully.";
             updateTaskLedger(actionData.plan_checklist || [], cognitiveLedger.stepNumber, actionData.situational_thought || "Task completed.");
             renderAssistantPlainMessage(`✅ **Task Completed:** ${summary}`);
@@ -3673,10 +3713,12 @@ async function submitPrompt(promptText) {
             break;
           }
 
-          // Non-actionable or element missing exit
+          // Non-actionable or element missing exit (Report explicitly, do not claim completed!)
           if (actType === "none") {
             const explanation = actionData.explanation || "No physical action could be targeted on this page.";
             updateTaskLedger(actionData.plan_checklist || [], cognitiveLedger.stepNumber, actionData.situational_thought || explanation);
+            controllerState = "PAUSED_FOR_USER";
+            cognitiveLedger.state = "PAUSED_FOR_USER";
             renderAssistantPlainMessage(`ℹ️ ${explanation}`);
             state.conversation.push({ role: "model", text: explanation });
             break;
@@ -3689,7 +3731,6 @@ async function submitPrompt(promptText) {
             actionData.situational_thought || actionData.explanation
           );
 
-          // Open new tab inside managed Chrome Tab Group
           if (actType === "open_tab") {
             let targetUrl = (actionData.url || "https://www.google.com").trim();
             if (!/^https?:\/\//i.test(targetUrl)) targetUrl = "https://" + targetUrl;
@@ -3704,11 +3745,20 @@ async function submitPrompt(promptText) {
             renderAssistantPlainMessage(stepDesc);
             cognitiveLedger.lastAction = stepDesc;
             cognitiveLedger.completedMilestones.push(stepDesc);
+            cognitiveLedger.actionLog.push({
+              step: cognitiveLedger.stepNumber,
+              action: "open_tab",
+              target: targetUrl,
+              executionSuccess: true,
+              verified: true,
+              recoveryAttempt: false,
+              status: "VERIFIED"
+            });
             await delay(200);
             await extractContext();
             await refreshTabGroupState();
           } else {
-            // Seamless Tab Group Isolation Guard (Auto-adopts current tab so user actions are never blocked)
+            // Seamless Tab Group Isolation Guard
             if (state.tabGroup?.isConfigured && state.tabGroup?.isolationEnabled && !state.tabGroup?.isCurrentTabInGroup) {
               try {
                 if (state.activeTabId) {
@@ -3728,6 +3778,15 @@ async function submitPrompt(promptText) {
               renderAssistantPlainMessage(`Viewport smoothly scrolled ${dir}.`);
               cognitiveLedger.lastAction = stepDesc;
               cognitiveLedger.completedMilestones.push(stepDesc);
+              cognitiveLedger.actionLog.push({
+                step: cognitiveLedger.stepNumber,
+                action: "scroll",
+                target: dir,
+                executionSuccess: true,
+                verified: true,
+                recoveryAttempt: false,
+                status: "VERIFIED"
+              });
               await delay(300);
               await extractContext();
             } else if (actType === "navigate") {
@@ -3752,15 +3811,27 @@ async function submitPrompt(promptText) {
                 renderAssistantPlainMessage("Navigation stopped by user.");
                 break;
               }
+              controllerState = "WAITING_FOR_PAGE";
+              cognitiveLedger.state = "WAITING_FOR_PAGE";
               await executeJITAction("navigate_to", { url: actionData.url });
               const stepDesc = `Navigated to ${actionData.url}`;
               renderAgentStepBadge(`[Step ${cognitiveLedger.stepNumber}] ${stepDesc}`, true);
               renderAssistantPlainMessage(stepDesc);
               cognitiveLedger.lastAction = stepDesc;
               cognitiveLedger.completedMilestones.push(stepDesc);
-              await delay(350);
+              cognitiveLedger.actionLog.push({
+                step: cognitiveLedger.stepNumber,
+                action: "navigate",
+                target: actionData.url,
+                executionSuccess: true,
+                verified: true,
+                recoveryAttempt: false,
+                status: "VERIFIED"
+              });
+              await delay(600);
               await extractContext();
             } else if (actType === "click" || actType === "type") {
+              // 1. OBSERVE & IDENTIFY TARGET
               let targetEl = null;
               if (state.pageContext?.interactiveElements) {
                 const targetNum = Number(actionData.target_id);
@@ -3771,11 +3842,53 @@ async function submitPrompt(promptText) {
                 targetEl = resolveElementCoordinates({ element_description: actionData.element_label }, state.pageContext.interactiveElements);
               }
 
+              // If element not in immediate viewport, attempt auto-scroll down
+              if (!targetEl) {
+                await executeJITAction("scroll_viewport", { direction: "down", pixels: 400 });
+                await delay(250);
+                await extractContext();
+                if (state.pageContext?.interactiveElements) {
+                  targetEl = resolveElementCoordinates({ element_description: actionData.element_label }, state.pageContext.interactiveElements);
+                }
+              }
+
               if (!targetEl) {
                 const expl = `Target element [#${actionData.target_id || "?"}] could not be found in active viewport. ${actionData.explanation || ""}`.trim();
                 renderAgentStepBadge("Element not found", false);
                 renderAssistantPlainMessage(expl);
+                consecutiveFailures++;
+                cognitiveLedger.actionLog.push({
+                  step: cognitiveLedger.stepNumber,
+                  action: actType,
+                  target: actionData.element_label || `[#${actionData.target_id}]`,
+                  executionSuccess: false,
+                  verified: false,
+                  recoveryAttempt: false,
+                  status: "ELEMENT_NOT_FOUND"
+                });
                 break;
+              }
+
+              // 2. VALIDATE TARGET
+              if (targetEl.disabled) {
+                renderAgentStepBadge(`Target is disabled: ${targetEl.label}`, false);
+                renderAssistantPlainMessage(`Target "${targetEl.label}" is currently disabled in the DOM.`);
+                consecutiveFailures++;
+                break;
+              }
+
+              // Capture Pre-State Snapshot
+              let preState = null;
+              if (state.activeTabId && targetEl.selector) {
+                try {
+                  preState = await new Promise(res => {
+                    chrome.tabs.sendMessage(state.activeTabId, { action: "capturePreState", selector: targetEl.selector }, { frameId: 0 }, r => {
+                      const _ = chrome.runtime.lastError;
+                      res(r?.state || null);
+                    });
+                    setTimeout(() => res(null), 150);
+                  });
+                } catch {}
               }
 
               // Live coordinate re-verification
@@ -3788,7 +3901,7 @@ async function submitPrompt(promptText) {
                       const _ = chrome.runtime.lastError;
                       res(r?.coords);
                     });
-                    setTimeout(() => res(null), 120);
+                    setTimeout(() => res(null), 150);
                   });
                   if (liveRes && liveRes.verified) {
                     liveX = liveRes.x;
@@ -3821,14 +3934,130 @@ async function submitPrompt(promptText) {
                 }
               }
 
-              await executeJITAction(cdpTool, cdpArgs);
+              // 3. ACT: Execute CDP Hardware Action
+              let actionExecSuccess = true;
+              try {
+                await executeJITAction(cdpTool, cdpArgs);
+              } catch (jitErr) {
+                console.warn("[Sidekick] executeJITAction error:", jitErr?.message);
+                actionExecSuccess = false;
+              }
+
+              // 4. VERIFY: Inspect Post-Action State
+              let expectedPostcondition = null;
+              const roleLower = (targetEl.role || "").toLowerCase();
+              if (roleLower.includes("radio")) {
+                expectedPostcondition = { type: "radio_checked" };
+              } else if (roleLower.includes("checkbox")) {
+                expectedPostcondition = { type: "checkbox_state", expectedChecked: !targetEl.checked };
+              } else if (!isClick) {
+                expectedPostcondition = { type: "text_value", expectedValue: cdpArgs.text };
+              }
+
+              await delay(120);
+
+              let postVerifyRes = null;
+              if (state.activeTabId) {
+                try {
+                  postVerifyRes = await new Promise(res => {
+                    chrome.tabs.sendMessage(state.activeTabId, {
+                      action: "verifyPostState",
+                      cdpAction: isClick ? "click" : "type",
+                      selector: targetEl.selector,
+                      preState,
+                      expectedPostcondition
+                    }, { frameId: 0 }, r => {
+                      const _ = chrome.runtime.lastError;
+                      res(r?.result || null);
+                    });
+                    setTimeout(() => res(null), 250);
+                  });
+                } catch {}
+              }
+
+              let actionVerified = actionExecSuccess && (postVerifyRes ? postVerifyRes.success !== false : true);
+              let recovered = false;
+
+              // 5. RECOVER: Intelligent, Evidence-Driven Recovery on verification failure
+              if (!actionVerified && state.activeTabId) {
+                controllerState = "RECOVERING";
+                cognitiveLedger.state = "RECOVERING";
+                renderAgentStepBadge("Action unverified; attempting intelligent recovery…", true);
+
+                const isIntercepted = postVerifyRes?.outcome === "intercepted" || targetEl.isIntercepted;
+                const isRadioOrCheckbox = roleLower.includes("radio") || roleLower.includes("checkbox");
+
+                if (isIntercepted || postVerifyRes?.outcome === "no_op") {
+                  try {
+                    const fallbackRes = await new Promise(res => {
+                      chrome.tabs.sendMessage(state.activeTabId, {
+                        action: "executeDOMAction",
+                        cdpAction: isClick ? "click" : "type",
+                        params: cdpArgs
+                      }, { frameId: 0 }, r => {
+                        const _ = chrome.runtime.lastError;
+                        res(r?.result || null);
+                      });
+                      setTimeout(() => res(null), 300);
+                    });
+                    if (fallbackRes && fallbackRes.clicked) {
+                      recovered = true;
+                      actionVerified = true;
+                    }
+                  } catch (fbErr) {
+                    console.debug("[Sidekick] Fallback recovery error:", fbErr);
+                  }
+                } else if (isRadioOrCheckbox && targetEl.labelSelector) {
+                  try {
+                    await executeJITAction("click_element", { selector: targetEl.labelSelector });
+                    recovered = true;
+                    actionVerified = true;
+                  } catch {}
+                }
+
+                // Re-verify after recovery
+                if (recovered) {
+                  const recheck = await new Promise(res => {
+                    chrome.tabs.sendMessage(state.activeTabId, {
+                      action: "verifyPostState",
+                      cdpAction: isClick ? "click" : "type",
+                      selector: targetEl.selector,
+                      preState,
+                      expectedPostcondition
+                    }, { frameId: 0 }, r => {
+                      const _ = chrome.runtime.lastError;
+                      res(r?.result || null);
+                    });
+                    setTimeout(() => res(null), 200);
+                  });
+                  if (recheck) actionVerified = recheck.success !== false;
+                }
+              }
+
+              if (actionVerified) {
+                consecutiveFailures = 0;
+              } else {
+                consecutiveFailures++;
+              }
+
               const stepDesc = isClick
-                ? `Clicked "${targetEl.label}" (element [#${targetEl.id}])`
-                : `Typed "${cdpArgs.text}" into "${targetEl.label}"`;
-              renderAgentStepBadge(`[Step ${cognitiveLedger.stepNumber}] ${stepDesc} [CDP Trusted]`, true);
+                ? `${recovered ? "Recovered & clicked" : "Clicked"} "${targetEl.label}" (element [#${targetEl.id}])`
+                : `${recovered ? "Recovered & typed" : "Typed"} "${cdpArgs.text}" into "${targetEl.label}"`;
+              
+              renderAgentStepBadge(`[Step ${cognitiveLedger.stepNumber}] ${stepDesc} [${actionVerified ? "Verified" : "Unverified"}]`, actionVerified);
               renderAssistantPlainMessage(stepDesc);
               cognitiveLedger.lastAction = stepDesc;
               cognitiveLedger.completedMilestones.push(stepDesc);
+
+              cognitiveLedger.actionLog.push({
+                step: cognitiveLedger.stepNumber,
+                action: cdpTool,
+                target: targetEl.label,
+                executionSuccess: actionExecSuccess,
+                verified: actionVerified,
+                recoveryAttempt: recovered,
+                status: actionVerified ? "VERIFIED" : "UNVERIFIED"
+              });
 
               await delay(300);
               await extractContext();

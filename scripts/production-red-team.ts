@@ -476,30 +476,34 @@ function runSuite6_ModelFailures() {
 // SUITE 7: MULTI-STEP RECOVERY ATTACKS
 // ============================================================================
 function runSuite7_MultiStepRecovery() {
-  console.log("\n--- [SUITE 7] Multi-Step Failure Attacks (Loop Breaking & Circuit Breaker) ---");
+  console.log("\n--- [SUITE 7] Multi-Step Continuous Execution & Configurable Safety Budget ---");
 
-  // Test circuit breaker at MAX_AGENT_STEPS = 5
-  const MAX_STEPS = 5;
+  // Verify that multi-step execution loop does NOT arbitrarily stop at 5 actions
+  const SAFETY_BUDGET_MAX_ACTIONS = 50;
   let simulatedSteps = 0;
-  let circuitBreakerTripped = false;
+  let reachedOverFive = false;
+  let safetyBudgetTripped = false;
 
-  while (simulatedSteps < 10) {
+  while (simulatedSteps < 60) {
     simulatedSteps++;
-    if (simulatedSteps >= MAX_STEPS) {
-      circuitBreakerTripped = true;
+    if (simulatedSteps > 5) {
+      reachedOverFive = true;
+    }
+    if (simulatedSteps >= SAFETY_BUDGET_MAX_ACTIONS) {
+      safetyBudgetTripped = true;
       break;
     }
   }
 
   recordTest(
     "MS-01",
-    "Multi-Step Recovery",
-    "Task exceeding 5 autonomous actions",
-    "Complex task taking multiple steps",
-    "Circuit breaker trips at step 5 to prevent infinite loops",
-    circuitBreakerTripped && simulatedSteps === 5 ? "Circuit breaker halted at 5" : "Loop exceeded 5",
-    circuitBreakerTripped && simulatedSteps === 5,
-    "Autonomous circuit breaker",
+    "Multi-Step Continuous Execution",
+    "Task executing uninterrupted beyond arbitrary 5-action cutoff",
+    "Complex task taking multiple steps without 5-action auto-stop",
+    "Continuous execution reaches 50 steps without arbitrary 5-step stoppage",
+    reachedOverFive && safetyBudgetTripped && simulatedSteps === 50 ? "Uninterrupted execution past 5 steps up to safety budget (50)" : "Failed continuous execution",
+    reachedOverFive && safetyBudgetTripped && simulatedSteps === 50,
+    "Continuous execution loop with configurable safety budget",
     "deterministic",
     false
   );

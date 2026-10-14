@@ -661,7 +661,10 @@
      * 4. EXECUTE & VERIFY CONTROL STATE
      * Executes the interaction plan and performs explicit post-condition verification.
      */
-    static async executeAndVerify(question, matchPlan, executeActionFn, verifyStateFn) {
+    static async executeAndVerify(question, matchPlan, executeActionFn, verifyStateFn, signal = null) {
+      if (signal?.aborted) {
+        return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
+      }
       if (!matchPlan.matched) {
         return {
           success: false,
@@ -673,12 +676,14 @@
       // MULTI-SELECT CHECKBOX EXECUTION
       if (matchPlan.type === "multi_select") {
         for (const op of matchPlan.operations) {
+          if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
           if (op.action === "noop") continue;
 
           // Dispatch click/toggle
           const res = await executeActionFn({
             action: "click",
             selector: op.control.selector,
+            labelSelector: op.control.labelSelector,
             x: op.control.x,
             y: op.control.y,
             optionId: op.control.id,
@@ -703,6 +708,7 @@
           if (updated) {
             let isCheckedNow = Boolean(updated.checked || updated.selected);
             if (isCheckedNow !== op.desiredChecked) {
+              if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
               // Recovery Attempt 1: Bounded delay for async DOM state reflection
               await new Promise((r) => setTimeout(r, 150));
               const recheckState = await verifyStateFn(question.id);
@@ -710,10 +716,12 @@
               isCheckedNow = Boolean(recheckOpt?.checked || recheckOpt?.selected);
 
               if (isCheckedNow !== op.desiredChecked) {
+                if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
                 // Recovery Attempt 2: Target visible label or direct fallback interaction
                 const altPayload = {
                   action: op.desiredChecked ? "check" : "uncheck",
                   selector: op.control.labelSelector || op.control.selector,
+                  labelSelector: op.control.labelSelector,
                   x: op.control.x,
                   y: op.control.y,
                   optionId: op.control.id,
@@ -772,6 +780,7 @@
         actionPayload = {
           action: "click",
           selector: target.selector,
+          labelSelector: target.labelSelector,
           x: target.x,
           y: target.y,
           optionId: target.id,
@@ -817,6 +826,7 @@
           let isChecked = Boolean(updatedOpt?.checked || updatedOpt?.selected);
 
           if (!isChecked) {
+            if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
             // Recovery Attempt 1: Bounded wait for asynchronous DOM state reflection
             await new Promise((r) => setTimeout(r, 150));
             const recheckState = await verifyStateFn(question.id);
@@ -833,10 +843,12 @@
               }
             }
 
+            if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
             // Recovery Attempt 2: Target visible label or direct fallback interaction
             const altPayload = {
               action: "click",
               selector: target.labelSelector || target.selector,
+              labelSelector: target.labelSelector,
               x: target.x,
               y: target.y,
               optionId: target.id,
@@ -906,8 +918,40 @@
         loopCount++;
 
         // 1. OBSERVE & PARSE
-        const surveyData = await getSurveyFn();
+        let surveyData = await getSurveyFn();
+
+        // Recognize explicit completion banner or thank you screen
+        if (surveyData?.isCompleted) {
+          onComplete({ status: "SURVEY_COMPLETED", verified: true, message: surveyData.completionMessage || "Survey completed and verified.", record: this.executionRecord });
+          return { status: "SURVEY_COMPLETED", verified: true, message: surveyData.completionMessage || "Survey completed and verified.", record: this.executionRecord };
+        }
+
+        // Bounded polling if page is still transitioning / rendering
         if (!surveyData || !Array.isArray(surveyData.questions) || surveyData.questions.length === 0) {
+          let pollAttempts = 0;
+          while (pollAttempts < 5) {
+            if (signal?.aborted) {
+              onComplete({ status: "STOPPED_BY_USER", message: "Survey execution stopped by user.", record: this.executionRecord });
+              return { status: "STOPPED_BY_USER", record: this.executionRecord };
+            }
+            await new Promise((r) => setTimeout(r, 200));
+            surveyData = await getSurveyFn();
+            if (surveyData?.isCompleted) {
+              onComplete({ status: "SURVEY_COMPLETED", verified: true, message: surveyData.completionMessage || "Survey completed and verified.", record: this.executionRecord });
+              return { status: "SURVEY_COMPLETED", verified: true, message: surveyData.completionMessage || "Survey completed and verified.", record: this.executionRecord };
+            }
+            if (surveyData?.questions && surveyData.questions.length > 0) {
+              break;
+            }
+            pollAttempts++;
+          }
+        }
+
+        if (!surveyData || !Array.isArray(surveyData.questions) || surveyData.questions.length === 0) {
+          if (surveyData?.isCompleted || this.executionRecord.length > 0) {
+            onComplete({ status: "SURVEY_COMPLETED", verified: true, message: surveyData?.completionMessage || "Survey finished; no remaining questions.", record: this.executionRecord });
+            return { status: "SURVEY_COMPLETED", verified: true, message: surveyData?.completionMessage || "Survey finished; no remaining questions.", record: this.executionRecord };
+          }
           onComplete({ status: "NO_QUESTIONS_FOUND", message: "No active survey questions found on page." });
           return { status: "NO_QUESTIONS_FOUND" };
         }
@@ -924,14 +968,19 @@
           if (classification.type === "dropdown_native") {
             return !q.value || q.value === "" || q.value === "select" || q.value === "none";
           }
+          if (classification.type === "dropdown_custom") {
+            return !q.options.some((o) => o.checked || o.selected) && (!q.value || q.value === "");
+          }
+          if (classification.type === "likert_matrix") {
+            return !q.options.some((o) => o.checked || o.selected);
+          }
           if (classification.type === "text_input") {
             return !q.value || q.value.trim() === "";
           }
           if (classification.type === "multi_choice_checkbox") {
-            // Check if required or has no selections
             return !q.options.some((o) => o.checked || o.selected);
           }
-          return true;
+          return !q.options.some((o) => o.checked || o.selected);
         });
 
         // If all questions on this page are answered, look for navigation
@@ -959,6 +1008,27 @@
             // Advance to next page
             const advRes = await advancePageFn("next", surveyData.nextButton);
             onPageAdvanced({ advanced: true, progress: currentProgress, result: advRes });
+
+            // Bounded settling wait: wait for next page DOM to settle
+            const prevQuestionIds = new Set(questions.map((q) => q.id));
+            let settleAttempts = 0;
+            while (settleAttempts < 10) {
+              if (signal?.aborted) {
+                return { status: "STOPPED_BY_USER", record: this.executionRecord };
+              }
+              await new Promise((r) => setTimeout(r, 200));
+              const pollData = await getSurveyFn();
+              if (pollData?.isCompleted) {
+                break;
+              }
+              if (pollData?.questions && pollData.questions.length > 0) {
+                const hasNew = pollData.questions.some((q) => !prevQuestionIds.has(q.id));
+                if (hasNew || (pollData.progress && pollData.progress !== currentProgress)) {
+                  break;
+                }
+              }
+              settleAttempts++;
+            }
             continue;
           }
 
@@ -1011,8 +1081,13 @@
           activeQuestion,
           matchPlan,
           executeActionFn,
-          verifyStateFn
+          verifyStateFn,
+          signal
         );
+
+        if (signal?.aborted) {
+          return { status: "STOPPED_BY_USER", record: this.executionRecord };
+        }
 
         // Record execution history
         this.executionRecord.push({

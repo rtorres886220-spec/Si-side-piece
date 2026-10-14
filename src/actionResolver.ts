@@ -271,13 +271,13 @@ export function resolveActionTarget(
       if (score > maxScore) maxScore = score;
     }
 
-    // Question / section group matching bonus
+    // Question / section group matching bonus (Strictly disambiguates repeated labels like 'Next', 'Select', 'Yes' across groups)
     if (el.group || el.context) {
       const groupText = cleanTerm(`${el.group || ""} ${el.context || ""}`);
       for (const rawTerm of targetTerms) {
         const term = cleanTerm(rawTerm);
         if (term.length >= 3 && (groupText.includes(term) || term.includes(groupText))) {
-          maxScore += 0.25;
+          maxScore += 0.40;
           break;
         }
       }
@@ -508,15 +508,22 @@ export function classifyInteractionFailure(
     };
   }
 
-  if (target.role.includes("radio") || target.role.includes("checkbox")) {
-    if (target.labelSelector || target.associatedLabel) {
-      return {
-        type: "STATE_UNCHANGED",
-        recoverable: true,
-        strategy: "CLICK_LABEL_ALTERNATIVE",
-        reason: "Input state was not updated by click. Retrying via associated visible label target."
-      };
-    }
+  if (postVerification?.outcome === "delayed" || reason.includes("delayed") || reason.includes("pending") || reason.includes("asynchronously")) {
+    return {
+      type: "STATE_UNCHANGED",
+      recoverable: true,
+      strategy: "WAIT_AND_REVERIFY",
+      reason: "Action feedback is delayed or asynchronous. Performing bounded wait and re-verifying."
+    };
+  }
+
+  if (target.role.includes("radio") || target.role.includes("checkbox") || (target.tagName && target.tagName.toLowerCase() === "input")) {
+    return {
+      type: "STATE_UNCHANGED",
+      recoverable: true,
+      strategy: "CLICK_LABEL_ALTERNATIVE",
+      reason: "Input state was not updated by direct click. Retrying via associated visible label target."
+    };
   }
 
   if (postVerification?.outcome === "no_op" || reason.includes("no DOM mutation") || reason.includes("completely unchanged")) {
@@ -552,5 +559,14 @@ export function classifyInteractionFailure(
     strategy: "ABORT",
     reason
   };
+}
+
+if (typeof globalThis !== "undefined") {
+  (globalThis as any).resolveActionTarget = resolveActionTarget;
+  (globalThis as any).validateModelActionSelection = validateModelActionSelection;
+  (globalThis as any).reIdentifyTarget = reIdentifyTarget;
+  (globalThis as any).classifyInteractionFailure = classifyInteractionFailure;
+  (globalThis as any).isConsequentialAction = isConsequentialAction;
+  (globalThis as any).verifyElementFreshness = verifyElementFreshness;
 }
 

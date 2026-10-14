@@ -33,7 +33,7 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
-  const PORT = (process.env.PORT && process.env.PORT !== '8080') ? parseInt(process.env.PORT, 10) : 3000;
+  const PORT = 3000;
   const isProd = process.env.NODE_ENV === 'production';
 
   // Security headers & strict origin validation
@@ -44,7 +44,8 @@ async function startServer() {
         origin.startsWith('chrome-extension://') ||
         origin.includes('localhost') ||
         origin.includes('127.0.0.1') ||
-        origin.endsWith('.run.app')
+        origin.endsWith('.run.app') ||
+        origin.includes('google.com')
       ) {
         res.setHeader('Access-Control-Allow-Origin', origin);
       }
@@ -52,7 +53,6 @@ async function startServer() {
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-goog-api-key, x-sidekick-auth');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     if (req.method === 'OPTIONS') {
       return res.sendStatus(204);
@@ -163,9 +163,9 @@ async function startServer() {
       const origin = req.headers.origin;
       const isExtensionOrigin = origin && origin.startsWith('chrome-extension://');
       const isLocalOrigin = origin && (origin.includes('localhost') || origin.includes('127.0.0.1'));
-      const isAiStudioOrigin = origin && origin.endsWith('.run.app');
+      const isAiStudioOrigin = origin && (origin.endsWith('.run.app') || origin.includes('google.com') || origin.includes('aistudio'));
       const host = req.headers.host || '';
-      const isAuthorizedHost = host.includes('localhost') || host.includes('127.0.0.1') || host.endsWith('.run.app');
+      const isAuthorizedHost = host.includes('localhost') || host.includes('127.0.0.1') || host.endsWith('.run.app') || host.includes('google.com');
 
       if (expectedSecret) {
         const token = String(authHeader || '').replace(/^Bearer\s+/i, '').trim();

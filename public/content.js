@@ -1246,6 +1246,9 @@
           return { x: fallbackX, y: fallbackY, verified: false, ambiguous: true, reason: `Target selector matched ${matched.length} elements (ambiguous target)` };
         }
         const el = matched[0];
+        if (!el.isConnected) {
+          return { x: fallbackX, y: fallbackY, verified: false, stale: true, reason: "Target element is disconnected from active document (stale reference)" };
+        }
         if (isPaymentWidgetOrSensitiveField(el)) {
           return { x: fallbackX, y: fallbackY, verified: false, blocked: true, reason: "Payment widget lockout" };
         }
@@ -1265,14 +1268,20 @@
         let rect = el.getBoundingClientRect();
         let targetElForCoords = el;
 
-        // If target is a zero-dimension or opacity:0 input, locate its associated label
-        if (rect.width <= 0 || rect.height <= 0 || style.opacity === "0") {
+        // If target is offscreen, zero-dimension, pointer-events none, or opacity:0 input, locate its associated label
+        const isOffscreenOrStyledInput = rect.width <= 0 || rect.height <= 0 || style.opacity === "0" ||
+          style.pointerEvents === "none" || rect.left < 0 || rect.top < 0 || rect.bottom <= 0;
+
+        if (isOffscreenOrStyledInput || (el.tagName === "INPUT" && (el.type === "radio" || el.type === "checkbox"))) {
           let assocLabel = null;
           if (el.id) {
             try { assocLabel = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); } catch {}
           }
           if (!assocLabel && typeof el.closest === "function") {
             assocLabel = el.closest("label");
+          }
+          if (!assocLabel && el.parentElement) {
+            assocLabel = el.parentElement.querySelector("label");
           }
           if (assocLabel) {
             const lRect = assocLabel.getBoundingClientRect();
@@ -1287,26 +1296,39 @@
           return { x: fallbackX, y: fallbackY, verified: false, stale: true, reason: "Target element has zero dimensions in viewport" };
         }
 
-        const liveX = Math.round(rect.left + rect.width / 2);
-        const liveY = Math.round(rect.top + rect.height / 2);
+        let liveX = Math.round(rect.left + rect.width / 2);
+        let liveY = Math.round(rect.top + rect.height / 2);
 
         // Check if pointer events are intercepted by a sticky header, dialog, or backdrop overlay
         let isIntercepted = false;
         let interceptedBy = "";
         try {
-          const topEl = document.elementFromPoint(liveX, liveY);
+          let topEl = document.elementFromPoint(liveX, liveY);
           if (topEl && topEl !== targetElForCoords && !targetElForCoords.contains(topEl) && !topEl.contains(targetElForCoords)) {
-            isIntercepted = true;
-            interceptedBy = topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : "");
+            // Attempt smart sticky header clearance by scrolling down slightly if topEl is a header/nav
+            if (topEl.matches && topEl.matches("header, nav, .sticky-header, [class*='header'], [class*='nav']")) {
+              try {
+                window.scrollBy({ top: 100, behavior: "instant" });
+                rect = targetElForCoords.getBoundingClientRect();
+                liveX = Math.round(rect.left + rect.width / 2);
+                liveY = Math.round(rect.top + rect.height / 2);
+                topEl = document.elementFromPoint(liveX, liveY);
+              } catch {}
+            }
+            if (topEl && topEl !== targetElForCoords && !targetElForCoords.contains(topEl) && !topEl.contains(targetElForCoords)) {
+              isIntercepted = true;
+              interceptedBy = topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : "");
+            }
           }
         } catch {}
 
         return {
           x: liveX,
           y: liveY,
-          verified: true,
+          verified: !isIntercepted,
           isIntercepted,
-          interceptedBy: isIntercepted ? interceptedBy : undefined
+          interceptedBy: isIntercepted ? interceptedBy : undefined,
+          targetSelector: selector
         };
       } catch (err) {
         return { x: fallbackX, y: fallbackY, verified: false, error: err.message };
@@ -1541,9 +1563,22 @@
     let targetEl = null;
     if (params.selector) {
       try {
-        const matched = document.querySelectorAll(params.selector);
-        if (matched.length !== 1) {
-          throw new Error("Security Exception: Target selector matched 0 or multiple elements (ambiguous or spoofed target).");
+        let matched = Array.from(document.querySelectorAll(params.selector));
+        if (matched.length > 1 && (params.element_description || params.label)) {
+          const descClean = (params.element_description || params.label || "").toLowerCase().trim();
+          const filtered = matched.filter((m) => {
+            const txt = (m.innerText || m.textContent || m.getAttribute("aria-label") || m.value || "").toLowerCase().trim();
+            return txt === descClean || txt.includes(descClean) || descClean.includes(txt);
+          });
+          if (filtered.length === 1) {
+            matched = filtered;
+          }
+        }
+        if (matched.length === 0) {
+          throw new Error(`Target element not found in active DOM for selector: "${params.selector}"`);
+        }
+        if (matched.length > 1) {
+          throw new Error(`Ambiguous target: Selector "${params.selector}" matched ${matched.length} elements. Specific group or label required.`);
         }
         targetEl = matched[0];
       } catch (err) {
@@ -1583,8 +1618,17 @@
           targetEl.dispatchEvent(new MouseEvent("click", evtInit));
         }
 
-        // Guarantee radio, checkbox, and label target state mutation
+        // Guarantee radio, checkbox, label, and custom ARIA target state mutation
         if (targetEl.type === "radio") {
+          if (targetEl.name) {
+            const root = targetEl.form || document;
+            root.querySelectorAll(`input[type="radio"][name="${CSS.escape(targetEl.name)}"]`).forEach(r => {
+              if (r !== targetEl) {
+                r.checked = false;
+                r.setAttribute("aria-checked", "false");
+              }
+            });
+          }
           targetEl.checked = true;
           targetEl.setAttribute("aria-checked", "true");
           targetEl.dispatchEvent(new Event("change", { bubbles: true }));
@@ -1598,13 +1642,57 @@
           const inp = (targetEl.htmlFor ? document.getElementById(targetEl.htmlFor) : null) || targetEl.querySelector("input");
           if (inp) {
             if (inp.type === "radio") {
+              if (inp.name) {
+                const root = inp.form || document;
+                root.querySelectorAll(`input[type="radio"][name="${CSS.escape(inp.name)}"]`).forEach(r => {
+                  if (r !== inp) {
+                    r.checked = false;
+                    r.setAttribute("aria-checked", "false");
+                  }
+                });
+              }
               inp.checked = true;
+              inp.setAttribute("aria-checked", "true");
               inp.dispatchEvent(new Event("change", { bubbles: true }));
+              inp.dispatchEvent(new Event("input", { bubbles: true }));
             } else if (inp.type === "checkbox") {
               inp.checked = !inp.checked;
+              inp.setAttribute("aria-checked", inp.checked ? "true" : "false");
               inp.dispatchEvent(new Event("change", { bubbles: true }));
+              inp.dispatchEvent(new Event("input", { bubbles: true }));
             }
           }
+        } else if (targetEl.getAttribute("role") === "radio" || targetEl.getAttribute("role") === "checkbox" || targetEl.getAttribute("role") === "option") {
+          const role = targetEl.getAttribute("role");
+          if (role === "radio") {
+            const group = targetEl.closest("[role='radiogroup']") || targetEl.parentElement;
+            if (group) {
+              group.querySelectorAll("[role='radio']").forEach(sib => {
+                if (sib !== targetEl) sib.setAttribute("aria-checked", "false");
+              });
+            }
+            targetEl.setAttribute("aria-checked", "true");
+          } else if (role === "checkbox") {
+            const cur = targetEl.getAttribute("aria-checked") === "true";
+            targetEl.setAttribute("aria-checked", cur ? "false" : "true");
+          } else if (role === "option") {
+            const listbox = targetEl.closest("[role='listbox']") || targetEl.parentElement;
+            if (listbox) {
+              listbox.querySelectorAll("[role='option']").forEach(sib => {
+                if (sib !== targetEl) sib.setAttribute("aria-selected", "false");
+              });
+            }
+            targetEl.setAttribute("aria-selected", "true");
+            const container = targetEl.closest(".dropdown, .custom-select, [role='combobox'], [role='listbox']") || targetEl.parentElement;
+            const hiddenInput = container ? container.querySelector('input[type="hidden"]') : null;
+            if (hiddenInput) {
+              hiddenInput.value = targetEl.getAttribute("data-value") || targetEl.getAttribute("value") || targetEl.innerText.trim();
+              hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
+              hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
+            }
+          }
+          targetEl.dispatchEvent(new Event("change", { bubbles: true }));
+          targetEl.dispatchEvent(new Event("input", { bubbles: true }));
         }
 
         showActionIndicator(params.x || 100, params.y || 100, params.selector || targetEl.innerText || "clicked");
@@ -2074,7 +2162,20 @@
             const optId = `opt-${qId}-${idx + 1}`;
             r.setAttribute("data-sidekick-id", optId);
             const lbl = SurveyDOMEngine.getOptionLabel(r, container);
-            const rect = r.getBoundingClientRect();
+            let assocLabel = (r.id ? document.querySelector(`label[for="${CSS.escape(r.id)}"]`) : null) || (r.closest ? r.closest("label") : null);
+            let labelSelector = undefined;
+            if (assocLabel) {
+              const lblId = `${optId}-label`;
+              assocLabel.setAttribute("data-sidekick-id", lblId);
+              labelSelector = `[data-sidekick-id="${lblId}"]`;
+            }
+            let rect = r.getBoundingClientRect();
+            if ((rect.width < 6 || rect.height < 6 || (typeof window !== "undefined" && window.getComputedStyle && window.getComputedStyle(r).opacity === "0")) && assocLabel) {
+              const lRect = assocLabel.getBoundingClientRect();
+              if (lRect.width >= 6 && lRect.height >= 6) {
+                rect = lRect;
+              }
+            }
             options.push({
               id: optId,
               label: lbl,
@@ -2084,6 +2185,9 @@
               disabled: Boolean(r.disabled || r.getAttribute("aria-disabled") === "true"),
               hidden: !isVisible(r),
               selector: `[data-sidekick-id="${optId}"]`,
+              labelSelector,
+              group: qText,
+              context: qText,
               x: Math.round(rect.left + rect.width / 2),
               y: Math.round(rect.top + rect.height / 2),
             });
@@ -2095,7 +2199,20 @@
             const optId = `opt-${qId}-${idx + 1}`;
             cb.setAttribute("data-sidekick-id", optId);
             const lbl = SurveyDOMEngine.getOptionLabel(cb, container);
-            const rect = cb.getBoundingClientRect();
+            let assocLabel = (cb.id ? document.querySelector(`label[for="${CSS.escape(cb.id)}"]`) : null) || (cb.closest ? cb.closest("label") : null);
+            let labelSelector = undefined;
+            if (assocLabel) {
+              const lblId = `${optId}-label`;
+              assocLabel.setAttribute("data-sidekick-id", lblId);
+              labelSelector = `[data-sidekick-id="${lblId}"]`;
+            }
+            let rect = cb.getBoundingClientRect();
+            if ((rect.width < 6 || rect.height < 6 || (typeof window !== "undefined" && window.getComputedStyle && window.getComputedStyle(cb).opacity === "0")) && assocLabel) {
+              const lRect = assocLabel.getBoundingClientRect();
+              if (lRect.width >= 6 && lRect.height >= 6) {
+                rect = lRect;
+              }
+            }
             options.push({
               id: optId,
               label: lbl,
@@ -2105,6 +2222,9 @@
               disabled: Boolean(cb.disabled || cb.getAttribute("aria-disabled") === "true"),
               hidden: !isVisible(cb),
               selector: `[data-sidekick-id="${optId}"]`,
+              labelSelector,
+              group: qText,
+              context: qText,
               x: Math.round(rect.left + rect.width / 2),
               y: Math.round(rect.top + rect.height / 2),
             });
@@ -2210,7 +2330,20 @@
           const optId = `opt-${qId}-${idx + 1}`;
           r.setAttribute("data-sidekick-id", optId);
           const lbl = SurveyDOMEngine.getOptionLabel(r, null);
-          const rect = r.getBoundingClientRect();
+          let assocLabel = (r.id ? document.querySelector(`label[for="${CSS.escape(r.id)}"]`) : null) || (r.closest ? r.closest("label") : null);
+          let labelSelector = undefined;
+          if (assocLabel) {
+            const lblId = `${optId}-label`;
+            assocLabel.setAttribute("data-sidekick-id", lblId);
+            labelSelector = `[data-sidekick-id="${lblId}"]`;
+          }
+          let rect = r.getBoundingClientRect();
+          if ((rect.width < 6 || rect.height < 6 || (typeof window !== "undefined" && window.getComputedStyle && window.getComputedStyle(r).opacity === "0")) && assocLabel) {
+            const lRect = assocLabel.getBoundingClientRect();
+            if (lRect.width >= 6 && lRect.height >= 6) {
+              rect = lRect;
+            }
+          }
           options.push({
             id: optId,
             label: lbl,
@@ -2220,6 +2353,9 @@
             disabled: Boolean(r.disabled),
             hidden: !isVisible(r),
             selector: `[data-sidekick-id="${optId}"]`,
+            labelSelector,
+            group: name,
+            context: name,
             x: Math.round(rect.left + rect.width / 2),
             y: Math.round(rect.top + rect.height / 2),
           });
@@ -2280,6 +2416,31 @@
         progress = SurveyDOMEngine.sanitize(progressEl.innerText || progressEl.textContent || progressEl.getAttribute("aria-valuenow") || "");
       }
 
+      // 5. Completion / Confirmation Recognition
+      let isCompleted = false;
+      let completionMessage = "";
+      const completionSelectors = [
+        ".thank-you", ".thankyou", ".completion-message", ".survey-completed",
+        ".survey-complete", ".confirmation-message", ".success-message",
+        ".alert-success", "[role='status'].complete", ".done-message"
+      ];
+      const compEl = root.querySelector ? root.querySelector(completionSelectors.join(", ")) : null;
+      const pageText = (root.body ? root.body.innerText || root.body.textContent : root.textContent || "").toLowerCase();
+      const completionRegex = /\b(?:thank\s+you\s+for\s+(?:completing|taking|submitting|your)|your\s+response\s+has\s+been\s+recorded|survey\s+complete|submission\s+received|all\s+done!?|feedback\s+submitted)\b/i;
+
+      if (compEl && isVisible(compEl)) {
+        isCompleted = true;
+        completionMessage = SurveyDOMEngine.sanitize(compEl.innerText || compEl.textContent);
+      } else if (questions.length === 0 && completionRegex.test(pageText)) {
+        isCompleted = true;
+        const match = pageText.match(completionRegex);
+        completionMessage = match ? match[0] : "Survey completion verified.";
+      }
+      const currentUrl = typeof window !== "undefined" ? (window.location?.href || "").toLowerCase() : "";
+      if (/\/(?:thank-?you|completed?|finish(?:ed)?|confirmation|submitted?)\b/.test(currentUrl)) {
+        isCompleted = true;
+      }
+
       return {
         questions,
         nextButton,
@@ -2287,26 +2448,34 @@
         submitButton,
         progress,
         questionCount: questions.length,
+        isCompleted,
+        completionMessage: completionMessage || (isCompleted ? "Survey completed and verified." : "")
       };
     }
 
     static interactControl(params = {}) {
-      const { action, selector, value, text, optionId } = params;
+      const { action, selector, value, text, optionId, labelSelector } = params;
       let el = null;
       if (selector) {
         try { el = document.querySelector(selector); } catch {}
+      }
+      if (!el && labelSelector) {
+        try { el = document.querySelector(labelSelector); } catch {}
       }
       if (!el && optionId) {
         el = document.querySelector(`[data-sidekick-id="${CSS.escape(optionId)}"]`);
       }
       if (!el) {
-        throw new Error(`Target control not found: ${selector || optionId}`);
+        throw new Error(`Target control not found: ${selector || labelSelector || optionId}`);
       }
 
-      if (el.disabled) {
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") {
         throw new Error(`Target control is disabled`);
       }
 
+      if (typeof el.scrollIntoView === "function") {
+        try { el.scrollIntoView({ behavior: "instant", block: "center", inline: "center" }); } catch {}
+      }
       if (typeof el.focus === "function") el.focus();
 
       const tag = (el.tagName || "").toLowerCase();
@@ -2350,6 +2519,15 @@
       }
 
       if (el.type === "radio") {
+        if (el.name) {
+          const root = el.form || document;
+          root.querySelectorAll(`input[type="radio"][name="${CSS.escape(el.name)}"]`).forEach((r) => {
+            if (r !== el) {
+              r.checked = false;
+              r.setAttribute("aria-checked", "false");
+            }
+          });
+        }
         el.checked = true;
         el.setAttribute("aria-checked", "true");
         el.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2365,6 +2543,15 @@
         const inp = (el.htmlFor ? document.getElementById(el.htmlFor) : null) || el.querySelector("input");
         if (inp) {
           if (inp.type === "radio") {
+            if (inp.name) {
+              const root = inp.form || document;
+              root.querySelectorAll(`input[type="radio"][name="${CSS.escape(inp.name)}"]`).forEach((r) => {
+                if (r !== inp) {
+                  r.checked = false;
+                  r.setAttribute("aria-checked", "false");
+                }
+              });
+            }
             inp.checked = true;
             inp.setAttribute("aria-checked", "true");
             inp.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2401,6 +2588,12 @@
             combobox.setAttribute("aria-expanded", "false");
           }
         } else if (role === "radio") {
+          const group = el.closest("[role='radiogroup']") || el.parentElement;
+          if (group) {
+            group.querySelectorAll("[role='radio']").forEach((sib) => {
+              if (sib !== el) sib.setAttribute("aria-checked", "false");
+            });
+          }
           el.setAttribute("aria-checked", "true");
         } else if (role === "checkbox") {
           const cur = el.getAttribute("aria-checked") === "true";
@@ -2461,17 +2654,31 @@
         try { btn = document.querySelector(selector); } catch {}
       }
       if (!btn) {
-        const buttons = Array.from(document.querySelectorAll("button, input[type='button'], input[type='submit']"));
+        const buttons = Array.from(document.querySelectorAll("button, input[type='button'], input[type='submit'], [role='button'], a.btn, a.button"));
         const regex = actionType === "submit" ? /\b(?:submit|finish)\b/i : /\b(?:next|continue)\b/i;
         btn = buttons.find((b) => regex.test(b.innerText || b.textContent || b.value || ""));
       }
       if (!btn) {
         throw new Error(`Navigation button not found for action ${actionType}`);
       }
+      if (btn.disabled || btn.getAttribute("aria-disabled") === "true") {
+        throw new Error(`Navigation button "${btn.innerText || actionType}" is currently disabled`);
+      }
 
       const preUrl = window.location.href;
+      if (typeof btn.scrollIntoView === "function") {
+        try { btn.scrollIntoView({ behavior: "instant", block: "center", inline: "center" }); } catch {}
+      }
+      if (typeof btn.focus === "function") btn.focus();
+
+      const evtInit = { bubbles: true, cancelable: true, view: window };
+      try { btn.dispatchEvent(new PointerEvent("pointerdown", evtInit)); } catch {}
+      try { btn.dispatchEvent(new MouseEvent("mousedown", evtInit)); } catch {}
+      try { btn.dispatchEvent(new PointerEvent("pointerup", evtInit)); } catch {}
+      try { btn.dispatchEvent(new MouseEvent("mouseup", evtInit)); } catch {}
+
       if (typeof btn.click === "function") btn.click();
-      else btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      else btn.dispatchEvent(new MouseEvent("click", evtInit));
 
       return {
         success: true,
