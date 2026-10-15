@@ -39,15 +39,16 @@
 
       const systemInstruction = `You are a precision router for an autonomous browser companion.
 Classify the user prompt into exactly ONE specialist worker:
-1. "action": The user wants to physically interact with the browser or webpage (click a button, fill an input, submit a form, navigate, scroll, open a new tab, add to cart, search the web or internet).
-2. "answer": The user is asking a factual question about this webpage that requires receipts/citations (e.g. pricing, return policy, author, specifications, dates, table lookup).
-3. "transform": Open-ended synthesis, evaluation, or creative tasks (e.g. summarize, rewrite, translate, draft a reply, quiz, "is this worth it?", comparison, general reasoning, social banter).
+1. "survey": The user wants to fill out, complete, or answer a survey, questionnaire, poll, or multi-question form (e.g. "fill out this survey", "answer the survey questions", "complete the questionnaire", /survey).
+2. "action": The user wants to physically interact with the browser or webpage (click a button, fill an input, submit a form, navigate, scroll, open a new tab, add to cart, search the web or internet).
+3. "answer": The user is asking a factual question about this webpage that requires receipts/citations (e.g. pricing, return policy, author, specifications, dates, table lookup).
+4. "transform": Open-ended synthesis, evaluation, or creative tasks (e.g. summarize, rewrite, translate, draft a reply, quiz, "is this worth it?", comparison, general reasoning, social banter).
 
 Also inspect the provided page sections and return the indices of sections most relevant to the user request.
 
 Respond with ONLY valid JSON:
 {
-  "intent": "action" | "answer" | "transform",
+  "intent": "survey" | "action" | "answer" | "transform",
   "target_sections": [0, 1],
   "element_hint": "brief description of target element if action, or null",
   "reasoning": "brief 1-sentence explanation"
@@ -77,6 +78,17 @@ USER PROMPT: "${promptText}"`;
         throw new DOMException("Router request aborted", "AbortError");
       }
 
+      // Fast check for survey keywords before remote call
+      const cleanPrompt = (promptText || "").toLowerCase().trim();
+      if (cleanPrompt.startsWith("/survey") || /\b(?:(?:fill\s*(?:out)?|complete|answer|take)\s+(?:the|this|a)?\s*(?:survey|questionnaire|poll)|survey\s+(?:questions?|form))\b/i.test(cleanPrompt)) {
+        return {
+          intent: "survey",
+          target_sections: [],
+          element_hint: null,
+          reasoning: "Prompt explicitly targets survey answering/completion workflow.",
+        };
+      }
+
       try {
         const { data } = await apiClient.executeRequest(requestBody, {
           signal,
@@ -85,7 +97,7 @@ USER PROMPT: "${promptText}"`;
 
         const { json } = SidekickApiClient.extractCandidate(data);
         if (json && json.intent) {
-          const intent = ["action", "answer", "transform"].includes(json.intent) ? json.intent : "transform";
+          const intent = ["survey", "action", "answer", "transform"].includes(json.intent) ? json.intent : "transform";
           const target_sections = Array.isArray(json.target_sections) ? json.target_sections : [];
           return {
             intent,
@@ -103,6 +115,9 @@ USER PROMPT: "${promptText}"`;
 
       // Safe fallback heuristic only if model call completely fails
       const pLower = promptText.toLowerCase();
+      if (/\b(?:survey|questionnaire|poll|fill\s+out\s+(?:the\s+)?survey|answer\s+(?:the\s+)?survey|complete\s+(?:the\s+)?form)\b/i.test(pLower)) {
+        return { intent: "survey", target_sections: [], element_hint: null, reasoning: "fallback" };
+      }
       if (/\b(?:click|press|tap|type|fill|enter|submit|button|input|navigate|go\s+to|open|tab|scroll|search|google)\b/i.test(pLower)) {
         return { intent: "action", target_sections: [], element_hint: null, reasoning: "fallback" };
       }

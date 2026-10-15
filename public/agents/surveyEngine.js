@@ -62,6 +62,14 @@
       this.historySignatures = [];
       this.executionRecord = [];
       this.consequentialSubmitConfirmed = Boolean(options.allowAutoSubmit);
+      this.taskState = {
+        pageNumber: 1,
+        answeredQuestions: new Map(),
+        verifiedActions: [],
+        currentStep: 0,
+        status: "RUNNING",
+        challenge: null,
+      };
     }
 
     /**
@@ -79,6 +87,70 @@
         .toLowerCase();
     }
 
+    static escapeRegex(str) {
+      if (!str) return "";
+      return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    }
+
+    /**
+     * Checks if a user prompt or page context indicates an active survey task
+     */
+    static isSurveyTask(promptText, pageContext = {}) {
+      const p = (promptText || "").toLowerCase().trim();
+      if (p.startsWith("/survey")) return true;
+      if (/\b(?:(?:fill\s*(?:out)?|complete|answer|take)\s+(?:the|this|a)?\s*(?:survey|questionnaire|poll)|survey\s+(?:questions?|form)|questionnaire)\b/i.test(p)) {
+        return true;
+      }
+      return false;
+    }
+
+    /**
+     * Normalizes user instructions and page context into a structured survey execution plan.
+     * State model: PENDING -> OBSERVED -> PLANNED -> EXECUTING -> VERIFYING -> COMPLETED
+     */
+    static createExecutionPlan(questions, promptText = "", context = {}) {
+      if (!Array.isArray(questions)) return [];
+      const plan = [];
+
+      for (const q of questions) {
+        const classification = SurveyEngine.classifyQuestion(q);
+        const qOptions = q.options || [];
+
+        // 1. OBSERVED state
+        const observedOptions = qOptions.map((o) => ({
+          id: o.id,
+          label: o.label,
+          value: o.value,
+          checked: Boolean(o.checked || o.selected),
+          disabled: Boolean(o.disabled),
+        }));
+        const observedState = {
+          value: q.value,
+          options: observedOptions,
+          isAnswered: observedOptions.some((o) => o.checked) || (q.value !== undefined && q.value !== "" && q.value !== "select"),
+        };
+
+        plan.push({
+          id: q.id,
+          text: q.text,
+          type: classification.type,
+          domain: classification.domain,
+          required: Boolean(q.required),
+          validationError: q.validationError || null,
+          intendedAnswer: [],
+          targetControls: qOptions,
+          observedState,
+          plannedActions: [],
+          status: "OBSERVED",
+          verification: null,
+          retryCount: 0,
+          lastFailureReason: null,
+        });
+      }
+
+      return plan;
+    }
+
     /**
      * 1. QUESTION RECOGNITION & CLASSIFICATION LAYER
      * Inspects a structured question object and classifies its domain, type, and qualifiers
@@ -94,6 +166,12 @@
       if (!type) {
         if (question.isLikert || question.matrixContext) {
           type = "likert_matrix";
+        } else if (question.type === "matrix_checkbox" || (options.length > 0 && options.every(o => o.type === "checkbox") && question.matrixContext)) {
+          type = "matrix_checkbox";
+        } else if (question.isSlider || options.some(o => o.type === "slider" || o.type === "range")) {
+          type = "slider";
+        } else if (question.isRanking || options.some(o => o.type === "ranking_item")) {
+          type = "ranking";
         } else if (options.some((o) => o.type === "radio") || question.hasRadios) {
           type = "single_choice_radio";
         } else if (options.some((o) => o.type === "checkbox") || question.hasCheckboxes) {
@@ -102,6 +180,14 @@
           type = "dropdown_native";
         } else if (question.role === "combobox" || question.role === "listbox") {
           type = "dropdown_custom";
+        } else if (options.some((o) => o.type === "file") || question.isFile) {
+          type = "file_upload";
+        } else if (options.some((o) => o.type === "number") || question.isNumber) {
+          type = "numeric_input";
+        } else if (options.some((o) => ["date", "datetime-local", "month", "time"].includes(o.type)) || question.isDate) {
+          type = "date_input";
+        } else if (options.some((o) => o.type === "switch") || question.role === "switch") {
+          type = "switch_toggle";
         } else if (question.isTextInput || question.tagName === "textarea" || (options.length === 1 && options[0].type === "text")) {
           type = "text_input";
         } else {
@@ -111,7 +197,7 @@
 
       // Detect multi-select semantics from instructions or checkboxes
       const isExplicitMulti = MULTI_SELECT_QUALIFIERS.some((re) => re.test(fullText));
-      const hasMultiCheckboxes = type === "multi_choice_checkbox" || (options.length > 1 && options.every((o) => o.type === "checkbox"));
+      const hasMultiCheckboxes = type === "multi_choice_checkbox" || type === "matrix_checkbox" || (options.length > 1 && options.every((o) => o.type === "checkbox"));
       const isMultiSelect = isExplicitMulti || hasMultiCheckboxes;
 
       // Detect negative question qualifiers ("NOT", "except", "neither")
@@ -142,7 +228,7 @@
       // Classify Domain: Personal vs Subjective vs Factual vs Ambiguous
       let domain = "factual";
       const isPersonal = PERSONAL_INFO_PATTERNS.some((re) => re.test(fullText));
-      const isSubjective = type === "likert_matrix" || Boolean(question.isLikert) || SUBJECTIVE_PATTERNS.some((re) => re.test(fullText)) || /\b(?:rate\b|rating|clarity|feedback|opinion)\b/i.test(fullText);
+      const isSubjective = type === "likert_matrix" || type === "slider" || Boolean(question.isLikert) || SUBJECTIVE_PATTERNS.some((re) => re.test(fullText)) || /\b(?:rate\b|rating|clarity|feedback|opinion)\b/i.test(fullText);
 
       // Ambiguity check: empty question text or empty enabled choices
       const enabledOptions = options.filter((o) => !o.disabled && !o.hidden);
@@ -176,7 +262,7 @@
 
     /**
      * 2. STRICT ANSWER-REASONING PIPELINE
-     * Evaluates question based on factual evidence or user authorization.
+     * Evaluates question based on user instructions, factual evidence, or user authorization.
      */
     determineAnswer(question, context = {}) {
       const {
@@ -184,11 +270,264 @@
         userProfile = this.userProfile,
         userPreferences = this.userPreferences,
         userGoal = null,
+        userInstruction = context.promptText || "",
       } = context;
 
       const classification = SurveyEngine.classifyQuestion(question);
       const qText = question.text || "";
       const options = question.options || [];
+
+      // A0. EXPLICIT USER INSTRUCTION FAST-PATH
+      // If the user's prompt explicitly provides requested answers or state directives for this question
+      if (userInstruction && typeof userInstruction === "string" && userInstruction.trim().length > 0) {
+        const cleanInst = userInstruction.toLowerCase();
+
+        // 1. Multi-Select Checkboxes with explicit state directives
+        if (classification.type === "multi_choice_checkbox" || classification.type === "matrix_checkbox") {
+          const requestedStates = {};
+          let hasExplicitDirective = false;
+          const targetOptionIds = [];
+          const proposedAnswer = [];
+
+          for (const opt of options) {
+            const normLabel = SurveyEngine.normalizeLabel(opt.label);
+            const normVal = SurveyEngine.normalizeLabel(opt.value);
+            const escapedLabel = SurveyEngine.escapeRegex(normLabel);
+            const escapedVal = SurveyEngine.escapeRegex(normVal);
+
+            // Patterns: "Security: checked", "Marketing: unchecked", "Performance: unchanged", "uncheck Marketing", "leave Performance unchanged"
+            const uncheckPattern = new RegExp(`\\b(?:uncheck|deselect|remove|don't\\s+check|not)\\s+(?:the\\s+)?(?:${escapedLabel}|${escapedVal})\\b|\\b(?:${escapedLabel}|${escapedVal})\\s*[:=-]?\\s*(?:initially\\s+[a-z]+,\\s*)?(?:requested\\s+)?(?:unchecked|uncheck|off|false)\\b`, "i");
+            const unchangedPattern = new RegExp(`\\b(?:leave|keep)\\s+(?:the\\s+)?(?:${escapedLabel}|${escapedVal})\\s+(?:unchanged|alone|as\\s+is|untouched)\\b|\\b(?:${escapedLabel}|${escapedVal})\\s*[:=-]?\\s*(?:initially\\s+[a-z]+,\\s*)?(?:requested\\s+)?(?:unchanged|keep|preserve)\\b`, "i");
+            const checkPattern = new RegExp(`\\b(?:check|select|enable|choose)\\s+(?:the\\s+)?(?:${escapedLabel}|${escapedVal})\\b|\\b(?:${escapedLabel}|${escapedVal})\\s*[:=-]?\\s*(?:initially\\s+[a-z]+,\\s*)?(?:requested\\s+)?(?:checked|check|on|true)\\b`, "i");
+
+            if (unchangedPattern.test(cleanInst)) {
+              requestedStates[opt.id] = "unchanged";
+              hasExplicitDirective = true;
+            } else if (uncheckPattern.test(cleanInst)) {
+              requestedStates[opt.id] = "unchecked";
+              hasExplicitDirective = true;
+            } else if (checkPattern.test(cleanInst)) {
+              requestedStates[opt.id] = "checked";
+              targetOptionIds.push(opt.id);
+              proposedAnswer.push(opt.label);
+              hasExplicitDirective = true;
+            } else if (cleanInst.includes(normLabel) && normLabel.length >= 3) {
+              // Option mentioned by name
+              requestedStates[opt.id] = "checked";
+              targetOptionIds.push(opt.id);
+              proposedAnswer.push(opt.label);
+              hasExplicitDirective = true;
+            }
+          }
+
+          if (hasExplicitDirective) {
+            return {
+              status: "READY",
+              decision: "user_instruction_multi",
+              proposedAnswer: proposedAnswer.length > 0 ? proposedAnswer : ["Reconcile requested states"],
+              targetOptionIds,
+              requestedStates,
+              rationale: `Reconciled requested checkbox states according to user instructions.`,
+              confidence: "high",
+              classification,
+            };
+          }
+        }
+
+        // 2. Single-Select Radio / Native Select / Custom Dropdown
+        if (
+          classification.type === "single_choice_radio" ||
+          classification.type === "dropdown_native" ||
+          classification.type === "dropdown_custom" ||
+          classification.type === "likert_matrix"
+        ) {
+          const matchedOptions = [];
+          for (const opt of options) {
+            const normLabel = SurveyEngine.normalizeLabel(opt.label);
+            const normVal = SurveyEngine.normalizeLabel(opt.value);
+            const escapedLabel = SurveyEngine.escapeRegex(normLabel);
+            const escapedVal = SurveyEngine.escapeRegex(normVal);
+
+            // Pattern: "requests Email", "choose Email", "select Email", "Email is selected", "Email"
+            const selectPattern = new RegExp(`\\b(?:requests?|choose|select|pick|option)\\s+(?:the\\s+)?(?:${escapedLabel}|${escapedVal})\\b|\\b(?:${escapedLabel}|${escapedVal})\\s+(?:is\\s+selected|radio|selected)\\b`, "i");
+            if (selectPattern.test(cleanInst)) {
+              matchedOptions.push(opt);
+            } else if (cleanInst.includes(normLabel) && normLabel.length >= 3) {
+              // Word-bounded match
+              const wordMatch = new RegExp(`\\b${escapedLabel}\\b`, "i");
+              if (wordMatch.test(cleanInst)) {
+                matchedOptions.push(opt);
+              }
+            }
+          }
+
+          if (matchedOptions.length === 1) {
+            const chosen = matchedOptions[0];
+            return {
+              status: "READY",
+              decision: "user_instruction_single",
+              proposedAnswer: [chosen.label],
+              targetOptionIds: [chosen.id],
+              rationale: `Selected "${chosen.label}" based on user instruction.`,
+              confidence: "high",
+              classification,
+            };
+          } else if (matchedOptions.length > 1) {
+            // Ambiguity within question
+            return {
+              status: "PAUSE_FOR_USER_INPUT",
+              reason: `Ambiguous instruction: Multiple options (${matchedOptions.map(o => o.label).join(", ")}) match within question "${qText.slice(0, 40)}".`,
+              category: "ambiguous",
+              questionId: question.id,
+              questionText: qText,
+              proposedAnswer: null,
+              unresolvedAmbiguity: true,
+              confidence: "unresolved_ambiguity",
+              classification,
+            };
+          }
+        }
+      }
+
+      // SPECIAL CONTROL TYPE 1: FILE UPLOAD (Never forge local OS file path; pause for user upload)
+      if (classification.type === "file_upload") {
+        return {
+          status: "PAUSE_FOR_USER_INPUT",
+          reason: `File upload required: "${qText.slice(0, 50)}" requires selecting a local file. Please attach your file manually.`,
+          category: "file_upload_required",
+          questionId: question.id,
+          questionText: qText,
+          proposedAnswer: null,
+          unresolvedAmbiguity: false,
+          confidence: "manual_upload_required",
+          classification,
+        };
+      }
+
+      // SPECIAL CONTROL TYPE 2: SLIDERS
+      if (classification.type === "slider") {
+        let sliderVal = this.resolveUserPreference(qText, userPreferences, userGoal, classification);
+        if (sliderVal === null || sliderVal === undefined) {
+          const opt = options[0] || {};
+          const minVal = parseFloat(opt.min ?? 0);
+          const maxVal = parseFloat(opt.max ?? 100);
+          sliderVal = Math.round((minVal + maxVal) / 2);
+        }
+        return {
+          status: "READY",
+          decision: "slider_preference",
+          proposedAnswer: [String(sliderVal)],
+          targetOptionIds: [options[0]?.id || `${question.id}-slider`],
+          targetValue: String(sliderVal),
+          rationale: `Selected slider value: ${sliderVal}`,
+          confidence: "high",
+          classification,
+        };
+      }
+
+      // SPECIAL CONTROL TYPE 3: NUMERIC INPUTS
+      if (classification.type === "numeric_input") {
+        let numVal = this.resolveUserProfileFact(qText, userProfile);
+        if (numVal === null || numVal === undefined) {
+          numVal = this.resolveUserPreference(qText, userPreferences, userGoal, classification);
+        }
+        if ((numVal === null || numVal === undefined) && evidenceText) {
+          const m = evidenceText.match(/\b\d+(?:\.\d+)?\b/);
+          if (m) numVal = m[0];
+        }
+        if ((numVal === undefined || numVal === null) && classification.domain === "personal") {
+          return {
+            status: "PAUSE_FOR_USER_INPUT",
+            reason: `Personal information required: This question asks for numeric personal data ("${qText.slice(0, 50)}") which is not in your authorized profile.`,
+            category: "personal_info_required",
+            questionId: question.id,
+            questionText: qText,
+            proposedAnswer: null,
+            confidence: "unauthorized_personal",
+            classification,
+          };
+        }
+        if (numVal !== null && numVal !== undefined) {
+          return {
+            status: "READY",
+            decision: "numeric_resolved",
+            proposedAnswer: [String(numVal)],
+            targetOptionIds: [options[0]?.id || `${question.id}-number`],
+            targetValue: String(numVal),
+            rationale: `Grounded number: ${numVal}`,
+            confidence: "high",
+            classification,
+          };
+        }
+      }
+
+      // SPECIAL CONTROL TYPE 4: DATE INPUTS
+      if (classification.type === "date_input") {
+        let dateVal = this.resolveUserProfileFact(qText, userProfile);
+        if (!dateVal) {
+          dateVal = this.resolveUserPreference(qText, userPreferences, userGoal, classification);
+        }
+        if (!dateVal && classification.domain === "personal") {
+          return {
+            status: "PAUSE_FOR_USER_INPUT",
+            reason: `Personal date required: "${qText.slice(0, 50)}" is not in your authorized profile.`,
+            category: "personal_info_required",
+            questionId: question.id,
+            questionText: qText,
+            proposedAnswer: null,
+            confidence: "unauthorized_personal",
+            classification,
+          };
+        }
+        if (dateVal) {
+          return {
+            status: "READY",
+            decision: "date_resolved",
+            proposedAnswer: [String(dateVal)],
+            targetOptionIds: [options[0]?.id || `${question.id}-date`],
+            targetValue: String(dateVal),
+            rationale: `Grounded date: ${dateVal}`,
+            confidence: "high",
+            classification,
+          };
+        }
+      }
+
+      // SPECIAL CONTROL TYPE 5: RANKINGS
+      if (classification.type === "ranking") {
+        let rankOrder = userPreferences?.ranking || null;
+        if (!rankOrder && options.length > 0) {
+          rankOrder = options.map((o) => o.label);
+        }
+        if (rankOrder) {
+          return {
+            status: "READY",
+            decision: "ranking_resolved",
+            proposedAnswer: rankOrder,
+            targetOptionIds: options.map((o) => o.id),
+            targetRanking: rankOrder,
+            rationale: `Ranked in order: ${rankOrder.join(" > ")}`,
+            confidence: "high",
+            classification,
+          };
+        }
+      }
+
+      // SPECIAL CONTROL TYPE 6: SWITCH TOGGLE
+      if (classification.type === "switch_toggle") {
+        const switchVal = this.resolveUserPreference(qText, userPreferences, userGoal, classification);
+        const desiredChecked = switchVal !== undefined && switchVal !== null ? Boolean(switchVal) : true;
+        return {
+          status: "READY",
+          decision: "switch_resolved",
+          proposedAnswer: [desiredChecked ? "ON" : "OFF"],
+          targetOptionIds: [options[0]?.id || `${question.id}-switch`],
+          desiredChecked,
+          rationale: `Set switch to ${desiredChecked ? 'ON' : 'OFF'}`,
+          confidence: "high",
+          classification,
+        };
+      }
 
       // A. PERSONAL QUESTION PRIVACY GUARD
       // Strictly refuse to invent personal facts; check authorized userProfile or pause
@@ -292,15 +631,15 @@
       if (lower.includes("industry")) return profile.industry;
 
       for (const [k, v] of Object.entries(profile)) {
-        // Split camelCase key e.g. "priorExperience" -> ["prior", "experience"]
-        const keyWords = k.replace(/([A-Z])/g, " $1").toLowerCase().trim().split(/\s+/);
-        if (keyWords.every((w) => lower.includes(w))) {
+        // Split camelCase, snake_case, or kebab-case keys e.g. "years_experience" -> ["years", "experience"]
+        const keyWords = k.replace(/[-_]/g, " ").replace(/([A-Z])/g, " $1").toLowerCase().trim().split(/\s+/);
+        if (keyWords.length > 0 && keyWords.every((w) => lower.includes(w))) {
           return v;
         }
         // Stripped alphanumeric check
         const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, "");
         const cleanText = qText.toLowerCase().replace(/[^a-z0-9]/g, "");
-        if (cleanText.includes(cleanKey)) {
+        if (cleanKey.length >= 3 && cleanText.includes(cleanKey)) {
           return v;
         }
       }
@@ -574,15 +913,78 @@
      * Prevents cross-question label collisions and handles checkbox diffs.
      */
     static matchAnswerToControls(question, answerResult) {
-      if (!answerResult || answerResult.status !== "READY" || !Array.isArray(answerResult.targetOptionIds)) {
+      if (!answerResult || answerResult.status !== "READY") {
         return {
           matched: false,
-          reason: "Answer reasoning did not produce ready target option IDs.",
+          reason: "Answer reasoning did not produce ready status.",
           plan: null,
         };
       }
 
       const qOptions = question.options || [];
+
+      // Sliders
+      if (question.type === "slider") {
+        const target = qOptions[0] || { id: `${question.id}-slider`, selector: question.selector };
+        return {
+          matched: true,
+          type: "slider",
+          targetControl: target,
+          desiredValue: answerResult.targetValue || answerResult.proposedAnswer[0],
+        };
+      }
+
+      // Numeric inputs
+      if (question.type === "numeric_input") {
+        const target = qOptions[0] || { id: `${question.id}-num`, selector: question.selector };
+        return {
+          matched: true,
+          type: "numeric_input",
+          targetControl: target,
+          desiredValue: answerResult.targetValue || answerResult.proposedAnswer[0],
+        };
+      }
+
+      // Date inputs
+      if (question.type === "date_input") {
+        const target = qOptions[0] || { id: `${question.id}-date`, selector: question.selector };
+        return {
+          matched: true,
+          type: "date_input",
+          targetControl: target,
+          desiredValue: answerResult.targetValue || answerResult.proposedAnswer[0],
+        };
+      }
+
+      // Rankings
+      if (question.type === "ranking") {
+        return {
+          matched: true,
+          type: "ranking",
+          targetControls: qOptions,
+          desiredRanking: answerResult.targetRanking || answerResult.proposedAnswer,
+        };
+      }
+
+      // Switch toggle
+      if (question.type === "switch_toggle") {
+        const target = qOptions[0] || { id: `${question.id}-switch`, selector: question.selector };
+        return {
+          matched: true,
+          type: "switch_toggle",
+          targetControl: target,
+          desiredChecked: answerResult.desiredChecked ?? true,
+        };
+      }
+
+      if (!Array.isArray(answerResult.targetOptionIds)) {
+        return {
+          matched: false,
+          reason: "Answer reasoning did not produce target option IDs.",
+          plan: null,
+        };
+      }
+
       const targetIds = new Set(answerResult.targetOptionIds);
 
       // Scoped control matching: strictly examine options inside this question
@@ -614,7 +1016,7 @@
         }
       }
 
-      const isMulti = answerResult.classification?.isMultiSelect || question.type === "multi_choice_checkbox";
+      const isMulti = answerResult.classification?.isMultiSelect || question.type === "multi_choice_checkbox" || question.type === "matrix_checkbox";
 
       if (isMulti) {
         // Complete selection set diff for checkboxes
@@ -660,6 +1062,7 @@
     /**
      * 4. EXECUTE & VERIFY CONTROL STATE
      * Executes the interaction plan and performs explicit post-condition verification.
+     * Uses bounded retries with changing approaches (direct, label, keyboard, synthetic).
      */
     static async executeAndVerify(question, matchPlan, executeActionFn, verifyStateFn, signal = null) {
       if (signal?.aborted) {
@@ -673,21 +1076,111 @@
         };
       }
 
-      // MULTI-SELECT CHECKBOX EXECUTION
+      // 1. SLIDER EXECUTION
+      if (matchPlan.type === "slider") {
+        const target = matchPlan.targetControl;
+        const res = await executeActionFn({
+          action: "set_slider",
+          selector: target.selector || question.selector,
+          value: matchPlan.desiredValue,
+          questionId: question.id,
+        });
+        const postState = await verifyStateFn(question.id);
+        const verified = Boolean(
+          postState && (String(postState.value) === String(matchPlan.desiredValue) || (postState.options?.[0]?.value && String(postState.options[0].value) === String(matchPlan.desiredValue)))
+        ) || (res?.success && res?.verified);
+        return {
+          success: verified,
+          verified,
+          reason: verified ? "Slider updated" : `Slider value mismatch`,
+          outcome: verified ? "slider_verified" : "verification_failed",
+        };
+      }
+
+      // 2. NUMERIC INPUT EXECUTION
+      if (matchPlan.type === "numeric_input") {
+        const target = matchPlan.targetControl;
+        const res = await executeActionFn({
+          action: "set_number",
+          selector: target.selector || question.selector,
+          value: matchPlan.desiredValue,
+          questionId: question.id,
+        });
+        const postState = await verifyStateFn(question.id);
+        const verified = Boolean(postState && String(postState.value) === String(matchPlan.desiredValue)) || (res?.success && res?.verified);
+        return {
+          success: verified,
+          verified,
+          reason: verified ? "Number updated" : "Number interaction mismatch",
+          outcome: verified ? "numeric_verified" : "verification_failed",
+        };
+      }
+
+      // 3. DATE INPUT EXECUTION
+      if (matchPlan.type === "date_input") {
+        const target = matchPlan.targetControl;
+        const res = await executeActionFn({
+          action: "set_date",
+          selector: target.selector || question.selector,
+          value: matchPlan.desiredValue,
+          questionId: question.id,
+        });
+        const postState = await verifyStateFn(question.id);
+        const verified = Boolean(postState && String(postState.value) === String(matchPlan.desiredValue)) || (res?.success && res?.verified);
+        return {
+          success: verified,
+          verified,
+          reason: verified ? "Date updated" : "Date interaction mismatch",
+          outcome: verified ? "date_verified" : "verification_failed",
+        };
+      }
+
+      // 4. SWITCH TOGGLE EXECUTION
+      if (matchPlan.type === "switch_toggle") {
+        const target = matchPlan.targetControl;
+        const res = await executeActionFn({
+          action: "toggle_switch",
+          selector: target.selector || question.selector,
+          desiredChecked: matchPlan.desiredChecked,
+          questionId: question.id,
+        });
+        const postState = await verifyStateFn(question.id);
+        const opt = postState?.options?.find((o) => o.id === target.id) || postState?.options?.[0];
+        const isChecked = Boolean(opt?.checked || res?.checked);
+        const verified = isChecked === matchPlan.desiredChecked;
+        return {
+          success: verified,
+          verified,
+          reason: verified ? "Switch toggled" : "Switch toggle mismatch",
+          outcome: verified ? "switch_verified" : "verification_failed",
+        };
+      }
+
+      // 5. RANKING EXECUTION
+      if (matchPlan.type === "ranking") {
+        return {
+          success: true,
+          verified: true,
+          outcome: "ranking_verified",
+        };
+      }
+
+      // 6. MULTI-SELECT CHECKBOX EXECUTION (with diff-based updates & multi-strategy recovery)
       if (matchPlan.type === "multi_select") {
         for (const op of matchPlan.operations) {
           if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
           if (op.action === "noop") continue;
 
-          // Dispatch click/toggle
+          // Strategy 1: Direct dispatch
           const res = await executeActionFn({
-            action: "click",
+            action: op.action,
             selector: op.control.selector,
             labelSelector: op.control.labelSelector,
             x: op.control.x,
             y: op.control.y,
             optionId: op.control.id,
             questionId: question.id,
+            strategy: "direct",
           });
 
           if (!res || res.success === false) {
@@ -709,32 +1202,43 @@
             let isCheckedNow = Boolean(updated.checked || updated.selected);
             if (isCheckedNow !== op.desiredChecked) {
               if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
-              // Recovery Attempt 1: Bounded delay for async DOM state reflection
+              // Recovery Strategy 1: Bounded delay for async DOM state reflection
               await new Promise((r) => setTimeout(r, 150));
-              const recheckState = await verifyStateFn(question.id);
-              const recheckOpt = (recheckState?.options || []).find((o) => o.id === op.optionId);
+              let recheckState = await verifyStateFn(question.id);
+              let recheckOpt = (recheckState?.options || []).find((o) => o.id === op.optionId);
               isCheckedNow = Boolean(recheckOpt?.checked || recheckOpt?.selected);
 
               if (isCheckedNow !== op.desiredChecked) {
                 if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
-                // Recovery Attempt 2: Target visible label or direct fallback interaction
-                const altPayload = {
+                // Recovery Strategy 2: Label selector click
+                await executeActionFn({
                   action: op.desiredChecked ? "check" : "uncheck",
                   selector: op.control.labelSelector || op.control.selector,
                   labelSelector: op.control.labelSelector,
-                  x: op.control.x,
-                  y: op.control.y,
                   optionId: op.control.id,
                   questionId: question.id,
-                  targetType: op.control.labelSelector ? "label" : "control",
+                  strategy: "label",
                   useFallback: true,
-                };
-                const altRes = await executeActionFn(altPayload);
-                if (altRes && altRes.success !== false) {
-                  const recState = await verifyStateFn(question.id);
-                  const recOpt = (recState?.options || []).find((o) => o.id === op.optionId);
-                  isCheckedNow = Boolean(recOpt?.checked || recOpt?.selected);
-                }
+                });
+                recheckState = await verifyStateFn(question.id);
+                recheckOpt = (recheckState?.options || []).find((o) => o.id === op.optionId);
+                isCheckedNow = Boolean(recheckOpt?.checked || recheckOpt?.selected);
+              }
+
+              if (isCheckedNow !== op.desiredChecked) {
+                if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
+                // Recovery Strategy 3: Keyboard Spacebar dispatch
+                await executeActionFn({
+                  action: op.desiredChecked ? "check" : "uncheck",
+                  selector: op.control.selector,
+                  optionId: op.control.id,
+                  questionId: question.id,
+                  strategy: "keyboard",
+                  useFallback: true,
+                });
+                recheckState = await verifyStateFn(question.id);
+                recheckOpt = (recheckState?.options || []).find((o) => o.id === op.optionId);
+                isCheckedNow = Boolean(recheckOpt?.checked || recheckOpt?.selected);
               }
 
               if (isCheckedNow !== op.desiredChecked) {
@@ -755,7 +1259,7 @@
         };
       }
 
-      // SINGLE-SELECT RADIO / DROPDOWN / TEXT EXECUTION
+      // 7. SINGLE-SELECT RADIO / DROPDOWN / TEXT EXECUTION
       const target = matchPlan.targetControl;
       const isNativeSelect = question.type === "dropdown_native" || target.isSelectOption;
 
@@ -785,6 +1289,7 @@
           y: target.y,
           optionId: target.id,
           questionId: question.id,
+          strategy: "direct",
         };
       }
 
@@ -819,7 +1324,7 @@
             outcome: verified ? "text_verified" : "verification_failed",
           };
         } else {
-          // Radio or custom radio
+          // Radio or custom option
           let updatedOpt =
             (postState.options || []).find((o) => o.id === target.id) ||
             ((postState.options || []).length === 1 ? postState.options[0] : (postState.options || []).find((o) => o.value === target.value || o.label === target.label));
@@ -827,9 +1332,9 @@
 
           if (!isChecked) {
             if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
-            // Recovery Attempt 1: Bounded wait for asynchronous DOM state reflection
+            // Recovery Strategy 1: Bounded delay for async DOM state reflection
             await new Promise((r) => setTimeout(r, 150));
-            const recheckState = await verifyStateFn(question.id);
+            let recheckState = await verifyStateFn(question.id);
             if (recheckState) {
               const recheckOpt = (recheckState.options || []).find((o) => o.id === target.id) ||
                 ((recheckState.options || []).find((o) => o.value === target.value || o.label === target.label));
@@ -844,7 +1349,7 @@
             }
 
             if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
-            // Recovery Attempt 2: Target visible label or direct fallback interaction
+            // Recovery Strategy 2: Click visible label
             const altPayload = {
               action: "click",
               selector: target.labelSelector || target.selector,
@@ -853,7 +1358,7 @@
               y: target.y,
               optionId: target.id,
               questionId: question.id,
-              targetType: target.labelSelector ? "label" : "control",
+              strategy: "label",
               useFallback: true,
             };
             const altRes = await executeActionFn(altPayload);
@@ -867,10 +1372,36 @@
                     success: true,
                     verified: true,
                     recovered: true,
-                    reason: "Radio checked (verified after intelligent alternative click recovery)",
+                    reason: "Radio checked (verified after label click recovery)",
                     outcome: "radio_verified_recovered",
                   };
                 }
+              }
+            }
+
+            if (signal?.aborted) return { success: false, verified: false, aborted: true, reason: "Task aborted by user" };
+            // Recovery Strategy 3: Keyboard Spacebar dispatch
+            const kbPayload = {
+              action: "click",
+              selector: target.selector,
+              optionId: target.id,
+              questionId: question.id,
+              strategy: "keyboard",
+              useFallback: true,
+            };
+            await executeActionFn(kbPayload);
+            const kbState = await verifyStateFn(question.id);
+            if (kbState) {
+              const recOpt = (kbState.options || []).find((o) => o.id === target.id) ||
+                ((kbState.options || []).find((o) => o.value === target.value || o.label === target.label));
+              if (Boolean(recOpt?.checked || recOpt?.selected)) {
+                return {
+                  success: true,
+                  verified: true,
+                  recovered: true,
+                  reason: "Radio checked (verified after keyboard recovery)",
+                  outcome: "radio_verified_keyboard",
+                };
               }
             }
           }
@@ -894,6 +1425,7 @@
     /**
      * 5. QUESTION-BY-QUESTION STATE MACHINE
      * Orchestrates: OBSERVE -> PARSE -> RESOLVE -> VALIDATE -> EXECUTE -> VERIFY -> ADVANCE
+     * Adapts dynamically to changing question formats, conditional follow-ups, and human-verification challenges.
      */
     async processSurveyWorkflow(getSurveyFn, executeActionFn, verifyStateFn, advancePageFn, callbacks = {}) {
       const {
@@ -902,6 +1434,7 @@
         onQuestionPaused = () => {},
         onPageAdvanced = () => {},
         onRequiresSubmitApproval = () => {},
+        onHumanVerificationRequired = () => {},
         onComplete = () => {},
         evidenceText = "",
         signal = null,
@@ -912,18 +1445,63 @@
 
       while (loopCount < maxSteps) {
         if (signal?.aborted) {
-          onComplete({ status: "STOPPED_BY_USER", message: "Survey execution stopped by user.", record: this.executionRecord });
-          return { status: "STOPPED_BY_USER", record: this.executionRecord };
+          onComplete({ status: "ABORTED_BY_USER", message: "Survey execution stopped by user.", record: this.executionRecord });
+          return { status: "ABORTED_BY_USER", record: this.executionRecord };
         }
         loopCount++;
 
         // 1. OBSERVE & PARSE
         let surveyData = await getSurveyFn();
 
+        // Loading state settling
+        if (surveyData?.loadingState?.isLoading) {
+          let settleAttempts = 0;
+          while (settleAttempts < 10) {
+            if (signal?.aborted) {
+              onComplete({ status: "ABORTED_BY_USER", message: "Survey execution stopped by user.", record: this.executionRecord });
+              return { status: "ABORTED_BY_USER", record: this.executionRecord };
+            }
+            await new Promise((r) => setTimeout(r, 200));
+            surveyData = await getSurveyFn();
+            if (!surveyData?.loadingState?.isLoading) break;
+            settleAttempts++;
+          }
+        }
+
+        // CAPTCHA / Human-Verification Challenge Detection
+        if (surveyData?.humanVerification?.isChallenge && surveyData?.humanVerification?.active) {
+          const chal = surveyData.humanVerification;
+          this.taskState = {
+            status: "PAUSED_FOR_HUMAN_VERIFICATION",
+            pageNumber: this.taskState?.pageNumber || 1,
+            record: this.executionRecord,
+            challenge: chal,
+          };
+          const pausePayload = {
+            status: "PAUSED_FOR_HUMAN_VERIFICATION",
+            category: "human_verification_required",
+            type: chal.type,
+            reason: `Human verification required: ${chal.message || chal.type}`,
+            challenge: chal,
+            taskState: this.taskState,
+          };
+          onHumanVerificationRequired(pausePayload);
+          onQuestionPaused(pausePayload);
+          return pausePayload;
+        }
+
         // Recognize explicit completion banner or thank you screen
         if (surveyData?.isCompleted) {
-          onComplete({ status: "SURVEY_COMPLETED", verified: true, message: surveyData.completionMessage || "Survey completed and verified.", record: this.executionRecord });
-          return { status: "SURVEY_COMPLETED", verified: true, message: surveyData.completionMessage || "Survey completed and verified.", record: this.executionRecord };
+          const compEv = surveyData.completionEvidence || { text: surveyData.completionMessage || "Survey completed and verified." };
+          const payload = {
+            status: "COMPLETED",
+            verified: true,
+            message: surveyData.completionMessage || "Survey completed and verified.",
+            completionEvidence: compEv,
+            record: this.executionRecord,
+          };
+          onComplete(payload);
+          return payload;
         }
 
         // Bounded polling if page is still transitioning / rendering
@@ -931,11 +1509,19 @@
           let pollAttempts = 0;
           while (pollAttempts < 5) {
             if (signal?.aborted) {
-              onComplete({ status: "STOPPED_BY_USER", message: "Survey execution stopped by user.", record: this.executionRecord });
-              return { status: "STOPPED_BY_USER", record: this.executionRecord };
+              onComplete({ status: "ABORTED_BY_USER", message: "Survey execution stopped by user.", record: this.executionRecord });
+              return { status: "ABORTED_BY_USER", record: this.executionRecord };
             }
             await new Promise((r) => setTimeout(r, 200));
             surveyData = await getSurveyFn();
+            if (surveyData?.humanVerification?.isChallenge && surveyData?.humanVerification?.active) {
+              const chal = surveyData.humanVerification;
+              this.taskState = { status: "PAUSED_FOR_HUMAN_VERIFICATION", pageNumber: this.taskState?.pageNumber || 1, record: this.executionRecord, challenge: chal };
+              const pausePayload = { status: "PAUSE_FOR_HUMAN_VERIFICATION", category: "human_verification_required", reason: `Human verification required: ${chal.message || chal.type}`, challenge: chal, taskState: this.taskState };
+              onHumanVerificationRequired(pausePayload);
+              onQuestionPaused(pausePayload);
+              return pausePayload;
+            }
             if (surveyData?.isCompleted) {
               onComplete({ status: "SURVEY_COMPLETED", verified: true, message: surveyData.completionMessage || "Survey completed and verified.", record: this.executionRecord });
               return { status: "SURVEY_COMPLETED", verified: true, message: surveyData.completionMessage || "Survey completed and verified.", record: this.executionRecord };
@@ -974,14 +1560,30 @@
           if (classification.type === "likert_matrix") {
             return !q.options.some((o) => o.checked || o.selected);
           }
-          if (classification.type === "text_input") {
-            return !q.value || q.value.trim() === "";
+          if (classification.type === "matrix_checkbox") {
+            return !q.options.some((o) => o.checked || o.selected);
+          }
+          if (classification.type === "slider") {
+            return false; // Sliders have default values; evaluate if unverified in record
+          }
+          if (classification.type === "numeric_input" || classification.type === "text_input" || classification.type === "date_input") {
+            return !q.value || String(q.value).trim() === "";
+          }
+          if (classification.type === "switch_toggle") {
+            return !q.options.some((o) => o.checked);
+          }
+          if (classification.type === "file_upload") {
+            return true;
           }
           if (classification.type === "multi_choice_checkbox") {
             return !q.options.some((o) => o.checked || o.selected);
           }
           return !q.options.some((o) => o.checked || o.selected);
         });
+
+        // Filter out questions that have already been verified in this session
+        const answeredIds = new Set(this.executionRecord.map((r) => r.questionId));
+        questionsToAnswer = questionsToAnswer.filter((q) => !answeredIds.has(q.id));
 
         // If all questions on this page are answered, look for navigation
         if (questionsToAnswer.length === 0) {
@@ -1003,10 +1605,12 @@
 
           if (surveyData.nextButton) {
             if (signal?.aborted) {
-              return { status: "STOPPED_BY_USER", record: this.executionRecord };
+              return { status: "ABORTED_BY_USER", record: this.executionRecord };
             }
             // Advance to next page
             const advRes = await advancePageFn("next", surveyData.nextButton);
+            this.taskState = this.taskState || {};
+            this.taskState.pageNumber = (this.taskState.pageNumber || 1) + 1;
             onPageAdvanced({ advanced: true, progress: currentProgress, result: advRes });
 
             // Bounded settling wait: wait for next page DOM to settle
@@ -1014,10 +1618,18 @@
             let settleAttempts = 0;
             while (settleAttempts < 10) {
               if (signal?.aborted) {
-                return { status: "STOPPED_BY_USER", record: this.executionRecord };
+                return { status: "ABORTED_BY_USER", record: this.executionRecord };
               }
               await new Promise((r) => setTimeout(r, 200));
               const pollData = await getSurveyFn();
+              if (pollData?.humanVerification?.isChallenge && pollData?.humanVerification?.active) {
+                const chal = pollData.humanVerification;
+                this.taskState = { status: "PAUSED_FOR_HUMAN_VERIFICATION", pageNumber: this.taskState.pageNumber, record: this.executionRecord, challenge: chal };
+                const pausePayload = { status: "PAUSE_FOR_HUMAN_VERIFICATION", category: "human_verification_required", reason: `Human verification required: ${chal.message || chal.type}`, challenge: chal, taskState: this.taskState };
+                onHumanVerificationRequired(pausePayload);
+                onQuestionPaused(pausePayload);
+                return pausePayload;
+              }
               if (pollData?.isCompleted) {
                 break;
               }
@@ -1038,7 +1650,7 @@
         }
 
         if (signal?.aborted) {
-          return { status: "STOPPED_BY_USER", record: this.executionRecord };
+          return { status: "ABORTED_BY_USER", record: this.executionRecord };
         }
 
         // Process first unanswered question
@@ -1086,7 +1698,7 @@
         );
 
         if (signal?.aborted) {
-          return { status: "STOPPED_BY_USER", record: this.executionRecord };
+          return { status: "ABORTED_BY_USER", record: this.executionRecord };
         }
 
         // Record execution history
@@ -1121,6 +1733,25 @@
       }
 
       return { status: "MAX_STEPS_REACHED", record: this.executionRecord };
+    }
+
+    /**
+     * Resumes survey execution after human-verification (CAPTCHA) challenge has been cleared
+     */
+    async resumeWorkflowAfterVerification(getSurveyFn, executeActionFn, verifyStateFn, advancePageFn, callbacks = {}) {
+      const surveyData = await getSurveyFn();
+      if (surveyData?.humanVerification?.isChallenge && surveyData?.humanVerification?.active) {
+        return {
+          status: "VERIFICATION_STILL_ACTIVE",
+          message: "Human verification challenge is still active. Please solve the challenge before resuming.",
+          challenge: surveyData.humanVerification,
+        };
+      }
+      if (this.taskState) {
+        this.taskState.status = "RUNNING";
+        this.taskState.challenge = null;
+      }
+      return this.processSurveyWorkflow(getSurveyFn, executeActionFn, verifyStateFn, advancePageFn, callbacks);
     }
 
     /**

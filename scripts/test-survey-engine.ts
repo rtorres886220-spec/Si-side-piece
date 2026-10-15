@@ -799,6 +799,291 @@ async function runSurveyTestSuite() {
   }
 
   // =========================================================================
+  // FIXTURE 21: Sliders, Numeric, and Date Inputs
+  // =========================================================================
+  console.log("\n--- [FIXTURE 21] Sliders, Numeric, and Date Inputs ---");
+  {
+    const html = `
+      <form id="detailsForm">
+        <div class="question" id="q_slider">
+          <label for="satisfaction_slider">Satisfaction Level (0 to 100):</label>
+          <input type="range" id="satisfaction_slider" name="satisfaction" min="0" max="100" value="50">
+        </div>
+        <div class="question" id="q_num">
+          <label for="experience_years">How many years of programming experience do you have?</label>
+          <input type="number" id="experience_years" name="years" min="0" max="50">
+        </div>
+        <div class="question" id="q_date">
+          <label for="start_date">When is your preferred start date?</label>
+          <input type="date" id="start_date" name="start_date">
+        </div>
+      </form>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+
+    assert(parsed.questions.length === 3, "Fixture 21: 3 diverse questions extracted");
+
+    const sliderQ = parsed.questions.find((q: any) => q.type === "slider");
+    const numQ = parsed.questions.find((q: any) => q.type === "numeric_input");
+    const dateQ = parsed.questions.find((q: any) => q.type === "date_input");
+
+    assert(Boolean(sliderQ), "Fixture 21: Range input classified as slider");
+    assert(Boolean(numQ), "Fixture 21: Number input classified as numeric_input");
+    assert(Boolean(dateQ), "Fixture 21: Date input classified as date_input");
+
+    const engine = new env.SurveyEngine({
+      userProfile: { years_experience: 8, start_date: "2026-11-01" },
+      userPreferences: { satisfaction: 85 }
+    });
+
+    // Test slider matching & interaction
+    const sliderAns = engine.determineAnswer(sliderQ, {});
+    const sliderPlan = env.SurveyEngine.matchAnswerToControls(sliderQ, sliderAns);
+    assert(sliderPlan.matched === true, "Fixture 21: Slider plan constructed");
+    env.SurveyDOMEngine.interactControl({
+      action: "set_slider",
+      selector: sliderPlan.targetControl.selector,
+      value: sliderPlan.desiredValue
+    });
+    const sliderEl = env.document.getElementById("satisfaction_slider") as HTMLInputElement;
+    assert(Number(sliderEl.value) === 85, "Fixture 21: Slider value strictly set to 85 in DOM");
+
+    // Test numeric input matching & interaction
+    const numAns = engine.determineAnswer(numQ, {});
+    const numPlan = env.SurveyEngine.matchAnswerToControls(numQ, numAns);
+    assert(numPlan.matched === true, "Fixture 21: Numeric input plan constructed");
+    env.SurveyDOMEngine.interactControl({
+      action: "set_number",
+      selector: numPlan.targetControl.selector,
+      value: numPlan.desiredValue
+    });
+    const numEl = env.document.getElementById("experience_years") as HTMLInputElement;
+    assert(Number(numEl.value) === 8, "Fixture 21: Numeric input strictly set to 8 in DOM");
+
+    // Test date input matching & interaction
+    const dateAns = engine.determineAnswer(dateQ, {});
+    const datePlan = env.SurveyEngine.matchAnswerToControls(dateQ, dateAns);
+    assert(datePlan.matched === true, "Fixture 21: Date input plan constructed");
+    env.SurveyDOMEngine.interactControl({
+      action: "set_date",
+      selector: datePlan.targetControl.selector,
+      value: datePlan.desiredValue
+    });
+    const dateEl = env.document.getElementById("start_date") as HTMLInputElement;
+    assert(dateEl.value === "2026-11-01", "Fixture 21: Date value strictly set to 2026-11-01 in DOM");
+  }
+
+  // =========================================================================
+  // FIXTURE 22: Ranking Questions & Reordering
+  // =========================================================================
+  console.log("\n--- [FIXTURE 22] Ranking Questions & Reordering ---");
+  {
+    const html = `
+      <div class="question ranking-container" id="q_rank">
+        <label>Rank your preferred deployment targets (1 = top choice):</label>
+        <div class="ranking-item" data-value="docker" id="rank_docker">Docker Container</div>
+        <div class="ranking-item" data-value="kubernetes" id="rank_k8s">Kubernetes Cluster</div>
+        <div class="ranking-item" data-value="serverless" id="rank_serverless">Serverless Functions</div>
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    const rankQ = parsed.questions[0];
+
+    assert(rankQ.type === "ranking", "Fixture 22: Ranking container recognized as ranking question type");
+    assert(rankQ.options.length === 3, "Fixture 22: 3 rankable items detected");
+
+    const engine = new env.SurveyEngine({
+      userPreferences: { "preferred deployment": ["serverless", "docker", "kubernetes"] }
+    });
+
+    const rankAns = engine.determineAnswer(rankQ, {});
+    assert(rankAns.status === "READY", "Fixture 22: Ranking reasoning produces ready status");
+    const rankPlan = env.SurveyEngine.matchAnswerToControls(rankQ, rankAns);
+    assert(rankPlan.matched === true, "Fixture 22: Ranking plan constructed");
+  }
+
+  // =========================================================================
+  // FIXTURE 23: Custom React-style Switch Toggles & Matrix Checkboxes
+  // =========================================================================
+  console.log("\n--- [FIXTURE 23] Switch Toggles & Matrix Checkboxes ---");
+  {
+    const html = `
+      <div class="question" id="q_switch">
+        <label id="lbl_notif">Enable push notifications for critical security alerts</label>
+        <button role="switch" aria-checked="false" aria-labelledby="lbl_notif" id="switch_security">
+          <span>Toggle</span>
+        </button>
+      </div>
+      <div class="question" id="q_matrix_cb">
+        <label>Select applicable channels per priority tier:</label>
+        <table class="matrix-table">
+          <thead><tr><th>Tier</th><th>Email</th><th>SMS</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>High Priority</td>
+              <td><label><input type="checkbox" name="tier_high" value="email"> Email</label></td>
+              <td><label><input type="checkbox" name="tier_high" value="sms"> SMS</label></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+
+    const switchQ = parsed.questions.find((q: any) => q.type === "switch_toggle");
+    const matrixQ = parsed.questions.find((q: any) => q.type === "matrix" || q.type === "matrix_checkbox");
+
+    assert(Boolean(switchQ), "Fixture 23: ARIA switch role classified as switch_toggle");
+    assert(Boolean(matrixQ), "Fixture 23: Matrix table with checkboxes classified as matrix question");
+
+    // Toggle switch test
+    const switchTarget = switchQ.options[0];
+    env.SurveyDOMEngine.interactControl({
+      action: "toggle_switch",
+      selector: switchTarget.selector,
+      desiredChecked: true
+    });
+    const switchEl = env.document.getElementById("switch_security") as HTMLElement;
+    assert(switchEl.getAttribute("aria-checked") === "true", "Fixture 23: Switch button aria-checked toggled to true in DOM");
+  }
+
+  // =========================================================================
+  // FIXTURE 24: CAPTCHA / Human Verification Interstitial: Detection, Pause, & Resume
+  // =========================================================================
+  console.log("\n--- [FIXTURE 24] CAPTCHA / Human Verification Interstitial ---");
+  {
+    const html = `
+      <div class="survey-page">
+        <div class="question">
+          <label><input type="radio" name="fav_color" value="blue"> Blue</label>
+        </div>
+        <div class="cf-turnstile" id="cf_challenge" data-sitekey="0x4AAAAAA"></div>
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+
+    assert(parsed.humanVerification.isChallenge === true, "Fixture 24: CAPTCHA / Cloudflare Turnstile widget detected");
+    assert(parsed.humanVerification.active === true, "Fixture 24: Human verification is marked active");
+
+    const engine = new env.SurveyEngine();
+    let verificationNoticeFired: boolean = false;
+
+    // Run survey workflow with active challenge
+    const res = await engine.processSurveyWorkflow(
+      async () => parsed,
+      async () => ({ success: true }),
+      async () => ({ state: "ok" }),
+      async () => ({ advanced: true }),
+      {
+        onHumanVerificationRequired: (chal: any) => {
+          verificationNoticeFired = true;
+          assert(chal.type === "cloudflare_turnstile", "Fixture 24: Challenge type identified as cloudflare_turnstile");
+        }
+      }
+    );
+
+    assert(Boolean(verificationNoticeFired), "Fixture 24: onHumanVerificationRequired callback was invoked");
+    assert(res.status === "PAUSED_FOR_HUMAN_VERIFICATION", "Fixture 24: Workflow status strictly paused with PAUSED_FOR_HUMAN_VERIFICATION");
+
+    // Simulate user solving the challenge in the browser tab (challenge container removed)
+    const cfWidget = env.document.getElementById("cf_challenge");
+    if (cfWidget) cfWidget.remove();
+
+    const postClearParsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    assert(postClearParsed.humanVerification.isChallenge === false, "Fixture 24: Challenge cleared after manual solving");
+
+    // Resume workflow
+    let resumedQuestionStart: boolean = false;
+    const resumeRes = await engine.resumeWorkflowAfterVerification(
+      async () => postClearParsed,
+      async () => ({ success: true }),
+      async () => ({ options: [{ checked: true }] }),
+      async () => ({ advanced: true }),
+      {
+        onQuestionStart: () => { resumedQuestionStart = true; }
+      }
+    );
+
+    assert(Boolean(resumedQuestionStart), "Fixture 24: Survey successfully resumed after challenge clearance");
+    assert(engine.taskState.status !== "PAUSED_FOR_HUMAN_VERIFICATION", "Fixture 24: Task state resumed from paused status");
+  }
+
+  // =========================================================================
+  // FIXTURE 25: Manual Abort / Stop Signal during Workflow Execution
+  // =========================================================================
+  console.log("\n--- [FIXTURE 25] Manual Abort / Stop Signal ---");
+  {
+    const html = `
+      <div class="question">
+        <label><input type="radio" name="lang" value="ts"> TypeScript</label>
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+
+    const abortController = new (env.window.AbortController || AbortController)();
+    const engine = new env.SurveyEngine();
+
+    // Trigger abort immediately
+    abortController.abort();
+
+    const res = await engine.processSurveyWorkflow(
+      async () => parsed,
+      async () => ({ success: true }),
+      async () => ({ options: [{ checked: true }] }),
+      async () => ({ advanced: true }),
+      {
+        signal: abortController.signal
+      }
+    );
+
+    assert(res.status === "ABORTED_BY_USER", "Fixture 25: Abort signal immediately halts workflow with ABORTED_BY_USER");
+  }
+
+  // =========================================================================
+  // FIXTURE 26: Multi-Page Final Submission & Completion State Verification
+  // =========================================================================
+  console.log("\n--- [FIXTURE 26] Final Submission & Completion State Verification ---");
+  {
+    const thankYouHtml = `
+      <div class="survey-container">
+        <div class="confirmation-box">
+          <h2>Thank you for completing our survey!</h2>
+          <p>Your responses have been recorded successfully. Reference ID: #98412</p>
+        </div>
+      </div>
+    `;
+    const env = createVirtualEnvironment(thankYouHtml);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+
+    assert(parsed.isCompleted === true, "Fixture 26: Thank you screen correctly recognized as survey completion state");
+    assert(Boolean(parsed.completionEvidence), "Fixture 26: Completion evidence extracted from page");
+
+    const engine = new env.SurveyEngine();
+    let onCompleteFired: boolean = false;
+
+    const res = await engine.processSurveyWorkflow(
+      async () => parsed,
+      async () => ({ success: true }),
+      async () => ({ state: "ok" }),
+      async () => ({ advanced: true }),
+      {
+        onComplete: (info: any) => {
+          onCompleteFired = true;
+          assert(Boolean(info.completionEvidence), "Fixture 26: onComplete passed verified completion evidence");
+        }
+      }
+    );
+
+    assert(Boolean(onCompleteFired), "Fixture 26: onComplete callback fired");
+    assert(res.status === "COMPLETED", "Fixture 26: Workflow status strictly set to COMPLETED");
+  }
+
+  // =========================================================================
   // ADVERSARIAL FIXTURES: Prompt Injection & Deceptive Page Text Resistance
   // =========================================================================
   console.log("\n--- [ADVERSARIAL FIXTURE] Prompt Injection & Deceptive Text Resistance ---");

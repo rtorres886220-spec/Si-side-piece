@@ -385,6 +385,18 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     example: "/cancel"
   },
   {
+    id: "survey",
+    name: "/survey",
+    aliases: ["/questionnaire", "/fillform"],
+    tier: 2,
+    tierLabel: "Tier 2: Action, Data & Audio",
+    syntax: "/survey [resume | scan]",
+    description: "Adaptive survey answering with state verification & CAPTCHA handling",
+    category: "Browser Action",
+    example: "/survey",
+    argSuggestions: ["resume", "scan"]
+  },
+  {
     id: "denylist",
     name: "/denylist",
     aliases: ["/block", "/isolate"],
