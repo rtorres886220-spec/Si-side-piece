@@ -7,8 +7,8 @@
 
 (function () {
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-  const PRIMARY_MODEL = "gemini-3.1-flash-lite";
-  const TEMPORARY_FALLBACK_MODEL = "gemini-3.8-flash";
+  const PRIMARY_MODEL = "gemini-3.5-flash-lite";
+  const TEMPORARY_FALLBACK_MODEL = "gemini-3.1-flash-lite";
 
   class SidekickApiClient {
     constructor(apiKey, defaultModel = PRIMARY_MODEL, proxyBaseUrl = "") {
@@ -24,7 +24,7 @@
 
     setModel(model) {
       if (model) {
-        this.defaultModel = model === "gemini-3.5-flash-lite" ? PRIMARY_MODEL : model;
+        this.defaultModel = model;
       }
     }
 
@@ -77,8 +77,7 @@
      * Call with exponential backoff, jitter, bounded timeouts, and truthful failure reporting
      */
     async _callWithRetry(requestBody, options = {}) {
-      const rawModel = options.model || this.defaultModel;
-      const model = rawModel === "gemini-3.5-flash-lite" ? PRIMARY_MODEL : rawModel;
+      const model = options.model || this.defaultModel;
       const {
         signal = null,
         maxRetries = 3,

@@ -239,7 +239,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
 6. **Set Up Gemini API Key**:
    - Click the **Sidekick** extension icon in your Chrome toolbar or side panel.
    - On first launch, enter your free Gemini API key (starts with \`AIzaSy...\`) from [Google AI Studio](https://aistudio.google.com/app/apikey).
-   - Default model is **\`gemini-3.1-flash-lite\`** (with auto-fallback to \`gemini-3.8-flash\` and \`gemini-flash-latest\`).
+   - Default model is **\`gemini-3.5-flash-lite\`** (with auto-fallback to \`gemini-3.1-flash-lite\` and \`gemini-flash-latest\`).
 
 ---
 

@@ -120,7 +120,7 @@ async function startServer() {
     res.json({
       status: 'ok',
       hasApiKey: !!process.env.GEMINI_API_KEY,
-      defaultModel: 'gemini-3.1-flash-lite',
+      defaultModel: 'gemini-3.5-flash-lite',
       thinkingLevel: 'HIGH',
       temperature: 0.5,
       activeConcurrent: activeConcurrentRequests,
@@ -188,14 +188,14 @@ async function startServer() {
 
     try {
       const rawPayload = req.body?.rawPayload;
-      const model = req.body?.model || 'gemini-3.1-flash-lite';
+      const model = req.body?.model || 'gemini-3.5-flash-lite';
       const stream = Boolean(req.body?.stream);
 
-      const targetModel = (model === 'gemini-3.5-flash-lite' || !model) ? 'gemini-3.1-flash-lite' : model;
+      const targetModel = model || 'gemini-3.5-flash-lite';
       const cascade = [
         targetModel,
+        'gemini-3.5-flash-lite',
         'gemini-3.1-flash-lite',
-        'gemini-3.8-flash',
         'gemini-flash-latest',
       ].filter((m, i, a) => a.indexOf(m) === i);
 
@@ -803,7 +803,7 @@ ${GROUNDING_SYSTEM_POLICY}`;
         },
       });
 
-      // Model cascade: prioritize gemini-3.1-flash-lite
+      // Model cascade: prioritize gemini-3.5-flash-lite with fallback to gemini-3.1-flash-lite
       let response: any = null;
       let lastError: any = null;
       let usedModel = targetModel;

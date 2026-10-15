@@ -34,7 +34,7 @@ dotenv.config();
 
 const apiKey = process.env.GEMINI_API_KEY || "";
 const ai = new GoogleGenAI({ apiKey });
-const fallbackModel = "gemini-3.8-flash";
+const fallbackModel = "gemini-3.1-flash-lite";
 
 async function countTokens(contents: string): Promise<number> {
   if (!contents) return 0;
@@ -720,7 +720,7 @@ async function auditSection11_FallbackCascade() {
   console.log("AUDIT SECTION 11: TEST THE FALLBACK CASCADE");
   console.log("==================================================");
 
-  console.log("Cascade Order: gemini-3.1-flash-lite -> gemini-3.8-flash -> gemini-flash-latest");
+  console.log("Cascade Order: gemini-3.5-flash-lite -> gemini-3.1-flash-lite -> gemini-flash-latest");
   console.log("Trigger Conditions:");
   console.log("- HTTP 503 (High Demand / Overloaded): Cascades immediately");
   console.log("- HTTP 429 (Resource Exhausted / Free Tier RPM): Bounded backoff retry, then cascades");

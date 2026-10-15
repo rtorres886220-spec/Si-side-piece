@@ -25,7 +25,7 @@ import {
 dotenv.config();
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const model = "gemini-3.8-flash";
+const model = "gemini-3.5-flash-lite";
 
 async function countTokens(text: string): Promise<number> {
   if (!text) return 0;
@@ -216,7 +216,7 @@ ${SECTION_TEXT.repeat(10)}
 
 async function runBenchmark() {
   console.log("================================================================================");
-  console.log("MINIMUM SUFFICIENT CONTEXT & TOKEN WASTE BENCHMARK (gemini-3.8-flash Tokenizer)");
+  console.log("MINIMUM SUFFICIENT CONTEXT & TOKEN WASTE BENCHMARK (gemini-3.5-flash-lite Tokenizer)");
   console.log("================================================================================\n");
 
   const unoptimizedToolsTokens = await countTokens(JSON.stringify(UNOPTIMIZED_TOOLS));

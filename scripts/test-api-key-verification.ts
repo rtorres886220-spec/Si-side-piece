@@ -80,8 +80,8 @@ async function runAllTests() {
         <input type="text" id="proxyUrlInput" value="" />
         <button id="toggleKeyVisibilityBtn"></button>
         <select id="modelSelect">
-          <option value="gemini-3.1-flash-lite" selected>gemini-3.1-flash-lite</option>
-          <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+          <option value="gemini-3.5-flash-lite" selected>gemini-3.5-flash-lite</option>
+          <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
         </select>
         <button id="saveSettingsBtn">Save</button>
         <span id="saveStatus"></span>
@@ -320,18 +320,18 @@ async function runAllTests() {
   console.log('\n--- TEST 6: UNAVAILABLE MODEL (404) & FALLBACK RESOLUTION ---');
   const calledModels: string[] = [];
   (globalThis as any).fetch = async (url: string) => {
-    if (url.includes('gemini-3.1-flash-lite')) {
-      calledModels.push('gemini-3.1-flash-lite');
+    if (url.includes('gemini-3.5-flash-lite')) {
+      calledModels.push('gemini-3.5-flash-lite');
       return {
         ok: false,
         status: 404,
         json: async () => ({
-          error: { code: 404, message: 'models/gemini-3.1-flash-lite is not found', status: 'NOT_FOUND' }
+          error: { code: 404, message: 'models/gemini-3.5-flash-lite is not found', status: 'NOT_FOUND' }
         })
       };
     }
-    if (url.includes('gemini-3.8-flash')) {
-      calledModels.push('gemini-3.8-flash');
+    if (url.includes('gemini-3.1-flash-lite')) {
+      calledModels.push('gemini-3.1-flash-lite');
       return {
         ok: true,
         status: 200,
@@ -343,10 +343,10 @@ async function runAllTests() {
     return { ok: false, status: 500 };
   };
 
-  const fallbackResult = await verifyApiKey('KEY_WITH_PRIMARY_404', 'gemini-3.1-flash-lite');
+  const fallbackResult = await verifyApiKey('KEY_WITH_PRIMARY_404', 'gemini-3.5-flash-lite');
   assert(fallbackResult.valid === true, 'When primary model is 404, fallback model is tried and succeeds');
-  assert(fallbackResult.model === 'gemini-3.8-flash', 'Verified model is set to fallback model');
-  assert(calledModels.includes('gemini-3.1-flash-lite') && calledModels.includes('gemini-3.8-flash'), 'Tried primary model then fallback');
+  assert(fallbackResult.model === 'gemini-3.1-flash-lite', 'Verified model is set to fallback model');
+  assert(calledModels.includes('gemini-3.5-flash-lite') && calledModels.includes('gemini-3.1-flash-lite'), 'Tried primary model then fallback');
 
   // Case where BOTH models return 404
   (globalThis as any).fetch = async (url: string) => {
@@ -358,7 +358,7 @@ async function runAllTests() {
       })
     };
   };
-  const all404Result = await verifyApiKey('KEY_ALL_404', 'gemini-3.1-flash-lite');
+  const all404Result = await verifyApiKey('KEY_ALL_404', 'gemini-3.5-flash-lite');
   assert(all404Result.valid === false, 'When all tried models return 404, result is valid: false');
   assert(all404Result.category === VERIFY_ERROR_CATEGORIES.MODEL_UNAVAILABLE, 'Categorized as MODEL_UNAVAILABLE');
 

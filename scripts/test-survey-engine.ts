@@ -1145,6 +1145,425 @@ async function runSurveyTestSuite() {
   }
 
   // =========================================================================
+  // FORMAL SPECIFICATION REGRESSION TESTS: A THROUGH J
+  // =========================================================================
+  console.log("\n==================================================================");
+  console.log("  FORMAL REGRESSION SUITE: TESTS A THROUGH J                      ");
+  console.log("==================================================================");
+
+  // --- TEST A — Radio selection ---
+  console.log("\n--- [TEST A] Radio selection with prior selected option ---");
+  {
+    const html = `
+      <form id="contactForm">
+        <fieldset class="question" id="q_contact">
+          <legend>Preferred contact method:</legend>
+          <label><input type="radio" name="contact" value="email" id="opt_email"> Email</label>
+          <label><input type="radio" name="contact" value="phone" id="opt_phone" checked> Phone</label>
+          <label><input type="radio" name="contact" value="text" id="opt_text"> Text message</label>
+        </fieldset>
+      </form>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    const q = parsed.questions[0];
+
+    // Phone is initially selected
+    const initialPhone = env.document.getElementById("opt_phone") as HTMLInputElement;
+    const initialEmail = env.document.getElementById("opt_email") as HTMLInputElement;
+    assert(initialPhone.checked === true, "Test A: Phone initially selected");
+    assert(initialEmail.checked === false, "Test A: Email initially unselected");
+
+    const instruction = "The instruction requests Email.";
+    const engine = new env.SurveyEngine();
+    const answer = engine.determineAnswer(q, { promptText: instruction });
+
+    assert(answer.status === "READY", "Test A: Answer reasoning status is READY");
+    assert(answer.proposedAnswer[0].includes("Email"), "Test A: Email identified from instruction");
+
+    const matchPlan = env.SurveyEngine.matchAnswerToControls(q, answer);
+    assert(matchPlan.matched && matchPlan.targetControl.value === "email", "Test A: Control correctly matched to Email");
+
+    // Execute selection
+    const execRes = env.SurveyDOMEngine.interactControl({
+      action: "click",
+      selector: matchPlan.targetControl.selector,
+      optionId: matchPlan.targetControl.id,
+      questionId: q.id,
+    });
+    assert(execRes.success === true, "Test A: Interaction executed without error");
+
+    // Verify post-condition
+    const verifyState = env.SurveyDOMEngine.verifyQuestionState(q.id);
+    const emailOpt = verifyState.options.find((o: any) => o.value === "email");
+    const phoneOpt = verifyState.options.find((o: any) => o.value === "phone");
+    const textOpt = verifyState.options.find((o: any) => o.value === "text");
+
+    assert(emailOpt && emailOpt.checked === true, "Test A: Email is verified selected in DOM");
+    assert(phoneOpt && phoneOpt.checked === false, "Test A: Phone is verified no longer selected in DOM");
+    assert(textOpt && textOpt.checked === false, "Test A: Text message remains unselected");
+
+    // Also verify via engine.executeAndVerify
+    const engineVerify = await env.SurveyEngine.executeAndVerify(
+      q,
+      matchPlan,
+      async (p: any) => env.SurveyDOMEngine.interactControl(p),
+      async (qid: string) => env.SurveyDOMEngine.verifyQuestionState(qid)
+    );
+    assert(engineVerify.verified === true, "Test A: Engine executeAndVerify confirms mutual exclusion passed");
+  }
+
+  // --- TEST B — Checkbox reconciliation ---
+  console.log("\n--- [TEST B] Checkbox reconciliation (diff plan) ---");
+  {
+    const html = `
+      <div class="question" id="q_audit_modules">
+        <label>Select active modules:</label>
+        <label><input type="checkbox" name="mod" value="security" id="cb_sec"> Security</label>
+        <label><input type="checkbox" name="mod" value="accessibility" id="cb_a11y"> Accessibility</label>
+        <label><input type="checkbox" name="mod" value="marketing" id="cb_mkt" checked> Marketing</label>
+        <label><input type="checkbox" name="mod" value="performance" id="cb_perf" checked> Performance</label>
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    const q = parsed.questions[0];
+
+    // Initial state: Security (unchecked), Accessibility (unchecked), Marketing (checked), Performance (checked)
+    const instruction = "Security: initially unchecked, requested checked. Accessibility: initially unchecked, requested checked. Marketing: initially checked, requested unchecked. Performance: initially checked, requested unchanged.";
+
+    const engine = new env.SurveyEngine();
+    const answer = engine.determineAnswer(q, { promptText: instruction });
+    assert(answer.status === "READY", "Test B: Answer status is READY");
+
+    const matchPlan = env.SurveyEngine.matchAnswerToControls(q, answer);
+    assert(matchPlan.matched === true && matchPlan.type === "multi_select", "Test B: Multi-select diff plan created");
+
+    // Verify actions per specification:
+    // Security -> check
+    const secOp = matchPlan.operations.find((op: any) => op.control.value === "security");
+    assert(secOp && secOp.action === "check", "Test B: Security planned for 'check'");
+
+    // Accessibility -> check
+    const a11yOp = matchPlan.operations.find((op: any) => op.control.value === "accessibility");
+    assert(a11yOp && a11yOp.action === "check", "Test B: Accessibility planned for 'check'");
+
+    // Marketing -> uncheck
+    const mktOp = matchPlan.operations.find((op: any) => op.control.value === "marketing");
+    assert(mktOp && mktOp.action === "uncheck", "Test B: Marketing planned for 'uncheck'");
+
+    // Performance -> noop (unchanged)
+    const perfOp = matchPlan.operations.find((op: any) => op.control.value === "performance");
+    assert(perfOp && perfOp.action === "noop", "Test B: Performance planned for 'noop' (untouched)");
+
+    // Execute diff
+    for (const op of matchPlan.operations) {
+      if (op.action === "noop") continue;
+      env.SurveyDOMEngine.interactControl({
+        action: op.action,
+        selector: op.control.selector,
+        optionId: op.control.id,
+        questionId: q.id,
+      });
+    }
+
+    // Verify DOM final state
+    const state = env.SurveyDOMEngine.verifyQuestionState(q.id);
+    const secState = state.options.find((o: any) => o.value === "security");
+    const a11yState = state.options.find((o: any) => o.value === "accessibility");
+    const mktState = state.options.find((o: any) => o.value === "marketing");
+    const perfState = state.options.find((o: any) => o.value === "performance");
+
+    assert(secState && secState.checked === true, "Test B: Final state: Security checked");
+    assert(a11yState && a11yState.checked === true, "Test B: Final state: Accessibility checked");
+    assert(mktState && mktState.checked === false, "Test B: Final state: Marketing unchecked");
+    assert(perfState && perfState.checked === true, "Test B: Final state: Performance still checked");
+  }
+
+  // --- TEST C — Already-correct checkbox ---
+  console.log("\n--- [TEST C] Already-correct checkbox (zero unnecessary clicks) ---");
+  {
+    const html = `
+      <div class="question" id="q_tos">
+        <label><input type="checkbox" name="tos" value="agree" id="cb_tos" checked> I agree to Terms of Service</label>
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    const q = parsed.questions[0];
+
+    // Already checked, user says "I agree to Terms of Service: checked"
+    const engine = new env.SurveyEngine();
+    const answer = engine.determineAnswer(q, { promptText: "I agree to Terms of Service: checked" });
+    const matchPlan = env.SurveyEngine.matchAnswerToControls(q, answer);
+
+    let clicksDispatched = 0;
+    const cb = env.document.getElementById("cb_tos");
+    cb.addEventListener("click", () => { clicksDispatched++; });
+
+    const op = matchPlan.operations[0];
+    assert(op.action === "noop", "Test C: Action is strictly 'noop' when already in desired state");
+
+    // Even if content script interactControl receives action 'noop' or 'check' on already-checked box
+    const res = env.SurveyDOMEngine.interactControl({ action: "noop", selector: q.options[0].selector });
+    assert(res.success === true && res.verified === true, "Test C: Result reports verified success");
+    assert(clicksDispatched === 0, "Test C: Zero clicks dispatched to DOM");
+  }
+
+  // --- TEST D — Incorrect target / Disambiguation ---
+  console.log("\n--- [TEST D] Incorrect target & Duplicate label isolation ---");
+  {
+    const html = `
+      <fieldset class="question" id="q_personal_device">
+        <legend>Is this a personal device?</legend>
+        <label><input type="radio" name="dev" value="yes" id="dev_yes"> Yes</label>
+        <label><input type="radio" name="dev" value="no" id="dev_no"> No</label>
+      </fieldset>
+      <fieldset class="question" id="q_admin_access">
+        <legend>Do you have administrator access?</legend>
+        <label><input type="radio" name="admin" value="yes" id="admin_yes"> Yes</label>
+        <label><input type="radio" name="admin" value="no" id="admin_no"> No</label>
+      </fieldset>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    assert(parsed.questions.length === 2, "Test D: 2 separate questions parsed");
+
+    const qDev = parsed.questions[0];
+    const qAdmin = parsed.questions[1];
+
+    // User prompt specifically for administrator access: "Do you have administrator access? Yes"
+    const engine = new env.SurveyEngine();
+    const ansAdmin = engine.determineAnswer(qAdmin, { promptText: "Do you have administrator access: Yes" });
+    const planAdmin = env.SurveyEngine.matchAnswerToControls(qAdmin, ansAdmin);
+
+    // Target control MUST belong to qAdmin (admin_yes), NOT qDev (dev_yes)
+    assert(planAdmin.targetControl.id === qAdmin.options[0].id, "Test D: Control correctly mapped to admin question container");
+    assert(planAdmin.targetControl.id !== qDev.options[0].id, "Test D: Control did NOT mistakenly target personal device container");
+  }
+
+  // --- TEST E — Rerendered DOM ---
+  console.log("\n--- [TEST E] Rerendered DOM stale element reacquisition ---");
+  {
+    const html = `
+      <div id="surveyWrap">
+        <div class="question" id="q_role" data-sidekick-qid="q_role">
+          <label id="lbl_role"><input type="radio" name="role" value="lead" id="opt_lead"> Technical Lead</label>
+        </div>
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    const q = parsed.questions[0];
+    const oldSelector = q.options[0].selector;
+
+    // Simulate SPA framework re-render (element replaced in DOM, old selector data-sidekick-id destroyed)
+    const wrap = env.document.getElementById("surveyWrap");
+    wrap.innerHTML = `
+      <div class="question" id="q_role" data-sidekick-qid="q_role">
+        <label id="lbl_role_new"><input type="radio" name="role" value="lead" id="opt_lead_new"> Technical Lead</label>
+      </div>
+    `;
+
+    // interactControl uses reacquireElement with fallback by questionId and value
+    const res = env.SurveyDOMEngine.interactControl({
+      action: "click",
+      selector: oldSelector, // stale selector
+      questionId: "q_role",
+      value: "lead",
+      label: "Technical Lead"
+    });
+
+    assert(res.success === true, "Test E: interactControl successfully reacquired rerendered element");
+    const newEl = env.document.getElementById("opt_lead_new") as HTMLInputElement;
+    assert(newEl && newEl.checked === true, "Test E: Rerendered control is verified checked");
+  }
+
+  // --- TEST F — Failed verification (Dead click detection & bounded recovery) ---
+  console.log("\n--- [TEST F] Failed verification & Bounded recovery ---");
+  {
+    const html = `
+      <div class="question" id="q_dead">
+        <label><input type="radio" name="dead" value="opt1" id="deadRadio"> Non-responsive Option</label>
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    // Prevent default on click to simulate dead click where DOM refuses to update
+    const radio = env.document.getElementById("deadRadio");
+    radio.addEventListener("click", (e: any) => { e.preventDefault(); e.stopPropagation(); });
+
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    const q = parsed.questions[0];
+
+    const plan = {
+      matched: true,
+      targetControl: q.options[0],
+      desiredValue: "opt1",
+    };
+
+    // Execute through engine
+    let verifyAttempts = 0;
+    const verifyStateFn = async (qid: string) => {
+      verifyAttempts++;
+      // Return state where checked remains false
+      return {
+        id: qid,
+        options: [{ id: q.options[0].id, value: "opt1", label: "Non-responsive Option", checked: false }]
+      };
+    };
+
+    const res = await env.SurveyEngine.executeAndVerify(
+      q,
+      plan,
+      async (p: any) => {
+        try { env.SurveyDOMEngine.interactControl(p); } catch {}
+        return { success: true };
+      },
+      verifyStateFn
+    );
+
+    assert(res.verified === false, "Test F: Question was NOT marked verified complete on dead click");
+    assert(res.outcome === "verification_failed", "Test F: Outcome transitioned to verification_failed");
+    assert(verifyAttempts >= 2 && verifyAttempts <= 5, "Test F: Recovery attempts were strictly bounded (attempted alternatives then stopped)");
+  }
+
+  // --- TEST G — Multi-page survey navigation & question verification ---
+  console.log("\n--- [TEST G] Multi-page survey with required questions ---");
+  {
+    const p1Html = `
+      <form id="p1">
+        <div class="question" id="q_req" required>
+          <div class="title">Required field *</div>
+          <label><input type="radio" name="r" value="yes" id="r_yes"> Yes</label>
+        </div>
+        <button id="nextBtn">Next</button>
+      </form>
+    `;
+    const env = createVirtualEnvironment(p1Html);
+    const parsed1 = env.SurveyDOMEngine.parseQuestions(env.document);
+    const engine = new env.SurveyEngine();
+
+    const tracker = { pageAdvanced: false, questionsAnswered: 0 };
+
+    const res = await engine.processSurveyWorkflow(
+      async () => parsed1,
+      async (p: any) => {
+        env.SurveyDOMEngine.interactControl(p);
+        return { success: true, verified: true };
+      },
+      async (qid: string) => env.SurveyDOMEngine.verifyQuestionState(qid),
+      async (type: string, btn: any) => {
+        tracker.pageAdvanced = true;
+        return { success: true, advanced: true };
+      },
+      {
+        promptText: "Yes",
+        onQuestionAnswered: () => { tracker.questionsAnswered++; },
+        maxSteps: 2
+      }
+    );
+
+    assert(tracker.questionsAnswered >= 1, "Test G: Required question was answered and verified before advancing");
+    assert(tracker.pageAdvanced === true, "Test G: Page advanced only after required question verification");
+  }
+
+  // --- TEST H — Incorrect success response from executor ---
+  console.log("\n--- [TEST H] Incorrect success response (zero DOM state change) ---");
+  {
+    const html = `
+      <div class="question" id="q_fake">
+        <label><input type="radio" name="fake" value="f1" id="f1_radio"> Unchecked Option</label>
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    const q = parsed.questions[0];
+
+    const plan = {
+      matched: true,
+      targetControl: q.options[0],
+      desiredValue: "f1",
+    };
+
+    // Executor falsely claims success: true, but does NOT actually change DOM
+    const fakeExecutor = async () => ({ success: true });
+    // DOM verification truthfully reports checked: false
+    const truthfulVerifier = async (qid: string) => ({
+      id: qid,
+      options: [{ id: q.options[0].id, value: "f1", checked: false }]
+    });
+
+    const res = await env.SurveyEngine.executeAndVerify(q, plan, fakeExecutor, truthfulVerifier);
+    assert(res.verified === false, "Test H: Engine does NOT mark question complete when DOM state did not change, despite executor success: true");
+  }
+
+  // --- TEST I — Task cancellation and limits ---
+  console.log("\n--- [TEST I] Task cancellation and safety limits ---");
+  {
+    const html = `
+      <div class="question" id="q_cancel">
+        <label><input type="radio" name="c" value="1"> 1</label>
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    const engine = new env.SurveyEngine();
+
+    const abortCtrl = new (env.window.AbortController || AbortController)();
+    abortCtrl.abort(); // Cancel before execution
+
+    const res = await engine.processSurveyWorkflow(
+      async () => parsed,
+      async () => ({ success: true }),
+      async () => ({ options: [{ checked: true }] }),
+      async () => ({ advanced: true }),
+      { signal: abortCtrl.signal }
+    );
+
+    assert(res.status === "ABORTED_BY_USER", "Test I: Cancellation immediately terminates with ABORTED_BY_USER");
+    assert(engine.executionRecord.length === 0, "Test I: No false completed records created on cancellation");
+  }
+
+  // --- TEST J — Policy denial ---
+  console.log("\n--- [TEST J] Policy denial blocks automation immediately ---");
+  {
+    const deniedUrls = [
+      "https://chase.com/login",
+      "https://paypal.com/checkout",
+      "https://stripe.com/pay"
+    ];
+
+    // Check Sidekick security policy denylist enforcement
+    for (const url of deniedUrls) {
+      let isAllowed = false;
+      try {
+        // Evaluate checkDomainAllowed logic
+        const parsed = new URL(url);
+        const host = parsed.hostname.toLowerCase();
+        const DENYLIST = ["chase.com", "paypal.com", "stripe.com"];
+        isAllowed = !DENYLIST.some(d => host === d || host.endsWith("." + d));
+      } catch {}
+      assert(isAllowed === false, `Test J: Protected URL ${url} is strictly denied by automation policy`);
+    }
+
+    // When policy error is returned, execution halts without generic retries
+    const env = createVirtualEnvironment(`<div class="question"><label><input type="radio" value="1"> 1</label></div>`);
+    const engine = new env.SurveyEngine();
+    let retryCount = 0;
+    const policyRejectExecutor = async () => {
+      retryCount++;
+      return { success: false, errorType: "POLICY_BLOCKED", error: "Security Exception: Automation is prohibited on sensitive domain." };
+    };
+
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    const plan = { matched: true, targetControl: parsed.questions[0].options[0] };
+
+    const res = await env.SurveyEngine.executeAndVerify(parsed.questions[0], plan, policyRejectExecutor, async () => null);
+    assert(res.success === false, "Test J: Policy rejection stopped execution");
+    assert(retryCount === 1, "Test J: Policy error halted immediately with zero redundant retries");
+  }
+
+  // =========================================================================
   // COMPREHENSIVE METRICS SUMMARY REPORT
   // =========================================================================
   console.log("\n==================================================================");

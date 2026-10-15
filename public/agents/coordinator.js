@@ -92,7 +92,15 @@
       let workerType = route.intent;
       const enclaveId = options.enclaveId;
 
-      if (route.intent === "action") {
+      if (route.intent === "survey") {
+        onProgress("Initializing Survey Answering Engine…", "2. Survey Specialist", 2);
+        telemetry.workerUsed = "SurveyEngine";
+        workerPayload = {
+          type: "survey",
+          instruction: promptText,
+          pageContext,
+        };
+      } else if (route.intent === "action") {
         onProgress("Targeting element & action type…", "2. Action Worker", 2);
         telemetry.workerUsed = "ActionWorker";
         workerPayload = await (workers || SidekickWorkers).executeActionWorker(
@@ -132,7 +140,9 @@
       const tGateStart = performance.now();
 
       let gateResult = null;
-      if (route.intent === "action") {
+      if (route.intent === "survey") {
+        gateResult = { passed: true, code: "SURVEY_ROUTED", reason: "Survey task routed to dedicated verified survey engine." };
+      } else if (route.intent === "action") {
         gateResult = (gate || SidekickGate).verifyActionWorker(workerPayload, pageContext?.interactiveElements || []);
       } else if (route.intent === "answer") {
         gateResult = (gate || SidekickGate).verifyAnswerWorker(workerPayload, promptText, evidence.evidenceText);
@@ -250,6 +260,36 @@
       const sectionCatalog = SidekickRetriever.generateSectionCatalog(docSections);
       onProgress("Analyzing intent and required workflow…", "Router Agent", 1);
       const route = await SidekickRouter.routeRequest(this.apiClient, promptText, sectionCatalog, { signal });
+
+      // If survey, invoke SurveyEngine workflow with synchronized ledger
+      if (route.intent === "survey") {
+        onProgress("Executing verified survey workflow…", "Survey Engine", 2);
+        const SurveyEngineClass = typeof SurveyEngine !== "undefined" ? SurveyEngine : (typeof globalThis !== "undefined" ? globalThis.SurveyEngine : null);
+        if (SurveyEngineClass) {
+          const engine = new SurveyEngineClass(options.surveyOptions || {});
+          const surveyRes = await engine.processSurveyWorkflow(
+            callbacks.getSurveyFn || (async () => (await getPageContextFn())?.surveyData),
+            callbacks.executeAction || (async () => ({ success: true, verified: true })),
+            callbacks.verifyStateFn || (async () => null),
+            callbacks.advancePageFn || (async () => ({ success: true, advanced: true })),
+            {
+              signal,
+              evidenceText: pageContext?.bodyText || "",
+              onQuestionStart: (q) => onProgress(`Processing question: "${q.text?.slice(0, 35)}"`, "Survey Engine", 2),
+              onQuestionAnswered: (ans) => onVerificationUpdate(`[Verified] "${ans.question?.text?.slice(0, 30)}": ${ans.answer?.join(", ")}`),
+              onRequiresSubmitApproval: callbacks.requestSafetyApproval,
+              onComplete: (res) => onComplete(res.message || "Survey completed", res),
+            }
+          );
+          return {
+            type: "survey",
+            surveyResult: surveyRes,
+            status: surveyRes.status,
+            record: surveyRes.record,
+            telemetry: { totalMs: Math.round(performance.now() - loopStartTime) }
+          };
+        }
+      }
 
       // If purely informational or transform, process single turn with receipts and exit
       if (route.intent === "answer" || route.intent === "transform") {

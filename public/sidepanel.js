@@ -10,8 +10,8 @@ const STORAGE_KEY_SESSIONS = "gemini_sidekick_sessions";
 const STORAGE_KEY_PROXY_URL = "gemini_sidekick_proxy_url";
 
 // Configuration
-const DEFAULT_MODEL = "gemini-3.1-flash-lite";
-const FALLBACK_MODEL = "gemini-3.8-flash";
+const DEFAULT_MODEL = "gemini-3.5-flash-lite";
+const FALLBACK_MODEL = "gemini-3.1-flash-lite";
 const LATEST_FLASH_MODEL = "gemini-flash-latest";
 const API_KEY_VERIFY_TIMEOUT_MS = 10000; // 10-second bounded verification deadline per request
 
@@ -599,7 +599,7 @@ async function init() {
   state.proxyUrl = (saved[STORAGE_KEY_PROXY_URL] || "").trim().replace(/\/+$/, "");
   state.customAssistantName = saved.si_custom_assistant_name || "";
   let loadedModel = saved[STORAGE_KEY_MODEL] || DEFAULT_MODEL;
-  if (loadedModel === "gemini-3.5-flash-lite" || (loadedModel !== DEFAULT_MODEL && loadedModel !== FALLBACK_MODEL && loadedModel !== LATEST_FLASH_MODEL)) {
+  if (loadedModel !== DEFAULT_MODEL && loadedModel !== FALLBACK_MODEL && loadedModel !== LATEST_FLASH_MODEL) {
     loadedModel = DEFAULT_MODEL;
     await storage.set({ [STORAGE_KEY_MODEL]: DEFAULT_MODEL });
   }
@@ -673,7 +673,7 @@ async function verifyApiKey(rawKey, preferredModel = state?.model, externalSigna
   }
 
   const rawModel = preferredModel || DEFAULT_MODEL;
-  const baseModel = rawModel === "gemini-3.5-flash-lite" ? DEFAULT_MODEL : rawModel;
+  const baseModel = rawModel;
 
   // We try preferred model first; if and only if it fails with model unavailable (404) or 503,
   // we attempt a single bounded fallback to FALLBACK_MODEL (if different from baseModel).
@@ -3028,7 +3028,7 @@ function openAuditModal() {
   card1.appendChild(topRow);
 
   const auditItems = [
-    ["1. Default Model:", "gemini-3.1-flash-lite ✓"],
+    ["1. Default Model:", "gemini-3.5-flash-lite ✓"],
     ["2. Manifest CSP:", "Google API + Proxy Allowed ✓"],
     ["3. Dual Proxy Fallback:", "Auto /api/gemini Fallback ✓"],
     ["4. CDP Navigation Guard:", "Guarded Mouse Release ✓"],
@@ -3622,196 +3622,274 @@ async function handleSlashCommand(fullCommand) {
     await submitPrompt("Find the primary purchase or add-to-cart action on this page and proceed.");
     return;
   }
-  if (commandId === "survey") {
-    if (!checkDomainAllowed(state.activeTabUrl)) {
-      renderAssistantPlainMessage(`Security Lock: Survey answering is strictly prohibited on sensitive domain.`);
-      return;
-    }
+async function handleSurveyWorkflowExecution(argOrPrompt) {
+  const isResume = typeof argOrPrompt === "string" && argOrPrompt.trim().toLowerCase() === "resume";
+  const userPromptText = isResume ? "" : (argOrPrompt || "");
 
-    const targetTabId = state.activeTabId;
-    if (!targetTabId) {
-      renderAssistantPlainMessage("Target tab inaccessible.");
-      return;
-    }
+  if (!checkDomainAllowed(state.activeTabUrl)) {
+    renderAssistantPlainMessage(`Security Lock: Survey answering is strictly prohibited on sensitive domain.`);
+    return;
+  }
 
-    // Storage and helper functions setup
-    const getSurveyFn = async () => {
-      return new Promise((res) => {
-        chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY" }, { frameId: 0 }, (r) => {
-          const _ = chrome.runtime.lastError;
-          res(r?.surveyData || null);
-        });
-        setTimeout(() => res(null), 400);
+  const targetTabId = state.activeTabId;
+  if (!targetTabId) {
+    renderAssistantPlainMessage("Target tab inaccessible.");
+    return;
+  }
+
+  // Storage and helper functions setup - Strict zero fake-successes
+  const getSurveyFn = async () => {
+    return new Promise((res) => {
+      let finished = false;
+      chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY" }, { frameId: 0 }, (r) => {
+        if (finished) return;
+        finished = true;
+        const _ = chrome.runtime.lastError;
+        res(r?.surveyData || null);
       });
-    };
+      setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        res(null);
+      }, 1200);
+    });
+  };
 
-    const executeActionFn = async (params) => {
-      return new Promise((res) => {
-        chrome.tabs.sendMessage(targetTabId, { action: "INTERACT_SURVEY_CONTROL", params }, { frameId: 0 }, (r) => {
-          const _ = chrome.runtime.lastError;
-          res(r?.result || { success: true });
-        });
-        setTimeout(() => res({ success: true }), 400);
-      });
-    };
-
-    const verifyStateFn = async (questionId) => {
-      return new Promise((res) => {
-        chrome.tabs.sendMessage(targetTabId, { action: "VERIFY_SURVEY_SELECTION", questionId }, { frameId: 0 }, (r) => {
-          const _ = chrome.runtime.lastError;
-          res(r?.state || null);
-        });
-        setTimeout(() => res(null), 350);
-      });
-    };
-
-    const advancePageFn = async (actionType, btn) => {
-      return new Promise((res) => {
-        chrome.tabs.sendMessage(targetTabId, { action: "ADVANCE_SURVEY_PAGE", actionType, selector: btn?.selector }, { frameId: 0 }, (r) => {
-          const _ = chrome.runtime.lastError;
-          res(r?.result || { advanced: true });
-        });
-        setTimeout(() => res({ advanced: true }), 600);
-      });
-    };
-
-    const makeCallbacks = (engine) => ({
-      signal: state.abortController?.signal,
-      evidenceText: state.pageContext?.bodyText || "",
-      onQuestionStart: (q) => {
-        renderAgentStepBadge(`Processing question: "${q.text.slice(0, 35)}"`, true);
-      },
-      onQuestionAnswered: ({ question, answer }) => {
-        renderAgentStepBadge(`[Verified] "${question.text.slice(0, 30)}": ${answer.join(", ")}`, true);
-        renderAssistantPlainMessage(`✓ **${question.text}:** Selected \`${answer.join(", ")}\` (state verified)`);
-      },
-      onQuestionPaused: (pauseInfo) => {
-        if (pauseInfo.category === "personal_info_required") {
-          renderAgentStepBadge("Paused: Personal info required", false);
-          renderAssistantPlainMessage(`🔒 **Personal Information Required:**\n${pauseInfo.reason}\n\n*Si strictly refuses to invent personal history or identity.* Please answer this question directly or authorize your profile.`);
-        } else if (pauseInfo.category === "ambiguous") {
-          renderAgentStepBadge("Paused: Ambiguous question", false);
-          renderAssistantPlainMessage(`❓ **Ambiguous Question Paused:**\n${pauseInfo.reason}\n\nPlease clarify your choice in chat.`);
-        } else if (pauseInfo.category === "file_upload_required") {
-          renderAgentStepBadge("Paused: File upload required", false);
-          renderAssistantPlainMessage(`📎 **File Upload Required:**\n${pauseInfo.reason}\n\nPlease select and upload your file in the browser tab.`);
+  const executeActionFn = async (params) => {
+    return new Promise((res) => {
+      let finished = false;
+      chrome.tabs.sendMessage(targetTabId, { action: "INTERACT_SURVEY_CONTROL", params }, { frameId: 0 }, (r) => {
+        if (finished) return;
+        finished = true;
+        const err = chrome.runtime.lastError;
+        if (err || !r || r.success === false) {
+          res({
+            success: false,
+            verified: false,
+            action: params.action || "interact",
+            target: params.optionId || params.selector || "",
+            errorType: err ? "COMMUNICATION_ERROR" : (r?.errorType || "EXECUTION_ERROR"),
+            error: err?.message || r?.error || "Interaction execution failed",
+          });
         } else {
-          renderAgentStepBadge(`Paused: ${pauseInfo.status}`, false);
-          renderAssistantPlainMessage(`⏸️ **Survey Paused:** ${pauseInfo.reason || pauseInfo.status}`);
+          res(r.result || { success: true, verified: false, action: params.action, target: params.optionId });
         }
-      },
-      onHumanVerificationRequired: (chal) => {
-        renderAgentStepBadge("Paused: Human Verification Required (CAPTCHA)", false);
-        renderAssistantPlainMessage(`🛡️ **Human Verification Challenge Detected:**\n\nA human-verification interstitial or CAPTCHA (\`${chal.type || "challenge"}\`) is currently active on the page. Automated interactions have been paused to protect your session.\n\n👉 **Please complete the verification manually in the browser tab.** Once solved, type \`/survey resume\` to continue from where you left off.`);
-      },
-      onPageAdvanced: ({ progress }) => {
-        renderAgentStepBadge(`Advanced to next page ${progress ? `(${progress})` : ""}`, true);
-        renderAssistantPlainMessage(`➡️ Advanced to next survey page.`);
-      },
-      onRequiresSubmitApproval: async ({ submitButton }) => {
-        renderAgentStepBadge("Awaiting Submit Authorization", true);
-        const approved = await requestSafetyApproval("click_element", {
-          element_description: "Submit Completed Survey Form",
-          selector: submitButton.selector,
-        }, 99);
+      });
+      setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        res({
+          success: false,
+          verified: false,
+          action: params.action || "interact",
+          target: params.optionId || params.selector || "",
+          errorType: "TIMEOUT",
+          error: "Interaction timed out awaiting content script response",
+        });
+      }, 1500);
+    });
+  };
 
-        if (approved) {
-          await executeJITAction("click_element", { selector: submitButton.selector });
-          renderAgentStepBadge("Survey Submitted [Authorized]", true);
-          renderAssistantPlainMessage("🎉 **Survey Submitted Successfully!** All answers verified.");
+  const verifyStateFn = async (questionId) => {
+    return new Promise((res) => {
+      let finished = false;
+      chrome.tabs.sendMessage(targetTabId, { action: "VERIFY_SURVEY_SELECTION", questionId }, { frameId: 0 }, (r) => {
+        if (finished) return;
+        finished = true;
+        const err = chrome.runtime.lastError;
+        if (err || !r || r.success === false) {
+          res(null);
         } else {
-          renderAgentStepBadge("Submission Paused by User", false);
-          renderAssistantPlainMessage("⏸️ **Survey Submission Paused:** Form is completely filled and verified, but submit was held for user review.");
+          res(r.state || null);
         }
-      },
-      onComplete: ({ record, completionEvidence }) => {
+      });
+      setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        res(null);
+      }, 1500);
+    });
+  };
+
+  const advancePageFn = async (actionType, btn) => {
+    return new Promise((res) => {
+      let finished = false;
+      chrome.tabs.sendMessage(targetTabId, { action: "ADVANCE_SURVEY_PAGE", actionType, selector: btn?.selector }, { frameId: 0 }, (r) => {
+        if (finished) return;
+        finished = true;
+        const err = chrome.runtime.lastError;
+        if (err || !r || r.success === false) {
+          res({
+            success: false,
+            advanced: false,
+            errorType: err ? "COMMUNICATION_ERROR" : "NAVIGATION_ERROR",
+            error: err?.message || r?.error || "Page advance failed",
+          });
+        } else {
+          res(r.result || { success: true, advanced: true });
+        }
+      });
+      setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        res({
+          success: false,
+          advanced: false,
+          errorType: "TIMEOUT",
+          error: "Page advance timed out",
+        });
+      }, 2000);
+    });
+  };
+
+  const makeCallbacks = (engine) => ({
+    signal: state.abortController?.signal,
+    evidenceText: state.pageContext?.bodyText || "",
+    promptText: userPromptText,
+    onQuestionStart: (q) => {
+      renderAgentStepBadge(`Processing question: "${q.text.slice(0, 35)}"`, true);
+    },
+    onQuestionAnswered: ({ question, answer }) => {
+      renderAgentStepBadge(`[Verified] "${question.text.slice(0, 30)}": ${answer.join(", ")}`, true);
+      renderAssistantPlainMessage(`✓ **${question.text}:** Selected \`${answer.join(", ")}\` (state verified)`);
+    },
+    onQuestionPaused: (pauseInfo) => {
+      if (pauseInfo.category === "personal_info_required") {
+        renderAgentStepBadge("Paused: Personal info required", false);
+        renderAssistantPlainMessage(`🔒 **Personal Information Required:**\n${pauseInfo.reason}\n\n*Si strictly refuses to invent personal history or identity.* Please answer this question directly or authorize your profile.`);
+      } else if (pauseInfo.category === "ambiguous") {
+        renderAgentStepBadge("Paused: Ambiguous question", false);
+        renderAssistantPlainMessage(`❓ **Ambiguous Question Paused:**\n${pauseInfo.reason}\n\nPlease clarify your choice in chat.`);
+      } else if (pauseInfo.category === "file_upload_required") {
+        renderAgentStepBadge("Paused: File upload required", false);
+        renderAssistantPlainMessage(`📎 **File Upload Required:**\n${pauseInfo.reason}\n\nPlease select and upload your file in the browser tab.`);
+      } else {
+        renderAgentStepBadge(`Paused: ${pauseInfo.status}`, false);
+        renderAssistantPlainMessage(`⏸️ **Survey Paused:** ${pauseInfo.reason || pauseInfo.status}`);
+      }
+    },
+    onHumanVerificationRequired: (chal) => {
+      renderAgentStepBadge("Paused: Human Verification Required (CAPTCHA)", false);
+      renderAssistantPlainMessage(`🛡️ **Human Verification Challenge Detected:**\n\nA human-verification interstitial or CAPTCHA (\`${chal.type || "challenge"}\`) is currently active on the page. Automated interactions have been paused to protect your session.\n\n👉 **Please complete the verification manually in the browser tab.** Once solved, type \`/survey resume\` to continue from where you left off.`);
+    },
+    onPageAdvanced: ({ progress }) => {
+      renderAgentStepBadge(`Advanced to next page ${progress ? `(${progress})` : ""}`, true);
+      renderAssistantPlainMessage(`➡️ Advanced to next survey page.`);
+    },
+    onRequiresSubmitApproval: async ({ submitButton }) => {
+      renderAgentStepBadge("Awaiting Submit Authorization", true);
+      const approved = await requestSafetyApproval("click_element", {
+        element_description: "Submit Completed Survey Form",
+        selector: submitButton.selector,
+      }, 99);
+
+      if (approved) {
+        await executeJITAction("click_element", { selector: submitButton.selector });
+        renderAgentStepBadge("Survey Submitted [Authorized]", true);
+        renderAssistantPlainMessage("🎉 **Survey Submitted Successfully!** All answers verified.");
+      } else {
+        renderAgentStepBadge("Submission Paused by User", false);
+        renderAssistantPlainMessage("⏸️ **Survey Submission Paused:** Form is completely filled and verified, but submit was held for user review.");
+      }
+    },
+    onComplete: ({ record, completionEvidence, status }) => {
+      if (status === "ABORTED_BY_USER") {
+        renderAgentStepBadge("Survey Aborted by User", false);
+        renderAssistantPlainMessage("🛑 Survey execution stopped by user.");
+      } else {
         renderAgentStepBadge(`Survey Completed (${record?.length || 0} questions answered)`, true);
         renderAssistantPlainMessage(`✅ **Survey Session Complete:** Answered and verified ${record?.length || 0} question(s).${completionEvidence ? ` Confirmation: "${completionEvidence.text?.slice(0, 100)}"` : ""}`);
       }
-    });
-
-    // Check if user is resuming an existing paused survey workflow
-    if (arg === "resume" && state.activeSurveyEngine) {
-      setBusyState(true);
-      state.abortController = new AbortController();
-      renderAssistantPlainMessage("🔄 Checking human verification status and resuming survey...", "system");
-      try {
-        const result = await state.activeSurveyEngine.resumeWorkflowAfterVerification(
-          getSurveyFn,
-          executeActionFn,
-          verifyStateFn,
-          advancePageFn,
-          makeCallbacks(state.activeSurveyEngine)
-        );
-        if (result.status === "VERIFICATION_STILL_ACTIVE") {
-          renderAgentStepBadge("Verification Still Active", false);
-          renderAssistantPlainMessage(`⚠️ ${result.message}`);
-        } else if (result.status === "ABORTED_BY_USER") {
-          renderAssistantPlainMessage("🛑 Survey execution stopped by user.");
-        }
-      } catch (err) {
-        renderAssistantPlainMessage(`⚠️ Error resuming survey: ${err.message}`);
-      } finally {
-        setBusyState(false);
-      }
-      return;
     }
+  });
 
+  // Check if user is resuming an existing paused survey workflow
+  if (isResume && state.activeSurveyEngine) {
     setBusyState(true);
     state.abortController = new AbortController();
-    renderAssistantPlainMessage("📋 Scanning page for survey questions and controls...", "system");
-
+    renderAssistantPlainMessage("🔄 Checking human verification status and resuming survey...", "system");
     try {
-      await extractContext();
-
-      // Request live survey parsing from content script
-      const parseResponse = await new Promise((res) => {
-        chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY" }, { frameId: 0 }, (r) => {
-          const _ = chrome.runtime.lastError;
-          res(r?.surveyData);
-        });
-        setTimeout(() => res(null), 450);
-      });
-
-      const surveyData = parseResponse || state.pageContext?.surveyData;
-      if (!surveyData || !Array.isArray(surveyData.questions) || surveyData.questions.length === 0) {
-        if (surveyData?.humanVerification?.isChallenge && surveyData?.humanVerification?.active) {
-          renderAgentStepBadge("Human Verification Interstitial Detected", false);
-          renderAssistantPlainMessage(`🛡️ **Human Verification Challenge Detected:**\n\nA CAPTCHA or verification challenge (\`${surveyData.humanVerification.type}\`) is blocking the page. Please complete it manually in the browser tab, then type \`/survey\` to proceed.`);
-          return;
-        }
-        renderAssistantPlainMessage("ℹ️ No active survey questions, forms, or questionnaires detected on this page.");
-        return;
-      }
-
-      renderAssistantPlainMessage(`Found **${surveyData.questions.length} survey question(s)** on active page. Initializing Question-by-Question State Machine...`);
-
-      // Load user profile & preferences from storage
-      const storage = await chrome.storage.local.get(["sidekickUserProfile", "sidekickUserPreferences"]);
-      const userProfile = storage.sidekickUserProfile || {};
-      const userPreferences = storage.sidekickUserPreferences || {};
-
-      const engine = new SurveyEngine({ userProfile, userPreferences });
-      state.activeSurveyEngine = engine;
-
-      const workflowResult = await engine.processSurveyWorkflow(
+      const result = await state.activeSurveyEngine.resumeWorkflowAfterVerification(
         getSurveyFn,
         executeActionFn,
         verifyStateFn,
         advancePageFn,
-        makeCallbacks(engine)
+        makeCallbacks(state.activeSurveyEngine)
       );
-
-      if (workflowResult.status === "ABORTED_BY_USER") {
+      if (result.status === "VERIFICATION_STILL_ACTIVE") {
+        renderAgentStepBadge("Verification Still Active", false);
+        renderAssistantPlainMessage(`⚠️ ${result.message}`);
+      } else if (result.status === "ABORTED_BY_USER") {
         renderAssistantPlainMessage("🛑 Survey execution stopped by user.");
       }
-      return;
     } catch (err) {
-      renderAssistantPlainMessage(`⚠️ Survey processing error: ${err.message}`);
-      return;
+      renderAssistantPlainMessage(`⚠️ Error resuming survey: ${err.message}`);
     } finally {
       setBusyState(false);
     }
+    return;
+  }
+
+  setBusyState(true);
+  state.abortController = new AbortController();
+  renderAssistantPlainMessage("📋 Scanning page for survey questions and controls...", "system");
+
+  try {
+    await extractContext();
+
+    // Request live survey parsing from content script
+    const parseResponse = await new Promise((res) => {
+      chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY" }, { frameId: 0 }, (r) => {
+        const _ = chrome.runtime.lastError;
+        res(r?.surveyData);
+      });
+      setTimeout(() => res(null), 600);
+    });
+
+    const surveyData = parseResponse || state.pageContext?.surveyData;
+    if (!surveyData || !Array.isArray(surveyData.questions) || surveyData.questions.length === 0) {
+      if (surveyData?.humanVerification?.isChallenge && surveyData?.humanVerification?.active) {
+        renderAgentStepBadge("Human Verification Interstitial Detected", false);
+        renderAssistantPlainMessage(`🛡️ **Human Verification Challenge Detected:**\n\nA CAPTCHA or verification challenge (\`${surveyData.humanVerification.type}\`) is blocking the page. Please complete it manually in the browser tab, then type \`/survey\` to proceed.`);
+        return;
+      }
+      renderAssistantPlainMessage("ℹ️ No active survey questions, forms, or questionnaires detected on this page.");
+      return;
+    }
+
+    renderAssistantPlainMessage(`Found **${surveyData.questions.length} survey question(s)** on active page. Initializing Question-by-Question State Machine...`);
+
+    // Load user profile & preferences from storage
+    const storage = await chrome.storage.local.get(["sidekickUserProfile", "sidekickUserPreferences"]);
+    const userProfile = storage.sidekickUserProfile || {};
+    const userPreferences = storage.sidekickUserPreferences || {};
+
+    const engine = new SurveyEngine({ userProfile, userPreferences });
+    state.activeSurveyEngine = engine;
+
+    const workflowResult = await engine.processSurveyWorkflow(
+      getSurveyFn,
+      executeActionFn,
+      verifyStateFn,
+      advancePageFn,
+      makeCallbacks(engine)
+    );
+
+    if (workflowResult.status === "ABORTED_BY_USER") {
+      renderAssistantPlainMessage("🛑 Survey execution stopped by user.");
+    }
+    return;
+  } catch (err) {
+    renderAssistantPlainMessage(`⚠️ Survey processing error: ${err.message}`);
+    return;
+  } finally {
+    setBusyState(false);
+  }
+}
+
+  if (commandId === "survey") {
+    await handleSurveyWorkflowExecution(arg);
+    return;
   }
   if (commandId === "curl") {
     await submitPrompt("Generate curl commands for API requests based on documentation on this page.");
@@ -4033,6 +4111,12 @@ async function submitPrompt(promptText) {
       renderAssistantPlainMessage(`🛡️ **Action Blocked by Deterministic Gate:**\n${reason}`);
       state.conversation.push({ role: "model", text: reason });
       saveSession();
+      return;
+    }
+
+    // 2.5. Dedicated Survey Execution Workflow
+    if (result.type === "survey" || result.route?.intent === "survey") {
+      await handleSurveyWorkflowExecution(promptText);
       return;
     }
 

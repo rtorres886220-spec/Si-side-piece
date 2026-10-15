@@ -1021,15 +1021,28 @@
       if (isMulti) {
         // Complete selection set diff for checkboxes
         // Crucial: already-checked options that should remain checked are marked 'noop' (never toggled!)
+        // Explicitly represent each requested final state: checked, unchecked, or unchanged.
         const operations = qOptions.map((opt) => {
-          const shouldBeChecked = targetIds.has(opt.id);
+          const reqState = answerResult.requestedStates ? answerResult.requestedStates[opt.id] : undefined;
+          let shouldBeChecked = targetIds.has(opt.id);
           const isCurrentlyChecked = Boolean(opt.checked || opt.selected);
 
           let action = "noop";
-          if (shouldBeChecked && !isCurrentlyChecked) {
-            action = "check";
-          } else if (!shouldBeChecked && isCurrentlyChecked) {
-            action = "uncheck";
+          if (reqState === "unchanged") {
+            shouldBeChecked = isCurrentlyChecked;
+            action = "noop";
+          } else if (reqState === "checked") {
+            shouldBeChecked = true;
+            action = isCurrentlyChecked ? "noop" : "check";
+          } else if (reqState === "unchecked") {
+            shouldBeChecked = false;
+            action = isCurrentlyChecked ? "uncheck" : "noop";
+          } else {
+            if (shouldBeChecked && !isCurrentlyChecked) {
+              action = "check";
+            } else if (!shouldBeChecked && isCurrentlyChecked) {
+              action = "uncheck";
+            }
           }
 
           return {
@@ -1399,6 +1412,12 @@
                   success: true,
                   verified: true,
                   recovered: true,
+                  action: actionPayload?.action || "click",
+                  target: target.id || target.label,
+                  expectedState: true,
+                  observedState: true,
+                  errorType: null,
+                  error: null,
                   reason: "Radio checked (verified after keyboard recovery)",
                   outcome: "radio_verified_keyboard",
                 };
@@ -1406,19 +1425,52 @@
             }
           }
 
+          // Mutually exclusive radio invariant: verify target is checked AND conflicting other radios in the question are unchecked
+          if (isChecked && (question.type === "single_choice_radio" || question.type === "radio")) {
+            const conflictingOther = (postState.options || []).find((o) => o !== updatedOpt && (o.id ? o.id !== target.id : (o.value !== undefined ? o.value !== target.value : true)) && (o.checked || o.selected));
+            if (conflictingOther) {
+              return {
+                success: false,
+                verified: false,
+                action: actionPayload?.action || "click",
+                target: target.id || target.label,
+                expectedState: { checked: true, otherOptionsUnchecked: true },
+                observedState: { checked: true, conflictingOther: conflictingOther.id || conflictingOther.label },
+                errorType: "MUTUAL_EXCLUSION_VIOLATION",
+                error: `Radio mutual exclusion violation: "${target.label}" was checked, but conflicting option "${conflictingOther.label}" is also checked.`,
+                reason: `Radio mutual exclusion violation: "${target.label}" was checked, but conflicting option "${conflictingOther.label}" is also checked.`,
+                outcome: "verification_failed",
+              };
+            }
+          }
+
           return {
             success: isChecked,
             verified: isChecked,
+            action: actionPayload?.action || "click",
+            target: target.id || target.label,
+            expectedState: true,
+            observedState: isChecked,
+            errorType: isChecked ? null : "STATE_MISMATCH",
+            error: isChecked ? null : `Radio option was not checked after click`,
             reason: isChecked ? "Radio checked" : `Radio option was not checked after click`,
             outcome: isChecked ? "radio_verified" : "verification_failed",
           };
         }
       }
 
+      // If post-action state could not be observed, strictly fail verification rather than assuming success
       return {
-        success: true,
-        verified: true,
-        outcome: "assumed_verified",
+        success: false,
+        verified: false,
+        action: actionPayload?.action || "unknown",
+        target: target?.id || target?.label || question?.id || "",
+        expectedState: true,
+        observedState: null,
+        errorType: "UNVERIFIED_STATE",
+        error: `Could not verify state for question "${question.id}": observed post-state is unavailable`,
+        reason: `Could not verify state for question "${question.id}": observed post-state is unavailable`,
+        outcome: "verification_failed",
       };
     }
 
@@ -1668,7 +1720,7 @@
         }
 
         // 2. RESOLVE ANSWER (Factual / Personal / Subjective / Ambiguous)
-        const answerResult = this.determineAnswer(activeQuestion, { evidenceText });
+        const answerResult = this.determineAnswer(activeQuestion, { evidenceText, promptText: callbacks.promptText || callbacks.userInstruction || "" });
 
         if (answerResult.status === "PAUSE_FOR_USER_INPUT") {
           onQuestionPaused(answerResult);
