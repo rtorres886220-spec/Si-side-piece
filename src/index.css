@@ -353,3 +353,46 @@ h1, h2, h3, h4, h5, h6 {
   margin-left: 1px;
   transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* Heartbeat Pulse Oximeter Wave Animation (Synchronized with 3D Globe #38bdf8) */
+@keyframes pulseOximeterWave {
+  0%, 100% {
+    transform: scale(0.92);
+    opacity: 0.82;
+    filter: drop-shadow(0 0 2px rgba(56, 189, 248, 0.45));
+  }
+  25% {
+    transform: scale(1.1);
+    opacity: 1;
+    filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.95));
+  }
+  45% {
+    transform: scale(0.96);
+    opacity: 0.88;
+    filter: drop-shadow(0 0 3px rgba(56, 189, 248, 0.55));
+  }
+  65% {
+    transform: scale(1.08);
+    opacity: 1;
+    filter: drop-shadow(0 0 7px rgba(56, 189, 248, 0.9));
+  }
+}
+
+.animate-oximeter-pulse {
+  animation: pulseOximeterWave 1.25s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Continuous Heartbeat Pulse Oximeter Flow (Calm, minimalist, resting physiological tempo) */
+@keyframes ecgFlow {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-24px);
+  }
+}
+
+.animate-ecg-flow {
+  animation: ecgFlow 2.2s linear infinite;
+  will-change: transform;
+}

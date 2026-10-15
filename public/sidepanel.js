@@ -12,6 +12,33 @@ const STORAGE_KEY_PROXY_URL = "gemini_sidekick_proxy_url";
 // Configuration
 const DEFAULT_MODEL = "gemini-3.1-flash-lite";
 const FALLBACK_MODEL = "gemini-3.8-flash";
+const LATEST_FLASH_MODEL = "gemini-flash-latest";
+const API_KEY_VERIFY_TIMEOUT_MS = 10000; // 10-second bounded verification deadline per request
+
+// Structured Verification Error Categories
+const VERIFY_ERROR_CATEGORIES = {
+  AUTH_INVALID: "AUTH_INVALID",
+  AUTH_RESTRICTED: "AUTH_RESTRICTED",
+  MODEL_UNAVAILABLE: "MODEL_UNAVAILABLE",
+  QUOTA_EXCEEDED: "QUOTA_EXCEEDED",
+  NETWORK_ERROR: "NETWORK_ERROR",
+  TIMEOUT: "TIMEOUT",
+  SERVICE_UNAVAILABLE: "SERVICE_UNAVAILABLE",
+  ABORTED: "ABORTED",
+  UNEXPECTED: "UNEXPECTED"
+};
+
+/**
+ * Sanitizes any secret or API key from error strings before display or logging
+ */
+function sanitizeKeyFromError(msg) {
+  if (!msg || typeof msg !== "string") return "";
+  return msg.replace(/AIza[0-9A-Za-z\-_]{35}/g, "[REDACTED_API_KEY]");
+}
+
+// Active verification tracking for debouncing, cancellation, and race-condition prevention
+let _activeVerificationController = null;
+let _verificationSeq = 0;
 // Safety Budget Configuration (Continuous execution loop)
 const DEFAULT_SAFETY_BUDGET = {
   maxActions: 50,
@@ -257,7 +284,7 @@ const state = {
 };
 
 // DOM Elements
-const elements = {
+const elements = typeof document !== "undefined" ? {
   panel: document.getElementById("sidekickPanel"),
   newChatBtn: document.getElementById("newChatBtn"),
   historyBtn: document.getElementById("historyBtn"),
@@ -361,7 +388,7 @@ const elements = {
   closeAuditModalBtn: document.getElementById("closeAuditModalBtn"),
   auditModalBody: document.getElementById("auditModalBody"),
   toastNotification: document.getElementById("toastNotification")
-};
+} : {};
 
 // Safe storage wrapper
 const storage = {
@@ -370,9 +397,17 @@ const storage = {
       return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
     }
     const res = {};
-    for (const k of Object.keys(keys)) {
-      const v = localStorage.getItem(k);
-      res[k] = v !== null ? JSON.parse(v) : keys[k];
+    if (typeof localStorage !== "undefined") {
+      for (const k of Object.keys(keys)) {
+        try {
+          const v = localStorage.getItem(k);
+          res[k] = v !== null ? JSON.parse(v) : keys[k];
+        } catch {
+          res[k] = keys[k];
+        }
+      }
+    } else {
+      return { ...keys };
     }
     return res;
   },
@@ -380,8 +415,12 @@ const storage = {
     if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
       return new Promise((resolve) => chrome.storage.local.set(items, resolve));
     }
-    for (const [k, v] of Object.entries(items)) {
-      localStorage.setItem(k, JSON.stringify(v));
+    if (typeof localStorage !== "undefined") {
+      for (const [k, v] of Object.entries(items)) {
+        try {
+          localStorage.setItem(k, JSON.stringify(v));
+        } catch {}
+      }
     }
   }
 };
@@ -619,22 +658,67 @@ async function updateOnboardingVisibility() {
 }
 
 /**
- * Verify Gemini API key with graceful handling of free-tier demand and auto-fallback
+ * Verify Gemini API key with strict validation, finite 10s per-request timeout,
+ * deterministic fallback on model unavailable (404/503), zero false positives,
+ * and distinct actionable error reporting.
  */
-async function verifyApiKey(rawKey, preferredModel = state.model) {
+async function verifyApiKey(rawKey, preferredModel = state?.model, externalSignal = null) {
   const key = (rawKey || "").replace(/['"\s]/g, "").trim();
   if (!key) {
-    return { valid: false, error: "Please enter your Gemini API key." };
+    return {
+      valid: false,
+      error: "Please enter your Gemini API key.",
+      category: VERIFY_ERROR_CATEGORIES.AUTH_INVALID
+    };
   }
 
   const rawModel = preferredModel || DEFAULT_MODEL;
   const baseModel = rawModel === "gemini-3.5-flash-lite" ? DEFAULT_MODEL : rawModel;
-  const modelsToTry = [baseModel, FALLBACK_MODEL, LATEST_FLASH_MODEL].filter((m, i, a) => a.indexOf(m) === i);
-  
-  let keyIsExplicitlyInvalid = false;
-  let lastDetailedError = "";
 
-  for (const m of modelsToTry) {
+  // We try preferred model first; if and only if it fails with model unavailable (404) or 503,
+  // we attempt a single bounded fallback to FALLBACK_MODEL (if different from baseModel).
+  const modelsToTry = [baseModel];
+  if (FALLBACK_MODEL !== baseModel) {
+    modelsToTry.push(FALLBACK_MODEL);
+  }
+
+  let lastResult = null;
+
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const m = modelsToTry[i];
+
+    if (externalSignal?.aborted) {
+      return {
+        valid: false,
+        error: "Verification cancelled.",
+        category: VERIFY_ERROR_CATEGORIES.ABORTED
+      };
+    }
+
+    const controller = new AbortController();
+    let isTimedOut = false;
+    let abortListener = null;
+
+    const timer = setTimeout(() => {
+      isTimedOut = true;
+      try {
+        controller.abort(new DOMException("Verification request timed out", "TimeoutError"));
+      } catch {}
+    }, API_KEY_VERIFY_TIMEOUT_MS);
+
+    if (externalSignal) {
+      abortListener = () => {
+        try {
+          controller.abort(externalSignal.reason || new DOMException("Verification cancelled", "AbortError"));
+        } catch {}
+      };
+      if (externalSignal.aborted) {
+        abortListener();
+      } else {
+        externalSignal.addEventListener("abort", abortListener, { once: true });
+      }
+    }
+
     try {
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent`, {
         method: "POST",
@@ -645,53 +729,161 @@ async function verifyApiKey(rawKey, preferredModel = state.model) {
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: "hi" }] }],
           generationConfig: { maxOutputTokens: 2 }
-        })
+        }),
+        signal: controller.signal
       });
 
       if (res.ok) {
-        return { valid: true, model: m, highDemand: false };
+        return {
+          valid: true,
+          model: m,
+          category: null
+        };
       }
 
-      if (res.status === 503 || res.status === 429) {
-        // Model capacity spike - key is recognized and authenticated by Google! Try next or succeed
-        continue;
-      }
-
+      // Safe parse Google API error response
       let errData = null;
-      try { errData = await res.json(); } catch {}
-      const errMsg = errData?.error?.message || "";
+      try {
+        errData = await res.json();
+      } catch {}
+      const rawErrMsg = errData?.error?.message || "";
+      const errMsg = sanitizeKeyFromError(rawErrMsg);
       const errReason = errData?.error?.details?.[0]?.reason || "";
+      const errStatus = errData?.error?.status || "";
 
-      const isAuthError =
+      // 1. Quota or Rate Limit (429 / RESOURCE_EXHAUSTED)
+      if (res.status === 429 || errStatus === "RESOURCE_EXHAUSTED" || errReason === "RATE_LIMIT_EXCEEDED") {
+        return {
+          valid: false,
+          error: "Gemini rate limit or quota exceeded (HTTP 429). Check your usage and quota in Google AI Studio.",
+          category: VERIFY_ERROR_CATEGORIES.QUOTA_EXCEEDED,
+          status: 429
+        };
+      }
+
+      // 2. Auth error - Invalid key (400 with API_KEY_INVALID, 401, or 403 API_KEY_INVALID)
+      const isKeyInvalid =
         res.status === 401 ||
-        res.status === 403 ||
         errReason === "API_KEY_INVALID" ||
         errMsg.toLowerCase().includes("api key not valid") ||
-        errMsg.toLowerCase().includes("api_key_invalid") ||
-        errMsg.toLowerCase().includes("permission denied");
+        errMsg.toLowerCase().includes("api_key_invalid");
 
-      if (isAuthError) {
-        keyIsExplicitlyInvalid = true;
-        lastDetailedError = errMsg || "Invalid API key. Please check your key from Google AI Studio.";
-        break; // Key itself is invalid across all models
-      } else {
-        lastDetailedError = errMsg || `HTTP ${res.status}`;
-        continue;
+      if (isKeyInvalid) {
+        return {
+          valid: false,
+          error: "Invalid Gemini API key. Please check your key from Google AI Studio.",
+          category: VERIFY_ERROR_CATEGORIES.AUTH_INVALID,
+          status: res.status
+        };
       }
-    } catch {
-      // If offline or network-blocked, allow standard Google API key format
-      if (key.startsWith("AIzaSy")) {
-        return { valid: true, model: m, highDemand: false };
+
+      // 3. Permission or restriction error (403 without API_KEY_INVALID)
+      const isPermissionDenied =
+        res.status === 403 ||
+        errStatus === "PERMISSION_DENIED" ||
+        errReason === "API_KEY_SERVICE_BLOCKED" ||
+        errMsg.toLowerCase().includes("permission denied") ||
+        errMsg.toLowerCase().includes("blocked") ||
+        errMsg.toLowerCase().includes("has not been used in project") ||
+        errMsg.toLowerCase().includes("restricted");
+
+      if (isPermissionDenied) {
+        return {
+          valid: false,
+          error: errMsg || "API access restricted or permission denied (HTTP 403). Check API restrictions in Google Cloud Console.",
+          category: VERIFY_ERROR_CATEGORIES.AUTH_RESTRICTED,
+          status: 403
+        };
+      }
+
+      // 4. Model not found or unavailable (404)
+      const isModelNotFound =
+        res.status === 404 ||
+        errStatus === "NOT_FOUND" ||
+        errMsg.toLowerCase().includes("is not found") ||
+        errMsg.toLowerCase().includes("not supported");
+
+      if (isModelNotFound) {
+        lastResult = {
+          valid: false,
+          error: `Model '${m}' unavailable or not found (HTTP 404).`,
+          category: VERIFY_ERROR_CATEGORIES.MODEL_UNAVAILABLE,
+          status: 404
+        };
+        // If there is another fallback model in the bounded list, try it!
+        if (i < modelsToTry.length - 1) {
+          continue;
+        }
+        return lastResult;
+      }
+
+      // 5. Service unavailable / temporary capacity spike (503 / 500 / 502 / 504)
+      if (res.status === 503 || res.status === 500 || res.status === 502 || res.status === 504) {
+        lastResult = {
+          valid: false,
+          error: `Google Gemini service temporarily unavailable (HTTP ${res.status}). Please try again shortly.`,
+          category: VERIFY_ERROR_CATEGORIES.SERVICE_UNAVAILABLE,
+          status: res.status
+        };
+        // If there is another fallback model in the bounded list, try it!
+        if (i < modelsToTry.length - 1) {
+          continue;
+        }
+        return lastResult;
+      }
+
+      // 6. Other unexpected API response
+      return {
+        valid: false,
+        error: errMsg || `Unexpected response from Google API (HTTP ${res.status}).`,
+        category: VERIFY_ERROR_CATEGORIES.UNEXPECTED,
+        status: res.status
+      };
+
+    } catch (err) {
+      if (isTimedOut) {
+        return {
+          valid: false,
+          error: "Verification timed out (10s). Google API did not respond in time.",
+          category: VERIFY_ERROR_CATEGORIES.TIMEOUT
+        };
+      }
+      if (externalSignal?.aborted) {
+        return {
+          valid: false,
+          error: "Verification cancelled.",
+          category: VERIFY_ERROR_CATEGORIES.ABORTED
+        };
+      }
+      if (err?.name === "AbortError" || err?.name === "TimeoutError") {
+        return {
+          valid: false,
+          error: "Verification timed out (10s). Google API did not respond in time.",
+          category: VERIFY_ERROR_CATEGORIES.TIMEOUT
+        };
+      }
+
+      // Network failure / inability to reach Google
+      return {
+        valid: false,
+        error: "Network connection failed. Unable to reach Google API. Please check your internet connection.",
+        category: VERIFY_ERROR_CATEGORIES.NETWORK_ERROR
+      };
+    } finally {
+      clearTimeout(timer);
+      if (abortListener && externalSignal) {
+        try {
+          externalSignal.removeEventListener("abort", abortListener);
+        } catch {}
       }
     }
   }
 
-  if (keyIsExplicitlyInvalid || lastDetailedError) {
-    return { valid: false, error: lastDetailedError || "Invalid Gemini API key. Please check your key from Google AI Studio." };
-  }
-
-  // All tested models returned 503/429 (traffic spike on free tier): Key was authenticated by Google
-  return { valid: true, model: preferredModel || DEFAULT_MODEL, highDemand: true };
+  return lastResult || {
+    valid: false,
+    error: "Unable to verify API key with Google API.",
+    category: VERIFY_ERROR_CATEGORIES.UNEXPECTED
+  };
 }
 
 /**
@@ -702,32 +894,86 @@ function bindEvents() {
   elements.onboardingSaveBtn?.addEventListener("click", async () => {
     const rawKey = elements.onboardingKeyInput?.value || "";
     const key = rawKey.replace(/['"\s]/g, "").trim();
-    if (!key) return;
+    if (!key) {
+      if (elements.onboardingStatus) {
+        elements.onboardingStatus.textContent = "Please enter your Gemini API key.";
+        elements.onboardingStatus.style.color = "#f59e0b";
+      }
+      return;
+    }
+
+    if (_activeVerificationController) {
+      try { _activeVerificationController.abort(new DOMException("New verification started", "AbortError")); } catch {}
+    }
+    const currentController = new AbortController();
+    _activeVerificationController = currentController;
+    const currentSeq = ++_verificationSeq;
+
+    if (elements.onboardingSaveBtn) {
+      elements.onboardingSaveBtn.disabled = true;
+      elements.onboardingSaveBtn.textContent = "Verifying…";
+    }
 
     if (elements.onboardingStatus) {
       elements.onboardingStatus.textContent = "Verifying…";
       elements.onboardingStatus.style.color = "var(--sky)";
     }
 
-    const check = await verifyApiKey(key, state.model);
+    try {
+      const check = await verifyApiKey(key, state.model, currentController.signal);
+      if (currentSeq !== _verificationSeq) return;
 
-    if (check.valid) {
-      state.apiKey = key;
-      await storage.set({ [STORAGE_KEY_API_KEY]: key });
-      if (elements.apiKeyInput) elements.apiKeyInput.value = key;
-      if (elements.onboardingStatus) {
-        elements.onboardingStatus.textContent = check.highDemand ? "Connected (Auto-fallback ready) ✓" : "Connected ✓";
-        elements.onboardingStatus.style.color = "var(--emerald)";
+      if (check.valid) {
+        state.apiKey = key;
+        if (check.model && check.model !== state.model) {
+          state.model = check.model;
+        }
+        await storage.set({
+          [STORAGE_KEY_API_KEY]: key,
+          [STORAGE_KEY_MODEL]: state.model
+        });
+        if (elements.apiKeyInput) elements.apiKeyInput.value = key;
+        if (elements.modelSelect) elements.modelSelect.value = state.model;
+        updateModelToken(state.model);
+
+        if (elements.onboardingStatus) {
+          elements.onboardingStatus.textContent = check.model !== DEFAULT_MODEL
+            ? `Connected (${check.model}) ✓`
+            : "Connected ✓";
+          elements.onboardingStatus.style.color = "var(--emerald)";
+        }
+        setTimeout(() => {
+          if (currentSeq === _verificationSeq) {
+            updateOnboardingVisibility();
+            elements.promptInput?.focus();
+          }
+        }, 700);
+      } else {
+        // Verification failed: NEVER save invalid key or overwrite existing state
+        if (elements.onboardingStatus) {
+          elements.onboardingStatus.textContent = check.error || "Verification failed";
+          elements.onboardingStatus.style.color = check.category === VERIFY_ERROR_CATEGORIES.AUTH_INVALID ? "#ef4444" : "#f59e0b";
+        }
       }
-      setTimeout(() => {
-        updateOnboardingVisibility();
-        elements.promptInput?.focus();
-      }, 700);
-    } else {
+    } catch (err) {
+      if (currentSeq !== _verificationSeq) return;
       if (elements.onboardingStatus) {
-        elements.onboardingStatus.textContent = check.error || "Invalid key";
-        elements.onboardingStatus.style.color = "#f59e0b";
+        elements.onboardingStatus.textContent = "Verification encountered an error. Please try again.";
+        elements.onboardingStatus.style.color = "#ef4444";
       }
+    } finally {
+      if (currentSeq === _verificationSeq && elements.onboardingSaveBtn) {
+        elements.onboardingSaveBtn.disabled = false;
+        elements.onboardingSaveBtn.textContent = "Connect Key";
+      }
+    }
+  });
+
+  // Allow pressing Enter in onboarding input to trigger Connect
+  elements.onboardingKeyInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      elements.onboardingSaveBtn?.click();
     }
   });
 
@@ -826,43 +1072,140 @@ function bindEvents() {
 
   // Save Settings with live Gemini validation
   elements.saveSettingsBtn?.addEventListener("click", async () => {
-    const rawKey = elements.apiKeyInput.value || "";
+    const rawKey = elements.apiKeyInput?.value || "";
     const key = rawKey.replace(/['"\s]/g, "").trim();
-    const mdl = elements.modelSelect.value;
+    const mdl = elements.modelSelect?.value || DEFAULT_MODEL;
     const proxyUrl = (elements.proxyUrlInput?.value || "").trim().replace(/\/+$/, "");
-    state.apiKey = key;
+
+    // Always permit updating non-secret preferences (model & proxy URL)
     state.model = mdl;
     state.proxyUrl = proxyUrl;
+    updateModelToken(mdl);
 
-    elements.saveStatus.textContent = key ? "Verifying key…" : "Saved";
-    elements.saveStatus.style.color = "var(--sky)";
-
-    let keyStatus = "Saved ✓";
-    if (key) {
-      const check = await verifyApiKey(key, mdl);
-      if (check.valid) {
-        keyStatus = check.highDemand ? "Key verified (High demand on model) ✓" : "Key verified ✓";
+    // Case 1: Key input is blank -> User explicitly cleared their key
+    if (!key) {
+      state.apiKey = "";
+      await storage.set({
+        [STORAGE_KEY_API_KEY]: "",
+        [STORAGE_KEY_MODEL]: mdl,
+        [STORAGE_KEY_PROXY_URL]: proxyUrl
+      });
+      updateOnboardingVisibility();
+      if (elements.saveStatus) {
+        elements.saveStatus.textContent = "Settings saved (Key removed) ✓";
         elements.saveStatus.style.color = "var(--emerald)";
-      } else {
-        keyStatus = check.error || "Warning: Key check failed";
-        elements.saveStatus.style.color = "#f59e0b";
       }
+      setTimeout(() => {
+        if (elements.saveStatus?.textContent?.includes("Saved")) {
+          elements.saveStatus.textContent = "";
+        }
+      }, 1800);
+      return;
     }
 
-    await storage.set({
-      [STORAGE_KEY_API_KEY]: key,
-      [STORAGE_KEY_MODEL]: mdl,
-      [STORAGE_KEY_PROXY_URL]: proxyUrl
-    });
-
-    updateModelToken(mdl);
-    elements.saveStatus.textContent = keyStatus;
-    setTimeout(() => {
-      elements.saveStatus.textContent = "";
-      if (keyStatus.includes("verified") || !key) {
-        elements.settingsDrawer.classList.add("hidden");
+    // Case 2: Key was not modified and is already the active verified key
+    if (key === state.apiKey) {
+      await storage.set({
+        [STORAGE_KEY_MODEL]: mdl,
+        [STORAGE_KEY_PROXY_URL]: proxyUrl
+      });
+      if (elements.saveStatus) {
+        elements.saveStatus.textContent = "Settings saved ✓";
+        elements.saveStatus.style.color = "var(--emerald)";
       }
-    }, 1800);
+      setTimeout(() => {
+        if (elements.saveStatus?.textContent?.includes("saved")) {
+          elements.saveStatus.textContent = "";
+          elements.settingsDrawer?.classList.add("hidden");
+        }
+      }, 1500);
+      return;
+    }
+
+    // Case 3: A new or modified key is submitted -> Must verify before saving!
+    if (_activeVerificationController) {
+      try { _activeVerificationController.abort(new DOMException("New verification started", "AbortError")); } catch {}
+    }
+    const currentController = new AbortController();
+    _activeVerificationController = currentController;
+    const currentSeq = ++_verificationSeq;
+
+    if (elements.saveSettingsBtn) {
+      elements.saveSettingsBtn.disabled = true;
+      elements.saveSettingsBtn.textContent = "Verifying…";
+    }
+
+    if (elements.saveStatus) {
+      elements.saveStatus.textContent = "Verifying key with Google…";
+      elements.saveStatus.style.color = "var(--sky)";
+    }
+
+    try {
+      const check = await verifyApiKey(key, mdl, currentController.signal);
+      if (currentSeq !== _verificationSeq) return;
+
+      if (check.valid) {
+        const verifiedModel = check.model || mdl;
+        state.apiKey = key;
+        state.model = verifiedModel;
+        if (elements.modelSelect) elements.modelSelect.value = verifiedModel;
+        updateModelToken(verifiedModel);
+
+        await storage.set({
+          [STORAGE_KEY_API_KEY]: key,
+          [STORAGE_KEY_MODEL]: verifiedModel,
+          [STORAGE_KEY_PROXY_URL]: proxyUrl
+        });
+
+        updateOnboardingVisibility();
+
+        if (elements.saveStatus) {
+          elements.saveStatus.textContent = verifiedModel !== mdl
+            ? `Verified (${verifiedModel}) & saved ✓`
+            : "Key verified & saved ✓";
+          elements.saveStatus.style.color = "var(--emerald)";
+        }
+
+        setTimeout(() => {
+          if (currentSeq === _verificationSeq) {
+            elements.saveStatus.textContent = "";
+            elements.settingsDrawer?.classList.add("hidden");
+          }
+        }, 1500);
+      } else {
+        // Verification failed!
+        // DO NOT overwrite state.apiKey or storage[STORAGE_KEY_API_KEY]!
+        // Keep previously working key intact. Save only non-secret settings.
+        await storage.set({
+          [STORAGE_KEY_MODEL]: mdl,
+          [STORAGE_KEY_PROXY_URL]: proxyUrl
+        });
+
+        if (elements.saveStatus) {
+          elements.saveStatus.textContent = check.error || "Verification failed";
+          elements.saveStatus.style.color = check.category === VERIFY_ERROR_CATEGORIES.AUTH_INVALID ? "#ef4444" : "#f59e0b";
+        }
+      }
+    } catch (err) {
+      if (currentSeq !== _verificationSeq) return;
+      if (elements.saveStatus) {
+        elements.saveStatus.textContent = "Verification encountered an error. Please try again.";
+        elements.saveStatus.style.color = "#ef4444";
+      }
+    } finally {
+      if (currentSeq === _verificationSeq && elements.saveSettingsBtn) {
+        elements.saveSettingsBtn.disabled = false;
+        elements.saveSettingsBtn.textContent = "Save";
+      }
+    }
+  });
+
+  // Allow pressing Enter in API key settings input to trigger Save
+  elements.apiKeyInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      elements.saveSettingsBtn?.click();
+    }
   });
 
   // This tab token toggle / retry
@@ -4664,14 +5007,16 @@ function setBusyState(busy) {
     elements.panel?.classList.add("busy");
     elements.sendIconSvg?.classList.add("hidden");
     elements.stopIconSquare?.classList.remove("hidden");
-    elements.sendBtn?.setAttribute("title", "Stop");
-    elements.sendBtn?.setAttribute("aria-label", "Stop");
+    elements.sendBtn?.classList.add("busy-pulse");
+    elements.sendBtn?.setAttribute("title", "Processing… (Click to stop)");
+    elements.sendBtn?.setAttribute("aria-label", "Processing… (Click to stop)");
   } else {
     elements.panel?.classList.remove("busy");
     elements.sendIconSvg?.classList.remove("hidden");
     elements.stopIconSquare?.classList.add("hidden");
-    elements.sendBtn?.setAttribute("title", "Send");
-    elements.sendBtn?.setAttribute("aria-label", "Send");
+    elements.sendBtn?.classList.remove("busy-pulse");
+    elements.sendBtn?.setAttribute("title", "Standby");
+    elements.sendBtn?.setAttribute("aria-label", "Standby");
   }
 }
 
@@ -5037,33 +5382,86 @@ function renderInlineKeySetup() {
   saveBtn?.addEventListener("click", async () => {
     const rawKey = keyInput?.value || "";
     const key = rawKey.replace(/['"\s]/g, "").trim();
-    if (!key) return;
+    if (!key) {
+      if (statusEl) {
+        statusEl.textContent = "Please enter your Gemini API key.";
+        statusEl.style.color = "#f59e0b";
+      }
+      return;
+    }
+
+    if (_activeVerificationController) {
+      try { _activeVerificationController.abort(new DOMException("New verification started", "AbortError")); } catch {}
+    }
+    const currentController = new AbortController();
+    _activeVerificationController = currentController;
+    const currentSeq = ++_verificationSeq;
+
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Verifying…";
+    }
 
     if (statusEl) {
       statusEl.textContent = "Verifying…";
       statusEl.style.color = "var(--sky)";
     }
 
-    const check = await verifyApiKey(key, state.model);
+    try {
+      const check = await verifyApiKey(key, state.model, currentController.signal);
+      if (currentSeq !== _verificationSeq) return;
 
-    if (check.valid) {
-      state.apiKey = key;
-      await storage.set({ [STORAGE_KEY_API_KEY]: key });
-      if (elements.apiKeyInput) elements.apiKeyInput.value = key;
-      updateOnboardingVisibility();
-      if (statusEl) {
-        statusEl.textContent = check.highDemand ? "Connected (Auto-fallback ready) ✓" : "Connected ✓";
-        statusEl.style.color = "var(--emerald)";
+      if (check.valid) {
+        state.apiKey = key;
+        if (check.model && check.model !== state.model) {
+          state.model = check.model;
+        }
+        await storage.set({
+          [STORAGE_KEY_API_KEY]: key,
+          [STORAGE_KEY_MODEL]: state.model
+        });
+        if (elements.apiKeyInput) elements.apiKeyInput.value = key;
+        if (elements.modelSelect) elements.modelSelect.value = state.model;
+        updateModelToken(state.model);
+        updateOnboardingVisibility();
+
+        if (statusEl) {
+          statusEl.textContent = check.model !== DEFAULT_MODEL
+            ? `Connected (${check.model}) ✓`
+            : "Connected ✓";
+          statusEl.style.color = "var(--emerald)";
+        }
+        setTimeout(() => {
+          if (currentSeq === _verificationSeq) {
+            card.innerHTML = `<div style="color: var(--emerald); font-size: 12px; display: flex; align-items: center; gap: 6px;">Key verified ✓ You can now ask any question or command!</div>`;
+            elements.promptInput?.focus();
+          }
+        }, 700);
+      } else {
+        // Verification failed: Do NOT save invalid key or overwrite state
+        if (statusEl) {
+          statusEl.textContent = check.error || "Verification failed";
+          statusEl.style.color = check.category === VERIFY_ERROR_CATEGORIES.AUTH_INVALID ? "#ef4444" : "#f59e0b";
+        }
       }
-      setTimeout(() => {
-        card.innerHTML = `<div style="color: var(--emerald); font-size: 12px; display: flex; align-items: center; gap: 6px;">Key verified ✓ You can now ask any question or command!</div>`;
-        elements.promptInput?.focus();
-      }, 700);
-    } else {
+    } catch (err) {
+      if (currentSeq !== _verificationSeq) return;
       if (statusEl) {
-        statusEl.textContent = check.error || "Invalid key";
-        statusEl.style.color = "#f59e0b";
+        statusEl.textContent = "Verification encountered an error. Please try again.";
+        statusEl.style.color = "#ef4444";
       }
+    } finally {
+      if (currentSeq === _verificationSeq && saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save Key";
+      }
+    }
+  });
+
+  keyInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      saveBtn?.click();
     }
   });
 }
@@ -5831,8 +6229,25 @@ function init2DParticleGlobe() {
 }
 
 // Bootstrap
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", init);
-} else {
-  init();
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+}
+
+// Module export for test verification in Node.js / tsx
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    verifyApiKey,
+    VERIFY_ERROR_CATEGORIES,
+    sanitizeKeyFromError,
+    storage,
+    DEFAULT_MODEL,
+    FALLBACK_MODEL,
+    LATEST_FLASH_MODEL,
+    API_KEY_VERIFY_TIMEOUT_MS,
+    state
+  };
 }

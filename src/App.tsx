@@ -14,7 +14,10 @@ import {
   Clock,
   Plus,
   ArrowUp,
+  ArrowUpRight,
   Square,
+  Activity,
+  Power,
   X,
   FileCode,
   Shield,
@@ -2027,7 +2030,7 @@ export default function App() {
     }
 
     // High-Grade Scenario: Multi-step CDP automation workflow
-    if (promptLower.includes("dispatch") || promptLower.includes("automation") || promptLower.includes("workflow") || promptLower.includes("cdp")) {
+    if (promptLower.includes("dispatch") || promptLower.includes("automation") || promptLower.includes("workflow") || promptLower.includes("cdp") || promptLower.includes("autonomous") || promptLower.includes("execution")) {
       const searchBox = currentPage.elements?.find((e) => e.role.includes("input") || e.role.includes("link"));
       const actionBtn = currentPage.elements?.find((e) => e.role.includes("button") && !e.label.toLowerCase().includes("submit"));
 
@@ -2893,47 +2896,50 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                 {chatMessages.length === 0 && (
                   <div className="mt-auto mb-7 flex flex-col items-start text-left gap-3.5">
                     <h1
-                      className="text-[28px] text-[#9aa1b2] leading-[1.5]"
-                      style={{ fontFamily: "'Geist', sans-serif", fontWeight: 100, letterSpacing: "0.06em" }}
+                      className="text-[21px] text-[#F2F3F5] leading-[1.3] font-light"
+                      style={{ fontFamily: "'Geist', sans-serif", fontWeight: 250, letterSpacing: "0.01em" }}
                     >
-                      What should we
-                      <span className="block mt-1 text-[#585e6d]" style={{ fontWeight: 100 }}>
-                        do with this page?
+                      A little clarity. A new perspective.
+                      <span
+                        className="block mt-1 text-[20px] text-[#B8C0CE] leading-[1.35] font-thin"
+                        style={{ fontWeight: 100, letterSpacing: "0.015em" }}
+                      >
+                        Where would you like to begin?
                       </span>
                     </h1>
                     <p
-                      className="text-[13px] text-[#585e6d] leading-[1.85] max-w-[340px]"
-                      style={{ fontFamily: "'Geist', sans-serif", fontWeight: 200, letterSpacing: "0.05em" }}
+                      className="text-[12.5px] text-[#A1AAB9] leading-[1.85] max-w-[340px]"
+                      style={{ fontFamily: "'Geist', sans-serif", fontWeight: 200, letterSpacing: "0.04em" }}
                     >
                       Try{" "}
                       <button
                         type="button"
                         onClick={() => handleSubmitPrompt("Run Agent Behavior Audit")}
-                        className="inline text-[#9aa1b2] relative group font-thin"
+                        className="inline text-[#A1AAB9] hover:text-[#F2F3F5] relative group font-thin transition-colors"
                         style={{ fontWeight: 200 }}
                       >
                         Agent Behavior Audit
-                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#9aa1b2] transition-all duration-200 group-hover:w-full" />
+                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#A1AAB9] transition-all duration-200 group-hover:w-full" />
                       </button>
                       ,{" "}
                       <button
                         type="button"
                         onClick={() => handleSubmitPrompt("/sludge-audit")}
-                        className="inline text-[#9aa1b2] relative group font-thin"
+                        className="inline text-[#A1AAB9] hover:text-[#F2F3F5] relative group font-thin transition-colors"
                         style={{ fontWeight: 200 }}
                       >
                         Consumer Defense
-                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#9aa1b2] transition-all duration-200 group-hover:w-full" />
+                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#A1AAB9] transition-all duration-200 group-hover:w-full" />
                       </button>
                       , or{" "}
                       <button
                         type="button"
-                        onClick={() => handleSubmitPrompt("Audit cryptographic security enclave")}
-                        className="inline text-[#9aa1b2] relative group font-thin"
+                        onClick={() => handleSubmitPrompt("Autonomous Browser Execution")}
+                        className="inline text-[#A1AAB9] hover:text-[#F2F3F5] relative group font-thin transition-colors"
                         style={{ fontWeight: 200 }}
                       >
-                        audit security enclave
-                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#9aa1b2] transition-all duration-200 group-hover:w-full" />
+                        Autonomous Browser Execution
+                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#A1AAB9] transition-all duration-200 group-hover:w-full" />
                       </button>
                       .
                     </p>
@@ -3383,38 +3389,61 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                           else handleSubmitPrompt(inputValue);
                         }
                       }}
-                      placeholder="Ask, automate, or type / for commands…"
+                      placeholder="A fresh space for your next thought"
                       rows={1}
-                      className="w-full bg-transparent border-none outline-none font-sans text-[13.5px] font-thin text-[#9aa1b2] placeholder-[#585e6d]/70 resize-none leading-[1.85] tracking-[0.045em] px-1"
+                      className="w-full bg-transparent border-none outline-none font-sans text-[13.5px] font-thin text-[#F2F3F5] placeholder-[#858C9A] resize-none leading-[1.85] tracking-[0.045em] px-1"
                     />
 
                     {/* Clean Minimal Bottom Row: Send / Stop Button Right-Aligned */}
                     <div className="flex items-center justify-end pt-0.5">
-                      {/* Refined Translucent Glass / Obsidian Arrow Button */}
+                      {/* Pulse Oximeter Live Wave / Angled Arrow Standby Button (Always Original Dark Color, w-7 h-7 rounded-full) */}
                       <button
                         type="submit"
-                        className={`w-7 h-7 rounded-full flex items-center justify-center transition-all ${
-                          isBusy
-                            ? "bg-red-500/20 text-red-300 border border-red-500/30 hover:bg-red-500/30"
-                            : inputValue.trim()
-                            ? "bg-white text-[#07080b] shadow-[0_0_12px_rgba(255,255,255,0.2)] hover:bg-white/90"
-                            : "bg-white/[0.06] text-[#eceef4]/60 border border-white/[0.06] hover:text-white hover:bg-white/[0.12]"
-                        }`}
-                        title={isBusy ? "Stop" : "Send"}
+                        className="w-7 h-7 rounded-full relative flex items-center justify-center transition-all bg-white/[0.06] border border-white/[0.06] hover:bg-white/[0.12] overflow-hidden shrink-0 group cursor-pointer"
+                        title={isBusy ? "Processing… (Click to stop)" : inputValue.trim() ? "Execute command" : "Standby"}
                       >
-                        {isBusy ? (
-                          <Square className="w-2.5 h-2.5 fill-current" />
-                        ) : (
-                          <ArrowUp className="w-3.5 h-3.5 stroke-[1.75]" />
-                        )}
+                        {/* Standby State: Angled Arrow (No color, smooth minimalist transition) */}
+                        <div
+                          className={`absolute inset-0 flex items-center justify-center transition-all duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+                            isBusy ? "opacity-0 scale-75 pointer-events-none" : "opacity-100 scale-100"
+                          } text-[#eceef4]/65 group-hover:text-white`}
+                        >
+                          <ArrowUpRight className="w-3.5 h-3.5 stroke-[1.5] transition-transform duration-300 ease-out group-hover:translate-x-[0.5px] group-hover:-translate-y-[0.5px]" />
+                        </div>
+
+                        {/* Active State: Live Flowing Heartbeat Pulse Oximeter Wave (Clean White matching Header Icons) */}
+                        <div
+                          className={`absolute inset-0 flex items-center justify-center transition-all duration-400 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+                            isBusy ? "opacity-100 scale-100" : "opacity-0 scale-75 pointer-events-none"
+                          } text-white/80 group-hover:text-white`}
+                        >
+                          <svg
+                            viewBox="0 0 24 24"
+                            width="16"
+                            height="16"
+                            className="overflow-hidden"
+                            style={{ filter: "drop-shadow(0 1px 3px rgba(255, 255, 255, 0.25))" }}
+                          >
+                            <g className="animate-ecg-flow">
+                              <path
+                                d="M 0 12 L 4 12 Q 5.5 11 7 12 L 8.5 12.8 L 10 5.5 L 12 16.5 Q 14.5 10.5 17 12 L 24 12 L 28 12 Q 29.5 11 31 12 L 32.5 12.8 L 34 5.5 L 36 16.5 Q 38.5 10.5 41 12 L 48 12 L 52 12 Q 53.5 11 55 12 L 56.5 12.8 L 58 5.5 L 60 16.5 Q 62.5 10.5 65 12 L 72 12"
+                                fill="none"
+                                stroke="#ffffff"
+                                strokeWidth="1.35"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </g>
+                          </svg>
+                        </div>
                       </button>
                     </div>
                   </form>
                 </div>
 
                 {/* Reserved slot for small subtext */}
-                <div className="mt-1.5 px-2 text-center min-h-[14px]">
-                  <span className="text-[10px] font-mono text-[#777c8a]/60">
+                <div className="mt-1.5 px-2 w-full flex items-center justify-center text-center min-h-[14px]">
+                  <span className="text-[10px] font-mono text-[#717784] text-center tracking-wide">
                     Engineered for Agentic Intelligence by PROMPTWORKS
                   </span>
                 </div>
