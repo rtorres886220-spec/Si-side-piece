@@ -32,6 +32,31 @@
     }
 
     /**
+    /**
+     * Generalized deterministic check for survey completion intent
+     */
+    static isSurveyIntent(promptText) {
+      const clean = (promptText || "").toLowerCase().trim();
+      if (!clean) return false;
+      if (clean.startsWith("/survey") || clean.startsWith("/questionnaire") || clean.startsWith("/fillform") || clean.startsWith("/poll")) {
+        return true;
+      }
+      // Purely conceptual/definitional check: e.g. "what is a survey?", "explain survey methodology"
+      if (/^(?:what\s+is\s+(?:a|an)\s+(?:survey|questionnaire|poll)|explain\s+(?:the\s+)?(?:survey|questionnaire)\s+methodology)\b/i.test(clean)) {
+        return false;
+      }
+      const hasSurveyNoun = /\b(?:surveys?|questionnaires?|polls?|feedback\s+forms?)\b/i.test(clean);
+      const hasSurveyAction = /\b(?:fill(?:\s*out)?|complete|answer|finish|submit|take|solve|work\s+through|reach\s+the\s+end)\b/i.test(clean);
+      const hasSurveySelection = /\b(?:choose|pick|find|select|locate|use)\b/i.test(clean);
+      const hasEveryQuestion = /\b(?:every|all|each)\s+questions?\b/i.test(clean);
+
+      if (hasSurveyNoun && (hasSurveyAction || (hasSurveySelection && (hasEveryQuestion || clean.includes("complete") || clean.includes("finish") || clean.includes("submit") || clean.includes("end"))))) {
+        return true;
+      }
+      return false;
+    }
+
+    /**
      * Executes tiny structured Router call using Gemini Flash-Lite
      */
     static async routeRequest(apiClient, promptText, sectionCatalog, options = {}) {
@@ -39,7 +64,7 @@
 
       const systemInstruction = `You are a precision router for an autonomous browser companion.
 Classify the user prompt into exactly ONE specialist worker:
-1. "survey": The user wants to fill out, complete, or answer a survey, questionnaire, poll, or multi-question form (e.g. "fill out this survey", "answer the survey questions", "complete the questionnaire", /survey).
+1. "survey": The user wants to discover, fill out, answer, work through, or complete a survey, questionnaire, poll, or multi-question form (e.g. "choose any survey from the page and answer every question till survey is complete", "find a survey in this tab and finish it", "complete one of the available questionnaires", "pick a suitable survey and work through it until you reach the end", "use the current page to find a survey, answer everything you can, and submit it", /survey).
 2. "action": The user wants to physically interact with the browser or webpage (click a button, fill an input, submit a form, navigate, scroll, open a new tab, add to cart, search the web or internet).
 3. "answer": The user is asking a factual question about this webpage that requires receipts/citations (e.g. pricing, return policy, author, specifications, dates, table lookup).
 4. "transform": Open-ended synthesis, evaluation, or creative tasks (e.g. summarize, rewrite, translate, draft a reply, quiz, "is this worth it?", comparison, general reasoning, social banter).
@@ -78,9 +103,8 @@ USER PROMPT: "${promptText}"`;
         throw new DOMException("Router request aborted", "AbortError");
       }
 
-      // Fast check for survey keywords before remote call
-      const cleanPrompt = (promptText || "").toLowerCase().trim();
-      if (cleanPrompt.startsWith("/survey") || /\b(?:(?:fill\s*(?:out)?|complete|answer|take)\s+(?:the|this|a)?\s*(?:survey|questionnaire|poll)|survey\s+(?:questions?|form))\b/i.test(cleanPrompt)) {
+      // Fast deterministic check for survey completion intent before remote call
+      if (SidekickRouter.isSurveyIntent(promptText)) {
         return {
           intent: "survey",
           target_sections: [],
@@ -114,10 +138,10 @@ USER PROMPT: "${promptText}"`;
       }
 
       // Safe fallback heuristic only if model call completely fails
-      const pLower = promptText.toLowerCase();
-      if (/\b(?:survey|questionnaire|poll|fill\s+out\s+(?:the\s+)?survey|answer\s+(?:the\s+)?survey|complete\s+(?:the\s+)?form)\b/i.test(pLower)) {
+      if (SidekickRouter.isSurveyIntent(promptText)) {
         return { intent: "survey", target_sections: [], element_hint: null, reasoning: "fallback" };
       }
+      const pLower = (promptText || "").toLowerCase();
       if (/\b(?:click|press|tap|type|fill|enter|submit|button|input|navigate|go\s+to|open|tab|scroll|search|google)\b/i.test(pLower)) {
         return { intent: "action", target_sections: [], element_hint: null, reasoning: "fallback" };
       }

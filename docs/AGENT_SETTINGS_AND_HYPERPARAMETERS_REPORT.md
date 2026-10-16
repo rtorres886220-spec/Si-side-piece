@@ -84,7 +84,7 @@ This report provides an exhaustive, component-by-component audit of all agents, 
 * **Files:** `/public/agents/workers.js`, `/src/groundingEngine.ts`
 * **Role:** Answers factual queries with verifiable proof and verbatim quote receipts.
 * **Settings:**
-  * **Primary Model:** `gemini-3.8-flash`.
+  * **Primary Model:** `gemini-3.5-flash-lite` (Fallback: `gemini-3.1-flash-lite`).
   * **Temperature:** `0.1` (Crucial to eliminate hallucinated numbers/dates).
   * **Top P:** `0.95`.
   * **Thinking Level:** `LOW`.
@@ -111,7 +111,7 @@ This report provides an exhaustive, component-by-component audit of all agents, 
 * **Files:** `/public/agents/workers.js`
 * **Role:** Summarization, translation, code refactoring, opinion breakdowns, deal evaluations ("is this worth it?").
 * **Settings:**
-  * **Primary Model:** `gemini-3.8-flash`.
+  * **Primary Model:** `gemini-3.5-flash-lite` (Fallback: `gemini-3.1-flash-lite`).
   * **Temperature:** `0.5 – 0.7` (Permits stylistic versatility and cognitive reasoning).
   * **Top P:** `0.95`.
   * **Thinking Level:** `LOW` or `HIGH` depending on analytical complexity.

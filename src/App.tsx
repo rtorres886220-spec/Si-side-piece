@@ -1455,7 +1455,7 @@ export default function App() {
     if (cmdToken === "/model") {
       const targetModel = (argLower.includes("3.1") || argLower.includes("fallback"))
         ? "gemini-3.1-flash-lite"
-        : (argLower.includes("latest") ? "gemini-flash-latest" : "gemini-3.5-flash-lite");
+        : "gemini-3.5-flash-lite";
       setSelectedModel(targetModel);
       showToast(`Model switched to ${targetModel}`);
       setChatMessages((prev) => [
@@ -2573,7 +2573,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
 ## Key Upgrades:
 1. **Option B Chrome DevTools Protocol (CDP)**: Dispatches true OS-level trusted mouse clicks and keyboard keystrokes via \`chrome.debugger\`.
 2. **Ephemeral JIT Attachment**: Calls \`chrome.debugger.attach\` only for milliseconds during approved actions and detaches immediately so the yellow warning banner does not linger.
-3. **High-Demand Auto-Fallback**: Automatically retries and cascades through gemini-3.5-flash-lite to gemini-3.1-flash-lite and gemini-flash-latest if Google servers experience high demand spikes.
+3. **High-Demand Auto-Fallback**: Automatically retries and cascades from gemini-3.5-flash-lite to gemini-3.1-flash-lite if Google servers experience high demand spikes.
 4. **Defense-in-Depth Sanitization**: Strips hidden/invisible DOM elements, zero-width injection attacks, and automatically masks Credit Cards (Luhn validated), SSNs, and Bearer tokens.
 5. **Cryptographic UUID Enclaves**: Page contents are sealed in \`<<<UNTRUSTED_CONTENT_[UUID]>>>\` to neutralize Indirect Prompt Injection (IPI).
 6. **Human-in-the-Loop (HITL) Gate**: High-risk actions (Submit, Pay, Delete, Confirm) require explicit user approval.
@@ -2856,7 +2856,6 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                     >
                       <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Default Flash-Lite)</option>
                       <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Fallback Flash-Lite)</option>
-                      <option value="gemini-flash-latest">gemini-flash-latest (Latest Flash)</option>
                     </select>
                     <div className="mt-1 flex items-center justify-between text-[11px] font-mono text-[#777c8a]">
                       <span>Thinking Level</span>

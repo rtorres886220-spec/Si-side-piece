@@ -197,7 +197,9 @@
 
     if (message.action === "PARSE_SURVEY") {
       try {
-        const surveyData = SurveyDOMEngine.parseQuestions();
+        const surveyData = SurveyDOMEngine.parseQuestions(document, {
+          surveySelector: message.surveySelector || message.params?.surveySelector,
+        });
         sendResponse({ success: true, surveyData });
       } catch (e) {
         sendResponse({ success: false, error: e.message });
@@ -2226,7 +2228,114 @@
       return null;
     }
 
-    static parseQuestions(root = document) {
+    /**
+     * Discovers actual survey candidates on the page from forms, survey containers,
+     * links, and accessible labels, ranking them by survey viability.
+     */
+    static discoverSurveys(root = document) {
+      if (!root) return [];
+      const doc = root.ownerDocument || (root.nodeType === 9 ? root : document);
+      const candidates = [];
+      let candidateCounter = 1;
+
+      // Look for forms and survey containers
+      const containerSelectors = [
+        "form",
+        "[role='form']",
+        ".survey-container",
+        ".survey-form",
+        ".survey",
+        ".questionnaire",
+        "[data-survey]",
+        "[data-survey-id]",
+        "#survey",
+        "#questionnaire"
+      ];
+      const foundContainers = Array.from(root.querySelectorAll(containerSelectors.join(", ")));
+
+      for (const container of foundContainers) {
+        // Exclude nested containers if parent is already a survey form/container
+        if (container.parentElement && container.parentElement.closest && container.parentElement.closest("form, .survey-container, .survey-form, [data-survey]")) {
+          continue;
+        }
+
+        // Exclude authentication/login forms with passwords
+        const hasPassword = Boolean(container.querySelector('input[type="password"], input[name*="password" i], input[autocomplete*="password" i]'));
+        if (hasPassword) continue;
+
+        // Count interactive question inputs inside this container
+        const inputs = Array.from(container.querySelectorAll(
+          'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="reset"]), select, textarea, [role="radio"], [role="checkbox"], [role="slider"], [role="switch"]'
+        ));
+
+        // Skip pure search bars (single search input)
+        if (inputs.length === 1) {
+          const single = inputs[0];
+          if (single.type === "search" || /search|query|find|google/i.test(single.name || single.id || single.placeholder || "")) {
+            continue;
+          }
+        }
+
+        if (inputs.length === 0) continue;
+
+        // Extract candidate title or label
+        let title = "";
+        const titleEl = container.querySelector("legend, h1, h2, h3, h4, h5, h6, .survey-title, .title, .form-title");
+        if (titleEl) {
+          title = SurveyDOMEngine.cleanQuestionText(titleEl.innerText || titleEl.textContent);
+        }
+        if (!title && container.getAttribute("aria-label")) {
+          title = SurveyDOMEngine.cleanQuestionText(container.getAttribute("aria-label"));
+        }
+        if (!title && container.getAttribute("name")) {
+          title = container.getAttribute("name");
+        }
+        if (!title && container.id) {
+          title = container.id.replace(/[-_]/g, " ");
+        }
+        if (!title) {
+          title = `Survey ${candidateCounter}`;
+        }
+
+        const candidateId = container.id ? container.id : `survey-candidate-${candidateCounter++}`;
+        if (!container.id) {
+          container.setAttribute("data-sidekick-survey-id", candidateId);
+        }
+        const selector = container.id ? `#${CSS.escape(container.id)}` : `[data-sidekick-survey-id="${candidateId}"]`;
+
+        // Check for submit / next buttons within container or linked via form attribute
+        const buttons = Array.from(container.querySelectorAll('button, input[type="submit"], input[type="button"], [role="button"]'));
+        const hasSubmit = buttons.some((b) => /\b(?:submit|finish|done|complete)\b/i.test(b.innerText || b.textContent || b.value || ""));
+        const hasNext = buttons.some((b) => /\b(?:next|continue)\b/i.test(b.innerText || b.textContent || b.value || ""));
+
+        // Viability score
+        let score = inputs.length * 2;
+        const textLower = `${title} ${container.className || ""} ${container.id || ""}`.toLowerCase();
+        if (/\b(?:survey|questionnaire|feedback|poll|assessment|evaluation)\b/i.test(textLower)) {
+          score += 20;
+        }
+        if (hasSubmit) score += 10;
+        if (hasNext) score += 5;
+
+        candidates.push({
+          id: candidateId,
+          title,
+          element: container,
+          selector,
+          inputCount: inputs.length,
+          hasSubmit,
+          hasNext,
+          score,
+          isViable: inputs.length >= 1,
+        });
+      }
+
+      // Sort by viability score descending
+      candidates.sort((a, b) => b.score - a.score);
+      return candidates;
+    }
+
+    static parseQuestions(root = document, options = {}) {
       const questions = [];
       let questionCounter = 1;
       const processedElements = new Set();
@@ -2235,8 +2344,34 @@
       const humanVerification = SurveyDOMEngine.detectHumanVerification(root);
       const loadingState = SurveyDOMEngine.detectLoadingState(root);
 
+      // Target survey candidate resolution
+      let targetRoot = root;
+      let selectedSurveyCandidate = null;
+      let discoveredCandidates = [];
+
+      if (options.surveySelector) {
+        try {
+          const matched = (root.ownerDocument || document).querySelector(options.surveySelector);
+          if (matched) {
+            targetRoot = matched;
+            selectedSurveyCandidate = {
+              id: matched.id || "selected-survey",
+              selector: options.surveySelector,
+              element: matched,
+            };
+          }
+        } catch {}
+      } else if (root.nodeType === 9 || root.tagName === "BODY" || root.tagName === "HTML") {
+        discoveredCandidates = SurveyDOMEngine.discoverSurveys(root);
+        if (discoveredCandidates.length > 0) {
+          // Select highest-viability candidate deterministically
+          selectedSurveyCandidate = discoveredCandidates[0];
+          targetRoot = selectedSurveyCandidate.element;
+        }
+      }
+
       // 1. Scan for Likert & Rating Matrix Tables (Single-Select Radio Matrix)
-      const likertTables = Array.from(root.querySelectorAll("table.likert, table.matrix, table[role='grid'], table")).filter((tbl) => {
+      const likertTables = Array.from(targetRoot.querySelectorAll("table.likert, table.matrix, table[role='grid'], table")).filter((tbl) => {
         const radios = tbl.querySelectorAll('input[type="radio"], [role="radio"]');
         return radios.length >= 4;
       });
@@ -2778,7 +2913,13 @@
       }
 
       // 4. Scan Form Navigation Controls
-      const buttons = Array.from(root.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"], a.btn, a.button'));
+      const buttons = Array.from(targetRoot.querySelectorAll('button, input[type="button"], input[type="submit"], [role="button"], a.btn, a.button'));
+      if (targetRoot.id) {
+        const extButtons = Array.from((targetRoot.ownerDocument || document).querySelectorAll(`button[form="${CSS.escape(targetRoot.id)}"], input[form="${CSS.escape(targetRoot.id)}"]`));
+        for (const eb of extButtons) {
+          if (!buttons.includes(eb)) buttons.push(eb);
+        }
+      }
       let nextButton = null;
       let backButton = null;
       let submitButton = null;
@@ -2816,7 +2957,7 @@
         }
       }
 
-      const progressEl = root.querySelector(".progress, .progress-bar, [role='progressbar'], .survey-progress, .page-number");
+      const progressEl = targetRoot.querySelector ? targetRoot.querySelector(".progress, .progress-bar, [role='progressbar'], .survey-progress, .page-number") : root.querySelector(".progress, .progress-bar, [role='progressbar'], .survey-progress, .page-number");
       let progress = "";
       if (progressEl) {
         progress = SurveyDOMEngine.sanitize(progressEl.innerText || progressEl.textContent || progressEl.getAttribute("aria-valuenow") || "");
@@ -2830,7 +2971,7 @@
         ".survey-complete", ".confirmation-message", ".success-message",
         ".alert-success", "[role='status'].complete", ".done-message"
       ];
-      const compEl = root.querySelector ? root.querySelector(completionSelectors.join(", ")) : null;
+      const compEl = (targetRoot.querySelector ? targetRoot.querySelector(completionSelectors.join(", ")) : null) || (root.querySelector ? root.querySelector(completionSelectors.join(", ")) : null);
       const pageText = (root.body ? root.body.innerText || root.body.textContent : root.textContent || "").toLowerCase();
       const completionRegex = /\b(?:thank\s+you\s+for\s+(?:completing|taking|submitting|your)|your\s+response\s+has\s+been\s+recorded|survey\s+complete|submission\s+received|all\s+done!?|feedback\s+submitted)\b/i;
 
@@ -2857,6 +2998,8 @@
         isCompleted,
         completionMessage: completionMessage || (isCompleted ? "Survey completed and verified." : ""),
         completionEvidence: isCompleted ? { text: completionMessage || "Survey completed and verified.", url: currentUrl } : null,
+        selectedSurvey: selectedSurveyCandidate ? { id: selectedSurveyCandidate.id, title: selectedSurveyCandidate.title, selector: selectedSurveyCandidate.selector } : null,
+        surveyCandidates: discoveredCandidates.map((c) => ({ id: c.id, title: c.title, selector: c.selector, inputCount: c.inputCount, score: c.score })),
         humanVerification,
         loadingState,
       };

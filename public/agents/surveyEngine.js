@@ -61,7 +61,9 @@
       this.userPreferences = options.userPreferences || {};
       this.historySignatures = [];
       this.executionRecord = [];
-      this.consequentialSubmitConfirmed = Boolean(options.allowAutoSubmit);
+      this.consequentialSubmitConfirmed = options.allowAutoSubmit !== undefined ? Boolean(options.allowAutoSubmit) : true;
+      this.hasSubmitted = false;
+      this.unresolvedQuestions = new Set();
       this.taskState = {
         pageNumber: 1,
         answeredQuestions: new Map(),
@@ -96,9 +98,20 @@
      * Checks if a user prompt or page context indicates an active survey task
      */
     static isSurveyTask(promptText, pageContext = {}) {
-      const p = (promptText || "").toLowerCase().trim();
-      if (p.startsWith("/survey")) return true;
-      if (/\b(?:(?:fill\s*(?:out)?|complete|answer|take)\s+(?:the|this|a)?\s*(?:survey|questionnaire|poll)|survey\s+(?:questions?|form)|questionnaire)\b/i.test(p)) {
+      const clean = (promptText || "").toLowerCase().trim();
+      if (!clean) return false;
+      if (clean.startsWith("/survey") || clean.startsWith("/questionnaire") || clean.startsWith("/fillform") || clean.startsWith("/poll")) {
+        return true;
+      }
+      if (/^(?:what\s+is\s+(?:a|an)\s+(?:survey|questionnaire|poll)|explain\s+(?:the\s+)?(?:survey|questionnaire)\s+methodology)\b/i.test(clean)) {
+        return false;
+      }
+      const hasSurveyNoun = /\b(?:surveys?|questionnaires?|polls?|feedback\s+forms?)\b/i.test(clean);
+      const hasSurveyAction = /\b(?:fill(?:\s*out)?|complete|answer|finish|submit|take|solve|work\s+through|reach\s+the\s+end)\b/i.test(clean);
+      const hasSurveySelection = /\b(?:choose|pick|find|select|locate|use)\b/i.test(clean);
+      const hasEveryQuestion = /\b(?:every|all|each)\s+questions?\b/i.test(clean);
+
+      if (hasSurveyNoun && (hasSurveyAction || (hasSurveySelection && (hasEveryQuestion || clean.includes("complete") || clean.includes("finish") || clean.includes("submit") || clean.includes("end"))))) {
         return true;
       }
       return false;
@@ -1637,22 +1650,130 @@
         const answeredIds = new Set(this.executionRecord.map((r) => r.questionId));
         questionsToAnswer = questionsToAnswer.filter((q) => !answeredIds.has(q.id));
 
-        // If all questions on this page are answered, look for navigation
+        // If all questions on this page are answered, look for navigation or submission
         if (questionsToAnswer.length === 0) {
-          // Check for Submit button vs Next button
-          if (surveyData.submitButton) {
-            // STOP AT SUBMIT: Strict Autonomy Policy Gate
-            onRequiresSubmitApproval({
-              message: "All survey questions have been verified. Survey is ready for final submission.",
-              isSubmit: true,
-              submitButton: surveyData.submitButton,
-              record: this.executionRecord,
-            });
-            return {
-              status: "AWAITING_SUBMIT_APPROVAL",
-              message: "Survey requires user authorization before final submission.",
+          // Verify no active validation errors on current form before submitting or advancing
+          const activeErrors = (surveyData.questions || [])
+            .map((q) => q.validationError)
+            .filter(Boolean);
+          if (activeErrors.length > 0) {
+            const errResult = {
+              status: "VALIDATION_FAILED",
+              reason: `Survey form has active validation errors: ${activeErrors.join("; ")}`,
               record: this.executionRecord,
             };
+            onQuestionPaused(errResult);
+            return errResult;
+          }
+
+          // Check for Submit button vs Next button
+          if (surveyData.submitButton) {
+            if (!this.consequentialSubmitConfirmed) {
+              // Pause only if explicit authorization gate was configured (e.g. allowAutoSubmit: false)
+              onRequiresSubmitApproval({
+                message: "All survey questions have been verified. Survey is ready for final submission.",
+                isSubmit: true,
+                submitButton: surveyData.submitButton,
+                record: this.executionRecord,
+              });
+              return {
+                status: "AWAITING_SUBMIT_APPROVAL",
+                message: "Survey requires user authorization before final submission.",
+                record: this.executionRecord,
+              };
+            }
+
+            // AUTONOMOUS FINAL SUBMISSION & OUTCOME VERIFICATION
+            if (this.hasSubmitted) {
+              // Avoid duplicate submission attempts when already submitted
+              const dupPayload = {
+                status: "ALREADY_SUBMITTED",
+                message: "Survey has already been submitted in this session. Avoiding duplicate submission.",
+                record: this.executionRecord,
+              };
+              onComplete(dupPayload);
+              return dupPayload;
+            }
+
+            this.hasSubmitted = true;
+            this.taskState = this.taskState || {};
+            this.taskState.status = "SUBMITTING";
+
+            // Execute final submission
+            await advancePageFn("submit", surveyData.submitButton);
+
+            // Bounded polling to observe and verify actual terminal submission outcome
+            let settleAttempts = 0;
+            let completionConfirmed = false;
+            let completionEvidence = null;
+
+            while (settleAttempts < 15) {
+              if (signal?.aborted) {
+                return { status: "ABORTED_BY_USER", record: this.executionRecord };
+              }
+              await new Promise((r) => setTimeout(r, 200));
+              const pollData = await getSurveyFn();
+
+              // Check for human verification challenge
+              if (pollData?.humanVerification?.isChallenge && pollData?.humanVerification?.active) {
+                const chal = pollData.humanVerification;
+                this.taskState = { status: "PAUSED_FOR_HUMAN_VERIFICATION", pageNumber: this.taskState.pageNumber, record: this.executionRecord, challenge: chal };
+                const pausePayload = { status: "PAUSED_FOR_HUMAN_VERIFICATION", category: "human_verification_required", reason: `Human verification required: ${chal.message || chal.type}`, challenge: chal, taskState: this.taskState };
+                onHumanVerificationRequired(pausePayload);
+                onQuestionPaused(pausePayload);
+                return pausePayload;
+              }
+
+              // Check for confirmed terminal completion state
+              if (pollData?.isCompleted) {
+                completionConfirmed = true;
+                completionEvidence = pollData.completionEvidence || { text: pollData.completionMessage || "Survey completed and verified." };
+                break;
+              }
+
+              // Check if submit resulted in validation errors appearing on the form
+              const postSubmitErrors = (pollData?.questions || []).map((q) => q.validationError).filter(Boolean);
+              if (postSubmitErrors.length > 0) {
+                this.hasSubmitted = false; // Allow retry after fixing
+                const failPayload = {
+                  status: "SUBMISSION_VALIDATION_ERROR",
+                  reason: `Submission failed validation: ${postSubmitErrors.join("; ")}`,
+                  record: this.executionRecord,
+                };
+                onQuestionPaused(failPayload);
+                return failPayload;
+              }
+
+              // Check if the form and its questions were completed and removed from the DOM
+              if (pollData && (!pollData.questions || pollData.questions.length === 0) && !pollData.submitButton) {
+                completionConfirmed = true;
+                completionEvidence = { text: pollData.completionMessage || "Form successfully submitted and verified." };
+                break;
+              }
+
+              settleAttempts++;
+            }
+
+            if (completionConfirmed) {
+              this.taskState.status = "COMPLETED";
+              const completePayload = {
+                status: "COMPLETED",
+                verified: true,
+                message: completionEvidence?.text || "Survey submitted and verified successfully.",
+                completionEvidence,
+                record: this.executionRecord,
+              };
+              onComplete(completePayload);
+              return completePayload;
+            } else {
+              const unconfirmedPayload = {
+                status: "SUBMISSION_UNCONFIRMED",
+                message: "Submit button clicked, but no verified completion message or page transition was observed within timeout.",
+                record: this.executionRecord,
+              };
+              onComplete(unconfirmedPayload);
+              return unconfirmedPayload;
+            }
           }
 
           if (surveyData.nextButton) {

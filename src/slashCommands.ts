@@ -180,11 +180,11 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     aliases: ["/questionnaire", "/fillform", "/poll"],
     tier: 2,
     tierLabel: "Tier 2: Action, Data & Audio",
-    syntax: "/survey [auto | review | profile]",
-    description: "Autonomously answer survey questions with verified control selection",
+    syntax: "/survey [resume | scan | auto | review]",
+    description: "Autonomously discover, answer, and complete surveys with verified control selection",
     category: "Browser Action",
-    example: "/survey auto",
-    argSuggestions: ["auto", "review", "profile"]
+    example: "/survey",
+    argSuggestions: ["auto", "resume", "scan", "review"]
   },
   {
     id: "extract",
@@ -383,18 +383,7 @@ export const SLASH_COMMANDS: SlashCommandDef[] = [
     description: "Autonomous click-to-cancel roach motel navigator",
     category: "Browser Action",
     example: "/cancel"
-  },
-  {
-    id: "survey",
-    name: "/survey",
-    aliases: ["/questionnaire", "/fillform"],
-    tier: 2,
-    tierLabel: "Tier 2: Action, Data & Audio",
-    syntax: "/survey [resume | scan]",
-    description: "Adaptive survey answering with state verification & CAPTCHA handling",
-    category: "Browser Action",
-    example: "/survey",
-    argSuggestions: ["resume", "scan"]
+
   },
   {
     id: "denylist",

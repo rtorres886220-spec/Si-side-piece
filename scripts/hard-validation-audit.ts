@@ -59,12 +59,12 @@ async function auditSection1_Claims() {
 
   const claimResults: Record<string, { verified: boolean; evidence: string }> = {};
 
-  // Claim 1: gemini-3.1-flash-lite is actually the primary model
+  // Claim 1: gemini-3.5-flash-lite is actually the primary model
   const serverCode = fs.readFileSync("server.ts", "utf8");
   const sidepanelCode = fs.readFileSync("public/sidepanel.js", "utf8");
-  const serverHasPrimary = serverCode.includes("'gemini-3.1-flash-lite'");
-  const sidepanelHasPrimary = sidepanelCode.includes('"gemini-3.1-flash-lite"');
-  claimResults["Primary Model is gemini-3.1-flash-lite"] = {
+  const serverHasPrimary = serverCode.includes("'gemini-3.5-flash-lite'");
+  const sidepanelHasPrimary = sidepanelCode.includes('"gemini-3.5-flash-lite"');
+  claimResults["Primary Model is gemini-3.5-flash-lite"] = {
     verified: serverHasPrimary && sidepanelHasPrimary,
     evidence: `Verified in server.ts (${serverHasPrimary}) and public/sidepanel.js (${sidepanelHasPrimary}) source code.`,
   };
@@ -720,7 +720,7 @@ async function auditSection11_FallbackCascade() {
   console.log("AUDIT SECTION 11: TEST THE FALLBACK CASCADE");
   console.log("==================================================");
 
-  console.log("Cascade Order: gemini-3.5-flash-lite -> gemini-3.1-flash-lite -> gemini-flash-latest");
+  console.log("Cascade Order: gemini-3.5-flash-lite -> gemini-3.1-flash-lite");
   console.log("Trigger Conditions:");
   console.log("- HTTP 503 (High Demand / Overloaded): Cascades immediately");
   console.log("- HTTP 429 (Resource Exhausted / Free Tier RPM): Bounded backoff retry, then cascades");

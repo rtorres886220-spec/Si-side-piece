@@ -12,7 +12,6 @@ const STORAGE_KEY_PROXY_URL = "gemini_sidekick_proxy_url";
 // Configuration
 const DEFAULT_MODEL = "gemini-3.5-flash-lite";
 const FALLBACK_MODEL = "gemini-3.1-flash-lite";
-const LATEST_FLASH_MODEL = "gemini-flash-latest";
 const API_KEY_VERIFY_TIMEOUT_MS = 10000; // 10-second bounded verification deadline per request
 
 // Structured Verification Error Categories
@@ -599,7 +598,7 @@ async function init() {
   state.proxyUrl = (saved[STORAGE_KEY_PROXY_URL] || "").trim().replace(/\/+$/, "");
   state.customAssistantName = saved.si_custom_assistant_name || "";
   let loadedModel = saved[STORAGE_KEY_MODEL] || DEFAULT_MODEL;
-  if (loadedModel !== DEFAULT_MODEL && loadedModel !== FALLBACK_MODEL && loadedModel !== LATEST_FLASH_MODEL) {
+  if (loadedModel !== DEFAULT_MODEL && loadedModel !== FALLBACK_MODEL) {
     loadedModel = DEFAULT_MODEL;
     await storage.set({ [STORAGE_KEY_MODEL]: DEFAULT_MODEL });
   }
@@ -2657,7 +2656,7 @@ const SLASH_COMMANDS = [
   { id: "fill", name: "/fill", aliases: ["/type", "/input"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/fill <field name> = <value>", desc: "Type into inputs via CDP key events", example: "/fill Search = Headphones", requiresArg: true },
   { id: "scroll", name: "/scroll", aliases: [], tier: 2, tierLabel: "Tier 2: Action", syntax: "/scroll [top | bottom | half]", desc: "Scroll page viewport smoothly", example: "/scroll bottom" },
   { id: "fillcart", name: "/fillcart", aliases: ["/checkout-prep"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/fillcart", desc: "Select options and add to cart", example: "/fillcart" },
-  { id: "survey", name: "/survey", aliases: ["/questionnaire", "/fillform", "/poll"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/survey [auto | review | profile]", desc: "Autonomously answer survey questions with verified control selection", example: "/survey auto" },
+  { id: "survey", name: "/survey", aliases: ["/questionnaire", "/fillform", "/poll"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/survey [resume | scan | auto | review]", desc: "Autonomously discover, answer, and complete surveys with verified control selection", example: "/survey" },
   { id: "extract", name: "/extract", aliases: ["/scrape", "/parse"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/extract [table | links | emails | pricing | json]", desc: "Extract tables, links, or JSON", example: "/extract table" },
   { id: "reply", name: "/reply", aliases: ["/respond", "/draft"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/reply [agree | disagree | professional | concise]", desc: "Draft contextual email or PR reply", example: "/reply professional" },
   { id: "model", name: "/model", aliases: [], tier: 2, tierLabel: "Tier 2: Action", syntax: "/model [flash | pro]", desc: "Switch between Flash and Pro", example: "/model pro" },
@@ -2677,7 +2676,6 @@ const SLASH_COMMANDS = [
   { id: "sludge-audit", name: "/sludge-audit", aliases: ["/sludge", "/predatory-audit"], tier: 3, tierLabel: "Tier 3: Security", syntax: "/sludge-audit", desc: "Audit page for hidden fees & asymmetric UI", example: "/sludge-audit" },
   { id: "disinfect", name: "/disinfect", aliases: ["/clean-cart", "/uncheck-fees"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/disinfect", desc: "Instantly uncheck hidden fees & predatory toggles", example: "/disinfect" },
   { id: "cancel", name: "/cancel", aliases: ["/click-to-cancel", "/unsubscribe-now"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/cancel", desc: "Autonomous click-to-cancel roach motel navigator", example: "/cancel" },
-  { id: "survey", name: "/survey", aliases: ["/questionnaire", "/fillform"], tier: 2, tierLabel: "Tier 2: Action", syntax: "/survey [resume | scan]", desc: "Dynamic adaptive survey answering with state verification & CAPTCHA handling", example: "/survey" },
   { id: "denylist", name: "/denylist", aliases: ["/block"], tier: 3, tierLabel: "Tier 3: Tech", syntax: "/denylist [add | remove | check]", desc: "Manage domain automation blocklist", example: "/denylist check" }
 ];
 
@@ -3622,18 +3620,70 @@ async function handleSlashCommand(fullCommand) {
     await submitPrompt("Find the primary purchase or add-to-cart action on this page and proceed.");
     return;
   }
-async function handleSurveyWorkflowExecution(argOrPrompt) {
-  const isResume = typeof argOrPrompt === "string" && argOrPrompt.trim().toLowerCase() === "resume";
-  const userPromptText = isResume ? "" : (argOrPrompt || "");
-
-  if (!checkDomainAllowed(state.activeTabUrl)) {
-    renderAssistantPlainMessage(`Security Lock: Survey answering is strictly prohibited on sensitive domain.`);
+  if (commandId === "survey") {
+    const isReview = typeof arg === "string" && arg.trim().toLowerCase() === "review";
+    await handleSurveyWorkflowExecution(arg, { reviewMode: isReview });
+    return;
+  }
+  if (commandId === "curl") {
+    await submitPrompt("Generate curl commands for API requests based on documentation on this page.");
+    return;
+  }
+  if (commandId === "inspect") {
+    const elList = state.pageContext.interactiveElements || [];
+    const matched = resolveElementCoordinates({ element_description: arg }, elList);
+    if (matched) {
+      renderAssistantPlainMessage(`🔍 Inspected Element: "${matched.label}"\n• Role: ${matched.role}\n• Selector: \`${matched.selector}\`\n• Viewport Coords: (${matched.x}, ${matched.y})`);
+    } else {
+      renderAssistantPlainMessage(`Could not find an element matching "${arg}" to inspect.`);
+    }
     return;
   }
 
-  const targetTabId = state.activeTabId;
+  // CATCH-ALL: Prevent infinite loop for unsupported commands
+  renderAssistantPlainMessage(`The command "/${cmd.replace(/^\//, "")}" is not currently supported or implemented.`);
+  return;
+}
+
+/**
+ * Fully Autonomous Survey Workflow Execution Engine
+ * Handles discovery, selection, inspection, question processing, navigation, and submission
+ * without blocking interactive approval/denial gates.
+ */
+async function handleSurveyWorkflowExecution(argOrPrompt, options = {}) {
+  const isResume = typeof argOrPrompt === "string" && argOrPrompt.trim().toLowerCase() === "resume";
+  const userPromptText = isResume ? "" : (argOrPrompt || "");
+
+  // Resolve target tab: if a managed tab group is active, resolve the active tab within the group
+  let targetTabId = state.activeTabId;
+  if (state.tabGroup?.isConfigured && state.tabGroup?.groupId) {
+    const groupTabs = state.tabGroup.tabs || [];
+    const activeGroupTab = groupTabs.find((t) => t.active) || groupTabs[0];
+    if (activeGroupTab && activeGroupTab.id) {
+      targetTabId = activeGroupTab.id;
+      state.activeTabId = targetTabId;
+    }
+  }
+  if (!targetTabId && typeof chrome !== "undefined" && chrome.tabs) {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      if (tabs && tabs[0]?.id) {
+        targetTabId = tabs[0].id;
+        state.activeTabId = targetTabId;
+      }
+    } catch {}
+  }
+
   if (!targetTabId) {
     renderAssistantPlainMessage("Target tab inaccessible.");
+    return;
+  }
+
+  // Refresh and extract live page context for the target tab
+  await extractContext(targetTabId);
+
+  if (!checkDomainAllowed(state.activeTabUrl)) {
+    renderAssistantPlainMessage(`Security Lock: Survey answering is strictly prohibited on sensitive domain.`);
     return;
   }
 
@@ -3641,7 +3691,7 @@ async function handleSurveyWorkflowExecution(argOrPrompt) {
   const getSurveyFn = async () => {
     return new Promise((res) => {
       let finished = false;
-      chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY" }, { frameId: 0 }, (r) => {
+      chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY", surveySelector: options.surveySelector }, { frameId: 0 }, (r) => {
         if (finished) return;
         finished = true;
         const _ = chrome.runtime.lastError;
@@ -3651,7 +3701,7 @@ async function handleSurveyWorkflowExecution(argOrPrompt) {
         if (finished) return;
         finished = true;
         res(null);
-      }, 1200);
+      }, 2500);
     });
   };
 
@@ -3686,7 +3736,7 @@ async function handleSurveyWorkflowExecution(argOrPrompt) {
           errorType: "TIMEOUT",
           error: "Interaction timed out awaiting content script response",
         });
-      }, 1500);
+      }, 2500);
     });
   };
 
@@ -3707,7 +3757,7 @@ async function handleSurveyWorkflowExecution(argOrPrompt) {
         if (finished) return;
         finished = true;
         res(null);
-      }, 1500);
+      }, 2500);
     });
   };
 
@@ -3738,7 +3788,7 @@ async function handleSurveyWorkflowExecution(argOrPrompt) {
           errorType: "TIMEOUT",
           error: "Page advance timed out",
         });
-      }, 2000);
+      }, 3000);
     });
   };
 
@@ -3763,6 +3813,9 @@ async function handleSurveyWorkflowExecution(argOrPrompt) {
       } else if (pauseInfo.category === "file_upload_required") {
         renderAgentStepBadge("Paused: File upload required", false);
         renderAssistantPlainMessage(`📎 **File Upload Required:**\n${pauseInfo.reason}\n\nPlease select and upload your file in the browser tab.`);
+      } else if (pauseInfo.status === "VALIDATION_FAILED" || pauseInfo.status === "SUBMISSION_VALIDATION_ERROR") {
+        renderAgentStepBadge("Validation Error", false);
+        renderAssistantPlainMessage(`⚠️ **Form Validation Blocked:** ${pauseInfo.reason}`);
       } else {
         renderAgentStepBadge(`Paused: ${pauseInfo.status}`, false);
         renderAssistantPlainMessage(`⏸️ **Survey Paused:** ${pauseInfo.reason || pauseInfo.status}`);
@@ -3777,28 +3830,23 @@ async function handleSurveyWorkflowExecution(argOrPrompt) {
       renderAssistantPlainMessage(`➡️ Advanced to next survey page.`);
     },
     onRequiresSubmitApproval: async ({ submitButton }) => {
-      renderAgentStepBadge("Awaiting Submit Authorization", true);
-      const approved = await requestSafetyApproval("click_element", {
-        element_description: "Submit Completed Survey Form",
-        selector: submitButton.selector,
-      }, 99);
-
-      if (approved) {
-        await executeJITAction("click_element", { selector: submitButton.selector });
-        renderAgentStepBadge("Survey Submitted [Authorized]", true);
-        renderAssistantPlainMessage("🎉 **Survey Submitted Successfully!** All answers verified.");
-      } else {
-        renderAgentStepBadge("Submission Paused by User", false);
-        renderAssistantPlainMessage("⏸️ **Survey Submission Paused:** Form is completely filled and verified, but submit was held for user review.");
-      }
+      // Ordinary execution submits autonomously without blocking modal
+      renderAgentStepBadge("Submitting Completed Survey", true);
+      await advancePageFn("submit", submitButton);
     },
-    onComplete: ({ record, completionEvidence, status }) => {
+    onComplete: ({ record, completionEvidence, status, message }) => {
       if (status === "ABORTED_BY_USER") {
         renderAgentStepBadge("Survey Aborted by User", false);
         renderAssistantPlainMessage("🛑 Survey execution stopped by user.");
-      } else {
+      } else if (status === "ALREADY_SUBMITTED") {
+        renderAgentStepBadge("Survey Already Submitted", true);
+        renderAssistantPlainMessage("ℹ️ Survey was already submitted in this session. Avoiding duplicate submission.");
+      } else if (status === "COMPLETED" || status === "SURVEY_COMPLETED") {
         renderAgentStepBadge(`Survey Completed (${record?.length || 0} questions answered)`, true);
-        renderAssistantPlainMessage(`✅ **Survey Session Complete:** Answered and verified ${record?.length || 0} question(s).${completionEvidence ? ` Confirmation: "${completionEvidence.text?.slice(0, 100)}"` : ""}`);
+        renderAssistantPlainMessage(`🎉 **Survey Completed & Verified:** Answered and verified ${record?.length || 0} question(s).${completionEvidence ? ` Confirmation: "${completionEvidence.text?.slice(0, 100)}"` : ""}`);
+      } else {
+        renderAgentStepBadge(`Survey: ${status}`, true);
+        renderAssistantPlainMessage(message || `Survey session ended with status: ${status}`);
       }
     }
   });
@@ -3835,36 +3883,55 @@ async function handleSurveyWorkflowExecution(argOrPrompt) {
   renderAssistantPlainMessage("📋 Scanning page for survey questions and controls...", "system");
 
   try {
-    await extractContext();
-
-    // Request live survey parsing from content script
-    const parseResponse = await new Promise((res) => {
-      chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY" }, { frameId: 0 }, (r) => {
-        const _ = chrome.runtime.lastError;
-        res(r?.surveyData);
+    // Bounded polling for live survey parsing to handle delayed rendering gracefully
+    let surveyData = null;
+    let scanAttempts = 0;
+    while (scanAttempts < 3) {
+      scanAttempts++;
+      const parseResponse = await new Promise((res) => {
+        chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY", surveySelector: options.surveySelector }, { frameId: 0 }, (r) => {
+          const _ = chrome.runtime.lastError;
+          res(r?.surveyData);
+        });
+        setTimeout(() => res(null), 1000);
       });
-      setTimeout(() => res(null), 600);
-    });
+      surveyData = parseResponse || state.pageContext?.surveyData;
+      if (surveyData && (surveyData.questions?.length > 0 || surveyData.humanVerification?.isChallenge || surveyData.isCompleted)) {
+        break;
+      }
+      if (scanAttempts < 3) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
 
-    const surveyData = parseResponse || state.pageContext?.surveyData;
     if (!surveyData || !Array.isArray(surveyData.questions) || surveyData.questions.length === 0) {
       if (surveyData?.humanVerification?.isChallenge && surveyData?.humanVerification?.active) {
         renderAgentStepBadge("Human Verification Interstitial Detected", false);
         renderAssistantPlainMessage(`🛡️ **Human Verification Challenge Detected:**\n\nA CAPTCHA or verification challenge (\`${surveyData.humanVerification.type}\`) is blocking the page. Please complete it manually in the browser tab, then type \`/survey\` to proceed.`);
         return;
       }
+      if (surveyData?.isCompleted) {
+        renderAgentStepBadge("Survey Already Completed", true);
+        renderAssistantPlainMessage(`✅ **Survey Already Complete:** ${surveyData.completionMessage || "Thank you page detected."}`);
+        return;
+      }
       renderAssistantPlainMessage("ℹ️ No active survey questions, forms, or questionnaires detected on this page.");
       return;
     }
 
-    renderAssistantPlainMessage(`Found **${surveyData.questions.length} survey question(s)** on active page. Initializing Question-by-Question State Machine...`);
+    if (surveyData.surveyCandidates && surveyData.surveyCandidates.length > 1) {
+      renderAssistantPlainMessage(`Found **${surveyData.surveyCandidates.length} surveys** on active tab. Selected primary candidate **"${surveyData.selectedSurvey?.title || 'Survey 1'}"** with ${surveyData.questions.length} questions to complete autonomously.`);
+    } else {
+      renderAssistantPlainMessage(`Found **${surveyData.questions.length} survey question(s)** on active page. Initializing Question-by-Question State Machine...`);
+    }
 
     // Load user profile & preferences from storage
     const storage = await chrome.storage.local.get(["sidekickUserProfile", "sidekickUserPreferences"]);
     const userProfile = storage.sidekickUserProfile || {};
     const userPreferences = storage.sidekickUserPreferences || {};
 
-    const engine = new SurveyEngine({ userProfile, userPreferences });
+    const allowAutoSubmit = options.reviewMode ? false : true;
+    const engine = new SurveyEngine({ userProfile, userPreferences, allowAutoSubmit });
     state.activeSurveyEngine = engine;
 
     const workflowResult = await engine.processSurveyWorkflow(
@@ -3885,30 +3952,6 @@ async function handleSurveyWorkflowExecution(argOrPrompt) {
   } finally {
     setBusyState(false);
   }
-}
-
-  if (commandId === "survey") {
-    await handleSurveyWorkflowExecution(arg);
-    return;
-  }
-  if (commandId === "curl") {
-    await submitPrompt("Generate curl commands for API requests based on documentation on this page.");
-    return;
-  }
-  if (commandId === "inspect") {
-    const elList = state.pageContext.interactiveElements || [];
-    const matched = resolveElementCoordinates({ element_description: arg }, elList);
-    if (matched) {
-      renderAssistantPlainMessage(`🔍 Inspected Element: "${matched.label}"\n• Role: ${matched.role}\n• Selector: \`${matched.selector}\`\n• Viewport Coords: (${matched.x}, ${matched.y})`);
-    } else {
-      renderAssistantPlainMessage(`Could not find an element matching "${arg}" to inspect.`);
-    }
-    return;
-  }
-
-  // CATCH-ALL: Prevent infinite loop for unsupported commands
-  renderAssistantPlainMessage(`The command "/${cmd.replace(/^\//, "")}" is not currently supported or implemented.`);
-  return;
 }
 
 /**
@@ -6384,7 +6427,6 @@ if (typeof module !== "undefined" && module.exports) {
     storage,
     DEFAULT_MODEL,
     FALLBACK_MODEL,
-    LATEST_FLASH_MODEL,
     API_KEY_VERIFY_TIMEOUT_MS,
     state
   };
