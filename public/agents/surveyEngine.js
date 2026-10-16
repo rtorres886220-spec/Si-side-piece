@@ -1699,8 +1699,18 @@
             this.taskState = this.taskState || {};
             this.taskState.status = "SUBMITTING";
 
-            // Execute final submission
-            await advancePageFn("submit", surveyData.submitButton);
+            // Execute final submission and validate actual return result
+            const submitRes = await advancePageFn("submit", surveyData.submitButton);
+            if (submitRes && submitRes.success === false) {
+              this.hasSubmitted = false;
+              const failPayload = {
+                status: "SUBMISSION_FAILED",
+                reason: `Submission action failed: ${submitRes.error || "Action execution error"}`,
+                record: this.executionRecord,
+              };
+              onQuestionPaused(failPayload);
+              return failPayload;
+            }
 
             // Bounded polling to observe and verify actual terminal submission outcome
             let settleAttempts = 0;
@@ -1724,7 +1734,7 @@
                 return pausePayload;
               }
 
-              // Check for confirmed terminal completion state
+              // Check for confirmed terminal completion state with credible evidence
               if (pollData?.isCompleted) {
                 completionConfirmed = true;
                 completionEvidence = pollData.completionEvidence || { text: pollData.completionMessage || "Survey completed and verified." };
@@ -1742,13 +1752,6 @@
                 };
                 onQuestionPaused(failPayload);
                 return failPayload;
-              }
-
-              // Check if the form and its questions were completed and removed from the DOM
-              if (pollData && (!pollData.questions || pollData.questions.length === 0) && !pollData.submitButton) {
-                completionConfirmed = true;
-                completionEvidence = { text: pollData.completionMessage || "Form successfully submitted and verified." };
-                break;
               }
 
               settleAttempts++;

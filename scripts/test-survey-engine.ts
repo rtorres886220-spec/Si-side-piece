@@ -1563,6 +1563,107 @@ async function runSurveyTestSuite() {
     assert(retryCount === 1, "Test J: Policy error halted immediately with zero redundant retries");
   }
 
+  // --- TEST K — Failed submission (advancePageFn success: false) ---
+  console.log("\n--- [TEST K] Failed submission handling ---");
+  {
+    const html = `
+      <form id="f">
+        <div class="question">
+          <label><input type="radio" name="q" value="1" checked> Yes</label>
+        </div>
+        <button type="submit">Submit</button>
+      </form>
+    `;
+    const env = createVirtualEnvironment(html);
+    const parsed = env.SurveyDOMEngine.parseQuestions(env.document);
+    const engine = new env.SurveyEngine();
+
+    const res = await engine.processSurveyWorkflow(
+      async () => parsed,
+      async () => ({ success: true, verified: true }),
+      async () => ({ options: [{ checked: true }] }),
+      async () => ({ success: false, advanced: false, error: "Network timeout on submit" }),
+      {
+        promptText: "/survey",
+        allowAutoSubmit: true,
+      }
+    );
+
+    assert(res.status === "SUBMISSION_FAILED", "Test K: Failed submission correctly caught and returns SUBMISSION_FAILED");
+    assert(res.status !== "COMPLETED", "Test K: Failed submission never produces false-positive COMPLETED status");
+  }
+
+  // --- TEST L — Missing parser responses & robust recovery ---
+  console.log("\n--- [TEST L] Missing parser responses and robust recovery ---");
+  {
+    const html = `<div class="question"><label><input type="radio" name="r" value="1"> 1</label></div>`;
+    const env = createVirtualEnvironment(html);
+    const engine = new env.SurveyEngine();
+
+    let pollCount = 0;
+    const res = await engine.processSurveyWorkflow(
+      async () => {
+        pollCount++;
+        if (pollCount === 1) return null; // simulate transient null/timeout
+        return env.SurveyDOMEngine.parseQuestions(env.document);
+      },
+      async () => ({ success: true, verified: true }),
+      async () => ({ options: [{ checked: true }] }),
+      async () => ({ advanced: true }),
+      { promptText: "Choose 1", allowAutoSubmit: true }
+    );
+
+    assert(res.status === "COMPLETED" || res.status === "SURVEY_COMPLETED", "Test L: Recovered from initial missing/null parser response and successfully completed survey");
+  }
+
+  // --- TEST M — False completion prevention (empty questions without isCompleted) ---
+  console.log("\n--- [TEST M] False completion prevention on empty question list ---");
+  {
+    const html = `<div id="empty">No questions here</div>`;
+    const env = createVirtualEnvironment(html);
+    const engine = new env.SurveyEngine();
+
+    const res = await engine.processSurveyWorkflow(
+      async () => env.SurveyDOMEngine.parseQuestions(env.document),
+      async () => ({ success: true }),
+      async () => null,
+      async () => ({ advanced: true })
+    );
+
+    assert(res.status === "NO_QUESTIONS_FOUND", "Test M: Empty question list without isCompleted does NOT produce false completion status");
+  }
+
+  // --- TEST N — Multiple survey candidates locking & prompt intent matching ---
+  console.log("\n--- [TEST N] Multiple candidates, candidate locking & prompt intent matching ---");
+  {
+    const html = `
+      <div id="survey1" class="survey-container">
+        <h3>Primary Customer Feedback Survey</h3>
+        <div class="question">
+          <label><input type="radio" name="feedback" value="great"> Great</label>
+        </div>
+        <button type="submit">Submit Feedback</button>
+      </div>
+      <div id="survey2" class="survey-container">
+        <h3>Secondary Newsletter Signup</h3>
+        <input type="text" name="email" placeholder="Email">
+      </div>
+    `;
+    const env = createVirtualEnvironment(html);
+    const candidates = env.SurveyDOMEngine.discoverSurveys(env.document);
+    assert(candidates.length >= 2, "Test N: Discovered multiple survey candidates");
+    assert(candidates[0].id === "survey1", "Test N: Primary survey candidate correctly prioritized by viability score");
+
+    // Test prompt intent matcher for exact requested strings
+    const prompt1 = "choose any survey from the page and answer every question till survey is complete";
+    const prompt2 = "/survey";
+    const nonSurveyPrompt = "write a python script to sort an array and explain time complexity";
+
+    assert(env.SurveyEngine.isSurveyTask(prompt1) === true, "Test N: Intent matcher recognizes 'choose any survey...'");
+    assert(env.SurveyEngine.isSurveyTask(prompt2) === true, "Test N: Intent matcher recognizes '/survey'");
+    assert(env.SurveyEngine.isSurveyTask(nonSurveyPrompt) === false, "Test N: Non-survey prompt correctly rejected by survey intent matcher (regression test)");
+  }
+
   // =========================================================================
   // COMPREHENSIVE METRICS SUMMARY REPORT
   // =========================================================================

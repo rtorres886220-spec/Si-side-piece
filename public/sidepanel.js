@@ -3688,10 +3688,11 @@ async function handleSurveyWorkflowExecution(argOrPrompt, options = {}) {
   }
 
   // Storage and helper functions setup - Strict zero fake-successes
+  let lockedSurveySelector = options.surveySelector;
   const getSurveyFn = async () => {
     return new Promise((res) => {
       let finished = false;
-      chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY", surveySelector: options.surveySelector }, { frameId: 0 }, (r) => {
+      chrome.tabs.sendMessage(targetTabId, { action: "PARSE_SURVEY", surveySelector: lockedSurveySelector }, { frameId: 0 }, (r) => {
         if (finished) return;
         finished = true;
         const _ = chrome.runtime.lastError;
@@ -3917,6 +3918,10 @@ async function handleSurveyWorkflowExecution(argOrPrompt, options = {}) {
       }
       renderAssistantPlainMessage("ℹ️ No active survey questions, forms, or questionnaires detected on this page.");
       return;
+    }
+
+    if (surveyData.selectedSurvey?.selector) {
+      lockedSurveySelector = surveyData.selectedSurvey.selector;
     }
 
     if (surveyData.surveyCandidates && surveyData.surveyCandidates.length > 1) {
