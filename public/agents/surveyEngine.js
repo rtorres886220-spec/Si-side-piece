@@ -1114,11 +1114,11 @@
         const postState = await verifyStateFn(question.id);
         const verified = Boolean(
           postState && (String(postState.value) === String(matchPlan.desiredValue) || (postState.options?.[0]?.value && String(postState.options[0].value) === String(matchPlan.desiredValue)))
-        ) || (res?.success && res?.verified);
+        );
         return {
           success: verified,
           verified,
-          reason: verified ? "Slider updated" : `Slider value mismatch`,
+          reason: verified ? "Slider updated and verified" : `Slider value mismatch (expected ${matchPlan.desiredValue})`,
           outcome: verified ? "slider_verified" : "verification_failed",
         };
       }
@@ -1133,11 +1133,11 @@
           questionId: question.id,
         });
         const postState = await verifyStateFn(question.id);
-        const verified = Boolean(postState && String(postState.value) === String(matchPlan.desiredValue)) || (res?.success && res?.verified);
+        const verified = Boolean(postState && String(postState.value) === String(matchPlan.desiredValue));
         return {
           success: verified,
           verified,
-          reason: verified ? "Number updated" : "Number interaction mismatch",
+          reason: verified ? "Number updated and verified" : "Number interaction mismatch",
           outcome: verified ? "numeric_verified" : "verification_failed",
         };
       }
@@ -1152,11 +1152,11 @@
           questionId: question.id,
         });
         const postState = await verifyStateFn(question.id);
-        const verified = Boolean(postState && String(postState.value) === String(matchPlan.desiredValue)) || (res?.success && res?.verified);
+        const verified = Boolean(postState && String(postState.value) === String(matchPlan.desiredValue));
         return {
           success: verified,
           verified,
-          reason: verified ? "Date updated" : "Date interaction mismatch",
+          reason: verified ? "Date updated and verified" : "Date interaction mismatch",
           outcome: verified ? "date_verified" : "verification_failed",
         };
       }
@@ -1172,22 +1172,48 @@
         });
         const postState = await verifyStateFn(question.id);
         const opt = postState?.options?.find((o) => o.id === target.id) || postState?.options?.[0];
-        const isChecked = Boolean(opt?.checked || res?.checked);
-        const verified = isChecked === matchPlan.desiredChecked;
+        const isChecked = opt !== undefined && opt !== null ? Boolean(opt.checked) : null;
+        const verified = isChecked !== null && isChecked === matchPlan.desiredChecked;
         return {
           success: verified,
           verified,
-          reason: verified ? "Switch toggled" : "Switch toggle mismatch",
+          reason: verified ? "Switch toggled and verified" : "Switch toggle mismatch in live DOM state",
           outcome: verified ? "switch_verified" : "verification_failed",
         };
       }
 
       // 5. RANKING EXECUTION
       if (matchPlan.type === "ranking") {
+        const targetControls = matchPlan.targetControls || [];
+        const hasRankInputs = targetControls.some(c => c.type === "select" || c.type === "number");
+        if (hasRankInputs) {
+          let allSuccess = true;
+          for (let i = 0; i < targetControls.length; i++) {
+            const ctrl = targetControls[i];
+            const desiredRank = i + 1;
+            const r = await executeActionFn({
+              action: ctrl.type === "select" ? "select_option" : "set_number",
+              selector: ctrl.selector,
+              value: desiredRank,
+              questionId: question.id,
+            });
+            if (!r || r.success === false) allSuccess = false;
+          }
+          const postState = await verifyStateFn(question.id);
+          const verified = Boolean(allSuccess && postState);
+          return {
+            success: verified,
+            verified,
+            reason: verified ? "Ranking inputs updated and verified" : "Ranking inputs verification failed",
+            outcome: verified ? "ranking_verified" : "verification_failed",
+          };
+        }
         return {
-          success: true,
-          verified: true,
-          outcome: "ranking_verified",
+          success: false,
+          verified: false,
+          outcome: "unsupported_widget",
+          reason: "Drag-and-drop ranking question requires manual reordering in browser tab",
+          requiresUserInput: true,
         };
       }
 
@@ -1599,56 +1625,112 @@
         }
 
         if (!surveyData || !Array.isArray(surveyData.questions) || surveyData.questions.length === 0) {
-          if (surveyData?.isCompleted || this.executionRecord.length > 0) {
-            onComplete({ status: "SURVEY_COMPLETED", verified: true, message: surveyData?.completionMessage || "Survey finished; no remaining questions.", record: this.executionRecord });
-            return { status: "SURVEY_COMPLETED", verified: true, message: surveyData?.completionMessage || "Survey finished; no remaining questions.", record: this.executionRecord };
+          if (surveyData?.isCompleted) {
+            onComplete({ status: "SURVEY_COMPLETED", verified: true, message: surveyData?.completionMessage || "Survey finished; verified completion.", record: this.executionRecord });
+            return { status: "SURVEY_COMPLETED", verified: true, message: surveyData?.completionMessage || "Survey finished; verified completion.", record: this.executionRecord };
           }
-          onComplete({ status: "NO_QUESTIONS_FOUND", message: "No active survey questions found on page." });
-          return { status: "NO_QUESTIONS_FOUND" };
+          if (this.hasSubmitted) {
+            onComplete({ status: "SURVEY_COMPLETED", verified: true, message: "Survey submission verified.", record: this.executionRecord });
+            return { status: "SURVEY_COMPLETED", verified: true, message: "Survey submission verified.", record: this.executionRecord };
+          }
+          onComplete({ status: "NO_QUESTIONS_FOUND", message: "No active survey questions found on page and completion not verified." });
+          return { status: "NO_QUESTIONS_FOUND", message: "No active survey questions found on page and completion not verified." };
         }
 
         const questions = surveyData.questions;
         const currentProgress = surveyData.progress || "";
 
         // Find unanswered or partially answered questions on current page
-        let questionsToAnswer = questions.filter((q) => {
-          const classification = SurveyEngine.classifyQuestion(q);
-          if (classification.type === "single_choice_radio") {
-            return !q.options.some((o) => o.checked || o.selected);
-          }
-          if (classification.type === "dropdown_native") {
-            return !q.value || q.value === "" || q.value === "select" || q.value === "none";
-          }
-          if (classification.type === "dropdown_custom") {
-            return !q.options.some((o) => o.checked || o.selected) && (!q.value || q.value === "");
-          }
-          if (classification.type === "likert_matrix") {
-            return !q.options.some((o) => o.checked || o.selected);
-          }
-          if (classification.type === "matrix_checkbox") {
-            return !q.options.some((o) => o.checked || o.selected);
-          }
-          if (classification.type === "slider") {
-            return false; // Sliders have default values; evaluate if unverified in record
-          }
-          if (classification.type === "numeric_input" || classification.type === "text_input" || classification.type === "date_input") {
-            return !q.value || String(q.value).trim() === "";
-          }
-          if (classification.type === "switch_toggle") {
-            return !q.options.some((o) => o.checked);
-          }
-          if (classification.type === "file_upload") {
-            return true;
-          }
-          if (classification.type === "multi_choice_checkbox") {
-            return !q.options.some((o) => o.checked || o.selected);
-          }
-          return !q.options.some((o) => o.checked || o.selected);
-        });
-
-        // Filter out questions that have already been verified in this session
         const answeredIds = new Set(this.executionRecord.map((r) => r.questionId));
-        questionsToAnswer = questionsToAnswer.filter((q) => !answeredIds.has(q.id));
+        let questionsToAnswer = questions.filter((q) => {
+          if (answeredIds.has(q.id)) return false;
+          const hasAnyChecked = (q.options || []).some(o => o.checked || o.selected);
+          const hasValue = q.value !== undefined && q.value !== null && String(q.value).trim() !== "";
+          if (hasAnyChecked || hasValue) {
+            const checkedOpt = (q.options || []).find(o => o.checked || o.selected);
+            this.executionRecord.push({
+              questionId: q.id,
+              questionText: q.text,
+              type: SurveyEngine.classifyQuestion(q).type,
+              answer: [checkedOpt?.label || checkedOpt?.value || q.value],
+              verified: true,
+              outcome: "already_satisfied",
+              prefilled: true,
+            });
+            return false;
+          }
+          const classification = SurveyEngine.classifyQuestion(q);
+          const answerResult = this.determineAnswer(q, { evidenceText, promptText: this.promptText || "" });
+          if (answerResult.status === "READY") {
+            if (classification.type === "single_choice_radio" || classification.type === "likert_matrix") {
+              const targetId = answerResult.targetOptionIds?.[0];
+              const checkedOpt = q.options.find((o) => o.checked || o.selected);
+              if (checkedOpt && targetId && checkedOpt.id === targetId) {
+                this.executionRecord.push({
+                  questionId: q.id,
+                  questionText: q.text,
+                  type: classification.type,
+                  answer: [checkedOpt.label || checkedOpt.value],
+                  verified: true,
+                  outcome: "already_correct",
+                  prefilled: true,
+                });
+                return false;
+              }
+              return true;
+            }
+            if (classification.type === "numeric_input" || classification.type === "text_input" || classification.type === "date_input" || classification.type === "slider") {
+              const expectedVal = String(answerResult.targetValue || answerResult.proposedAnswer?.[0] || "");
+              if (q.value !== undefined && String(q.value).trim() === expectedVal.trim() && expectedVal.trim() !== "") {
+                this.executionRecord.push({
+                  questionId: q.id,
+                  questionText: q.text,
+                  type: classification.type,
+                  answer: [expectedVal],
+                  verified: true,
+                  outcome: "already_correct",
+                  prefilled: true,
+                });
+                return false;
+              }
+              return true;
+            }
+            if (classification.type === "switch_toggle") {
+              const isChecked = q.options?.some(o => o.checked);
+              if (isChecked === answerResult.desiredChecked) {
+                this.executionRecord.push({
+                  questionId: q.id,
+                  questionText: q.text,
+                  type: classification.type,
+                  answer: [isChecked ? "ON" : "OFF"],
+                  verified: true,
+                  outcome: "already_correct",
+                  prefilled: true,
+                });
+                return false;
+              }
+              return true;
+            }
+            if (classification.type === "dropdown_native" || classification.type === "dropdown_custom") {
+              const expectedVal = String(answerResult.targetValue || answerResult.proposedAnswer?.[0] || "");
+              const currentVal = String(q.value || q.options?.find(o => o.selected || o.checked)?.value || "");
+              if (currentVal && currentVal.toLowerCase() === expectedVal.toLowerCase() && expectedVal !== "") {
+                this.executionRecord.push({
+                  questionId: q.id,
+                  questionText: q.text,
+                  type: classification.type,
+                  answer: [expectedVal],
+                  verified: true,
+                  outcome: "already_correct",
+                  prefilled: true,
+                });
+                return false;
+              }
+              return true;
+            }
+          }
+          return true;
+        });
 
         // If all questions on this page are answered, look for navigation or submission
         if (questionsToAnswer.length === 0) {
@@ -1785,6 +1867,15 @@
             }
             // Advance to next page
             const advRes = await advancePageFn("next", surveyData.nextButton);
+            if (!advRes || advRes.success === false || advRes.advanced === false) {
+              const failPayload = {
+                status: "PAGE_ADVANCE_FAILED",
+                reason: advRes?.error || "Next button click failed to advance survey page",
+                record: this.executionRecord,
+              };
+              onQuestionPaused(failPayload);
+              return failPayload;
+            }
             this.taskState = this.taskState || {};
             this.taskState.pageNumber = (this.taskState.pageNumber || 1) + 1;
             onPageAdvanced({ advanced: true, progress: currentProgress, result: advRes });
@@ -1792,6 +1883,7 @@
             // Bounded settling wait: wait for next page DOM to settle
             const prevQuestionIds = new Set(questions.map((q) => q.id));
             let settleAttempts = 0;
+            let transitioned = false;
             while (settleAttempts < 10) {
               if (signal?.aborted) {
                 return { status: "ABORTED_BY_USER", record: this.executionRecord };
@@ -1807,15 +1899,26 @@
                 return pausePayload;
               }
               if (pollData?.isCompleted) {
+                transitioned = true;
                 break;
               }
               if (pollData?.questions && pollData.questions.length > 0) {
                 const hasNew = pollData.questions.some((q) => !prevQuestionIds.has(q.id));
                 if (hasNew || (pollData.progress && pollData.progress !== currentProgress)) {
+                  transitioned = true;
                   break;
                 }
               }
               settleAttempts++;
+            }
+            if (!transitioned && settleAttempts >= 10) {
+              const stallPayload = {
+                status: "PAGE_ADVANCE_STALLED",
+                reason: "Next button was clicked, but page questions or progress did not update after settling wait.",
+                record: this.executionRecord,
+              };
+              onQuestionPaused(stallPayload);
+              return stallPayload;
             }
             continue;
           }
@@ -1909,6 +2012,13 @@
       }
 
       return { status: "MAX_STEPS_REACHED", record: this.executionRecord };
+    }
+
+    /**
+     * Authorizes consequential survey submission in Review Mode
+     */
+    confirmSubmitApproval() {
+      this.consequentialSubmitConfirmed = true;
     }
 
     /**

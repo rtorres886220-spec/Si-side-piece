@@ -1608,6 +1608,11 @@
           clientY: params.y || 0,
           buttons: 1
         };
+        const preCheckedNative = targetEl.type === "checkbox" ? targetEl.checked : null;
+        const assocInp = targetEl.tagName === "LABEL" ? ((targetEl.htmlFor ? document.getElementById(targetEl.htmlFor) : null) || targetEl.querySelector("input")) : null;
+        const preCheckedAssocInp = assocInp && assocInp.type === "checkbox" ? assocInp.checked : null;
+        const preAriaChecked = targetEl.getAttribute("aria-checked");
+
         try { targetEl.dispatchEvent(new PointerEvent("pointerdown", evtInit)); } catch {}
         try { targetEl.dispatchEvent(new MouseEvent("mousedown", evtInit)); } catch {}
         if (typeof targetEl.focus === "function") targetEl.focus();
@@ -1620,7 +1625,7 @@
           targetEl.dispatchEvent(new MouseEvent("click", evtInit));
         }
 
-        // Guarantee radio, checkbox, label, and custom ARIA target state mutation
+        // Guarantee radio, checkbox, label, and custom ARIA target state mutation without double-toggling
         if (targetEl.type === "radio") {
           if (targetEl.name) {
             const root = targetEl.form || document;
@@ -1636,12 +1641,15 @@
           targetEl.dispatchEvent(new Event("change", { bubbles: true }));
           targetEl.dispatchEvent(new Event("input", { bubbles: true }));
         } else if (targetEl.type === "checkbox") {
-          targetEl.checked = !targetEl.checked;
+          // If click already toggled checked state, do NOT invert it back!
+          if (targetEl.checked === preCheckedNative) {
+            targetEl.checked = !preCheckedNative;
+          }
           targetEl.setAttribute("aria-checked", targetEl.checked ? "true" : "false");
           targetEl.dispatchEvent(new Event("change", { bubbles: true }));
           targetEl.dispatchEvent(new Event("input", { bubbles: true }));
         } else if (targetEl.tagName === "LABEL") {
-          const inp = (targetEl.htmlFor ? document.getElementById(targetEl.htmlFor) : null) || targetEl.querySelector("input");
+          const inp = assocInp;
           if (inp) {
             if (inp.type === "radio") {
               if (inp.name) {
@@ -1658,7 +1666,10 @@
               inp.dispatchEvent(new Event("change", { bubbles: true }));
               inp.dispatchEvent(new Event("input", { bubbles: true }));
             } else if (inp.type === "checkbox") {
-              inp.checked = !inp.checked;
+              // If click already toggled checked state, do NOT invert it back!
+              if (inp.checked === preCheckedAssocInp) {
+                inp.checked = !preCheckedAssocInp;
+              }
               inp.setAttribute("aria-checked", inp.checked ? "true" : "false");
               inp.dispatchEvent(new Event("change", { bubbles: true }));
               inp.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1675,8 +1686,10 @@
             }
             targetEl.setAttribute("aria-checked", "true");
           } else if (role === "checkbox") {
-            const cur = targetEl.getAttribute("aria-checked") === "true";
-            targetEl.setAttribute("aria-checked", cur ? "false" : "true");
+            if (targetEl.getAttribute("aria-checked") === preAriaChecked) {
+              const cur = preAriaChecked === "true";
+              targetEl.setAttribute("aria-checked", cur ? "false" : "true");
+            }
           } else if (role === "option") {
             const listbox = targetEl.closest("[role='listbox']") || targetEl.parentElement;
             if (listbox) {
@@ -2428,7 +2441,7 @@
       }
 
       // 1b. Scan for Multi-Select Checkbox Matrix Tables
-      const checkboxMatrixTables = Array.from(root.querySelectorAll("table.matrix, table.matrix-table, table.likert, table[role='grid'], table")).filter((tbl) => {
+      const checkboxMatrixTables = Array.from(targetRoot.querySelectorAll("table.matrix, table.matrix-table, table.likert, table[role='grid'], table")).filter((tbl) => {
         const checkboxes = tbl.querySelectorAll('input[type="checkbox"], [role="checkbox"]');
         const hasMatrixClass = tbl.className && /matrix|likert|grid/i.test(tbl.className);
         return hasMatrixClass ? checkboxes.length >= 2 : checkboxes.length >= 4;
@@ -2486,7 +2499,7 @@
       }
 
       // 1c. Scan for Ranking Questions
-      const rankingContainers = Array.from(root.querySelectorAll(
+      const rankingContainers = Array.from(targetRoot.querySelectorAll(
         ".ranking, .ranking-container, [class*='ranking'], [data-ranking], [data-type='ranking'], ol.ranking-list, ul.ranking-list, .sortable-list"
       ));
       for (const rContainer of rankingContainers) {
@@ -2865,11 +2878,16 @@
 
       for (const [name, radios] of radioGroups.entries()) {
         const qId = `sq-radio-${questionCounter++}`;
+        const commonParent = radios[0]?.closest("fieldset, [role='radiogroup'], form, div") || radios[0]?.parentElement;
+        if (commonParent && !commonParent.getAttribute("data-sidekick-qid")) {
+          commonParent.setAttribute("data-sidekick-qid", qId);
+        }
         const options = [];
         radios.forEach((r, idx) => {
           processedElements.add(r);
           const optId = `opt-${qId}-${idx + 1}`;
           r.setAttribute("data-sidekick-id", optId);
+          r.setAttribute("data-sidekick-qid", qId);
           const lbl = SurveyDOMEngine.getOptionLabel(r, null);
           let assocLabel = (r.id ? document.querySelector(`label[for="${CSS.escape(r.id)}"]`) : null) || (r.closest ? r.closest("label") : null);
           let labelSelector = undefined;
@@ -3355,9 +3373,12 @@
       if (!qEl) {
         qEl = document.getElementById(questionId);
       }
-      if (!qEl) return null;
 
-      const inputs = Array.from(qEl.querySelectorAll("input, select, textarea, [role='radio'], [role='checkbox'], [role='option'], [role='slider'], [role='switch']"));
+      let inputs = qEl ? Array.from(qEl.querySelectorAll("input, select, textarea, [role='radio'], [role='checkbox'], [role='option'], [role='slider'], [role='switch']")) : [];
+      if (inputs.length === 0) {
+        inputs = Array.from(document.querySelectorAll(`[data-sidekick-qid="${CSS.escape(questionId)}"], input[data-sidekick-id^="opt-${CSS.escape(questionId)}-"]`));
+      }
+      if (!qEl && inputs.length === 0) return null;
       const options = inputs.map((inp) => {
         return {
           id: inp.getAttribute("data-sidekick-id") || inp.id,

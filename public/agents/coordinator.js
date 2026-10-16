@@ -238,9 +238,11 @@
         onStepExecuted = () => {},
         onVerificationUpdate = () => {},
         onComplete = () => {},
-        requestSafetyApproval = async () => true,
-        executeAction = async () => ({ success: true }),
+        requestSafetyApproval = null,
+        executeAction = null,
       } = callbacks;
+
+      const loopStartTime = Date.now();
 
       // 1. FAST PATH: Check mechanical bypass (0ms)
       const mechanical = SidekickRouter.checkMechanicalFastPath(promptText);
@@ -266,18 +268,27 @@
         onProgress("Executing verified survey workflow…", "Survey Engine", 2);
         const SurveyEngineClass = typeof SurveyEngine !== "undefined" ? SurveyEngine : (typeof globalThis !== "undefined" ? globalThis.SurveyEngine : null);
         if (SurveyEngineClass) {
+          const actionExec = callbacks.executeAction || executeAction;
+          if (!actionExec || !callbacks.advancePageFn) {
+            return {
+              type: "survey",
+              status: "FAILED",
+              error: "Missing required execution callbacks for survey workflow.",
+              telemetry: { totalMs: Math.round(Date.now() - loopStartTime) }
+            };
+          }
           const engine = new SurveyEngineClass(options.surveyOptions || {});
           const surveyRes = await engine.processSurveyWorkflow(
             callbacks.getSurveyFn || (async () => (await getPageContextFn())?.surveyData),
-            callbacks.executeAction || (async () => ({ success: true, verified: true })),
+            actionExec,
             callbacks.verifyStateFn || (async () => null),
-            callbacks.advancePageFn || (async () => ({ success: true, advanced: true })),
+            callbacks.advancePageFn,
             {
               signal,
               evidenceText: pageContext?.bodyText || "",
               onQuestionStart: (q) => onProgress(`Processing question: "${q.text?.slice(0, 35)}"`, "Survey Engine", 2),
               onQuestionAnswered: (ans) => onVerificationUpdate(`[Verified] "${ans.question?.text?.slice(0, 30)}": ${ans.answer?.join(", ")}`),
-              onRequiresSubmitApproval: callbacks.requestSafetyApproval,
+              onRequiresSubmitApproval: callbacks.requestSafetyApproval || requestSafetyApproval || (async () => false),
               onComplete: (res) => onComplete(res.message || "Survey completed", res),
             }
           );
@@ -286,7 +297,7 @@
             surveyResult: surveyRes,
             status: surveyRes.status,
             record: surveyRes.record,
-            telemetry: { totalMs: Math.round(performance.now() - loopStartTime) }
+            telemetry: { totalMs: Math.round(Date.now() - loopStartTime) }
           };
         }
       }
@@ -305,7 +316,6 @@
         maxConsecutiveFailures: options.safetyBudget?.maxConsecutiveFailures || 3,
         ...options.safetyBudget
       };
-      const loopStartTime = Date.now();
       let consecutiveFailures = 0;
       let controllerState = "RUNNING";
 
@@ -384,8 +394,8 @@
           break;
         }
 
-        // Check if task is already complete or no more action needed
-        if (workerPayload.is_task_complete || workerPayload.action === "none") {
+        // Check if task is already complete or cannot proceed
+        if (workerPayload.is_task_complete) {
           controllerState = "COMPLETED";
           cognitiveLedger.state = "COMPLETED";
           const completionSummary = workerPayload.completion_summary || workerPayload.explanation || "Task completed successfully.";
@@ -397,6 +407,20 @@
             stepsCompleted: cognitiveLedger.stepNumber - 1,
             summary: completionSummary,
             checklist: workerPayload.plan_checklist,
+            actionLog: cognitiveLedger.actionLog,
+          };
+        }
+
+        if (workerPayload.action === "none") {
+          controllerState = "STALLED";
+          cognitiveLedger.state = "STALLED";
+          const reason = workerPayload.explanation || "No actionable element found in current viewport.";
+          onVerificationUpdate(`Action paused: ${reason}`);
+          return {
+            type: "action_stalled",
+            status: "UNABLE_TO_ACT",
+            stepsCompleted: cognitiveLedger.stepNumber - 1,
+            reason,
             actionLog: cognitiveLedger.actionLog,
           };
         }
@@ -457,8 +481,9 @@
           ? `${workerPayload.action === "click" ? "Clicked" : "Typed into"} "${workerPayload.element_label}"`
           : `${workerPayload.action} dispatched`;
         
-        const actionSucceeded = execRes?.success !== false;
-        if (!actionSucceeded || execRes?.verified === false) {
+        const actionSucceeded = Boolean(execRes && execRes.success === true);
+        const isVerified = Boolean(execRes && execRes.verified === true);
+        if (!actionSucceeded || !isVerified) {
           consecutiveFailures++;
         } else {
           consecutiveFailures = 0;
@@ -470,9 +495,9 @@
           action: workerPayload.action,
           target: workerPayload.element_label || `[#${workerPayload.target_id}]`,
           executionSuccess: actionSucceeded,
-          verified: execRes?.verified !== false,
+          verified: isVerified,
           recoveryAttempt: execRes?.recovered || false,
-          status: execRes?.verified !== false ? "VERIFIED" : "UNVERIFIED"
+          status: isVerified ? "VERIFIED" : (actionSucceeded ? "UNVERIFIED" : "FAILED")
         });
 
         onStepExecuted(cognitiveLedger.stepNumber, desc, actionSucceeded);
