@@ -145,7 +145,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "CAPTURE_VISION_SCREENSHOT") {
-    captureTabScreenshot(message.tabId)
+    captureTabScreenshot(message.tabId, message.options)
       .then((dataUrl) => sendResponse({ success: true, dataUrl }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
@@ -282,6 +282,48 @@ function sendCommand(target, method, commandParams) {
       else resolve(result);
     });
   });
+}
+
+async function captureTabScreenshot(tabId, options = {}) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab || !tab.url) throw new Error("Invalid tab for screenshot");
+  checkDomainAllowed(tab.url);
+
+  if (options && options.forSurveyOnly && !options.isSurvey) {
+    throw new Error("Security Exception: Visual inspection is strictly restricted to active survey tasks.");
+  }
+
+  const debugTarget = { tabId };
+  try {
+    await chrome.debugger.attach(debugTarget, "1.3");
+  } catch (err) {
+    throw new Error(\`Debugger attach failed: \${err.message}\`);
+  }
+
+  try {
+    await sendCommand(debugTarget, "Page.enable", {});
+    const metrics = await sendCommand(debugTarget, "Page.getLayoutMetrics", {}).catch(() => null);
+    const vp = metrics?.visualViewport || metrics?.cssVisualViewport || { clientWidth: 1280, clientHeight: 800 };
+    const vpWidth = Math.max(320, Math.round(vp.clientWidth || 1280));
+    const vpHeight = Math.max(240, Math.round(vp.clientHeight || 800));
+    const maxDim = options?.maxDimension || 768;
+    const maxCurrentDim = Math.max(vpWidth, vpHeight);
+    const scale = maxCurrentDim > maxDim ? Number((maxDim / maxCurrentDim).toFixed(3)) : 1;
+
+    const requestedFormat = (options?.format || "webp").toLowerCase();
+    const format = (requestedFormat === "webp" || requestedFormat === "png") ? requestedFormat : "jpeg";
+    const quality = options?.quality !== undefined ? Math.max(10, Math.min(100, options.quality)) : 40;
+
+    const screenshot = await sendCommand(debugTarget, "Page.captureScreenshot", {
+      format,
+      clip: { x: 0, y: 0, width: vpWidth, height: vpHeight, scale: Math.max(0.2, Math.min(1, scale)) },
+      quality: format !== "png" ? quality : undefined
+    });
+    const mime = format === "webp" ? "image/webp" : (format === "png" ? "image/png" : "image/jpeg");
+    return \`data:\${mime};base64,\${screenshot.data}\`;
+  } finally {
+    try { await chrome.debugger.detach(debugTarget); } catch {}
+  }
 }
 
 function delay(ms) {

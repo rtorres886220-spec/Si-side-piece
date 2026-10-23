@@ -118,12 +118,14 @@
           const { signal: attemptSignal, cleanup } = createAttemptSignal();
 
           try {
+            const screenshotData = options?.screenshotDataUrl || requestBody?.screenshot || requestBody?.screenshotDataUrl || null;
             const proxyRes = await fetch(proxyEndpoint, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                promptText: requestBody?.promptText || requestBody?.contents?.[0]?.parts?.[0]?.text || "Request",
+                promptText: requestBody?.promptText || requestBody?.contents?.[0]?.parts?.find(p => p.text)?.text || requestBody?.contents?.[0]?.parts?.[0]?.text || "Request",
                 model: model || this.defaultModel,
+                screenshot: screenshotData,
                 rawPayload: requestBody,
               }),
               signal: attemptSignal,
@@ -222,13 +224,33 @@
         const { signal: attemptSignal, cleanup } = createAttemptSignal();
 
         try {
+          let directBody = requestBody;
+          const directScreenshot = options?.screenshotDataUrl || requestBody?.screenshot || requestBody?.screenshotDataUrl;
+          if (directScreenshot && typeof directScreenshot === "string" && directScreenshot.startsWith("data:")) {
+            const match = directScreenshot.match(/^data:([^;]+);base64,(.+)$/);
+            if (match) {
+              const mimeType = match[1];
+              const data = match[2];
+              const parts = [{ inlineData: { mimeType, data } }];
+              if (Array.isArray(requestBody?.contents?.[0]?.parts)) {
+                parts.push(...requestBody.contents[0].parts);
+              } else if (typeof requestBody?.prompt === "string") {
+                parts.push({ text: requestBody.prompt });
+              }
+              directBody = {
+                ...requestBody,
+                contents: [{ role: "user", parts }],
+              };
+            }
+          }
+
           const res = await fetch(endpoint, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "x-goog-api-key": this.apiKey,
             },
-            body: JSON.stringify(requestBody),
+            body: JSON.stringify(directBody),
             signal: attemptSignal,
           });
 

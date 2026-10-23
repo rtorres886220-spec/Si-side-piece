@@ -236,6 +236,26 @@
       }
       return false;
     }
+
+    if (message.action === "SCAN_SURVEY_JUNKIE_DASHBOARD") {
+      try {
+        const dashboard = SurveyJunkieDOMEngine.scanDashboard(document);
+        sendResponse({ success: true, dashboard });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+      return false;
+    }
+
+    if (message.action === "LAUNCH_SURVEY_JUNKIE_SURVEY") {
+      try {
+        const result = SurveyJunkieDOMEngine.launchSurvey(message.cardId || message.selector);
+        sendResponse({ success: true, result });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+      return false;
+    }
   };
 
   if (typeof window !== "undefined") {
@@ -3443,7 +3463,125 @@
     }
   }
 
+  /**
+   * Survey Junkie Dashboard Parser & Launcher Engine
+   * Detects available surveys, parses reward points and estimated duration,
+   * calculates points-per-minute (PTS / MIN), and launches the optimal survey.
+   */
+  class SurveyJunkieDOMEngine {
+    static isSurveyJunkiePage() {
+      if (typeof window === "undefined" || !window.location) return false;
+      return /surveyjunkie\.com/i.test(window.location.hostname);
+    }
+
+    static scanDashboard(root = document) {
+      const cards = [];
+      const cardSelectors = [
+        "[data-qa*='survey-card']",
+        "[data-qa*='survey_card']",
+        ".survey-card",
+        ".dashboard-survey",
+        ".survey-item",
+        ".available-survey",
+        "[class*='survey-card']",
+        "[class*='SurveyCard']",
+        "div[role='listitem']:has(button)",
+        "article:has(button)"
+      ];
+
+      let foundCards = [];
+      for (const sel of cardSelectors) {
+        try {
+          const matches = Array.from(root.querySelectorAll(sel));
+          if (matches.length > 0) {
+            foundCards = matches;
+            break;
+          }
+        } catch {}
+      }
+
+      // Fallback: detect card-like blocks containing points text (e.g. "50 pts", "100 Points")
+      if (foundCards.length === 0) {
+        const allDivs = Array.from(root.querySelectorAll("div, article, section, a"));
+        foundCards = allDivs.filter((el) => {
+          const txt = el.innerText || el.textContent || "";
+          const hasPoints = /\b\d+\s*(?:pts|points)\b/i.test(txt);
+          const hasTime = /\b\d+\s*(?:min|mins|minutes)\b/i.test(txt);
+          const isNotTooBig = el.children.length < 15 && txt.length < 300 && txt.length > 10;
+          return hasPoints && hasTime && isNotTooBig;
+        });
+      }
+
+      let cardIndex = 1;
+      for (const card of foundCards) {
+        const text = card.innerText || card.textContent || "";
+        const ptsMatch = text.match(/(\d+)\s*(?:pts|points)/i) || text.match(/\b(?:earn|reward|for)\s*(\d+)\b/i);
+        const points = ptsMatch ? parseInt(ptsMatch[1], 10) : 50;
+
+        const minMatch = text.match(/(\d+)\s*(?:min|mins|minutes|m\b)/i) || text.match(/~?\s*(\d+)\s*m/i);
+        const minutes = minMatch ? parseInt(minMatch[1], 10) : 10;
+
+        const ptsPerMinute = parseFloat((points / Math.max(1, minutes)).toFixed(2));
+
+        let btn = card.querySelector("button, a.btn, a[href*='survey'], [role='button'], input[type='button'], a");
+        if (!btn && card.tagName.toLowerCase() === "a") {
+          btn = card;
+        }
+
+        const cardId = `sj-card-${cardIndex++}`;
+        card.setAttribute("data-sidekick-sj-card", cardId);
+
+        let btnSelector = `[data-sidekick-sj-card="${cardId}"]`;
+        if (btn && btn !== card) {
+          const btnId = `${cardId}-btn`;
+          btn.setAttribute("data-sidekick-id", btnId);
+          btnSelector = `[data-sidekick-id="${btnId}"]`;
+        }
+
+        cards.push({
+          id: cardId,
+          points,
+          minutes,
+          ptsPerMinute,
+          buttonSelector: btnSelector,
+          title: `Survey: ${points} pts / ${minutes} min (${ptsPerMinute} pts/min)`,
+          textSnippet: text.slice(0, 100).replace(/\s+/g, " ").trim(),
+        });
+      }
+
+      // Sort by best ROI (points-per-minute descending)
+      cards.sort((a, b) => b.ptsPerMinute - a.ptsPerMinute);
+
+      const isDashboard = cards.length > 0 || (typeof window !== "undefined" && (window.location?.pathname || "").includes("survey"));
+
+      return {
+        isDashboard,
+        totalFound: cards.length,
+        bestSurvey: cards[0] || null,
+        cards,
+      };
+    }
+
+    static launchSurvey(selectorOrCardId) {
+      let target = null;
+      if (typeof selectorOrCardId === "string" && selectorOrCardId.startsWith("[")) {
+        target = document.querySelector(selectorOrCardId);
+      } else {
+        target = document.querySelector(`[data-sidekick-sj-card="${selectorOrCardId}"] button, [data-sidekick-sj-card="${selectorOrCardId}"] a, [data-sidekick-id="${selectorOrCardId}-btn"], [data-sidekick-sj-card="${selectorOrCardId}"]`);
+      }
+      if (!target) {
+        throw new Error(`Survey Junkie target card not found: ${selectorOrCardId}`);
+      }
+      if (typeof target.scrollIntoView === "function") {
+        try { target.scrollIntoView({ behavior: "instant", block: "center" }); } catch {}
+      }
+      target.click();
+      return { success: true, launched: true };
+    }
+  }
+
   window.SludgeAuditor = SludgeAuditor;
   window.CancelationEngine = CancelationEngine;
   window.SurveyDOMEngine = SurveyDOMEngine;
+  window.SurveyJunkieDOMEngine = SurveyJunkieDOMEngine;
 })();

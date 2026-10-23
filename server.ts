@@ -135,12 +135,14 @@ async function startServer() {
 
   // Allowed request body schema for /api/gemini
   const ALLOWED_BODY_FIELDS = new Set([
-    'apiKey', 'model', 'promptText', 'currentQuote', 'currentPage', 'rawPayload', 'stream'
+    'apiKey', 'model', 'promptText', 'currentQuote', 'currentPage', 'rawPayload', 'stream',
+    'screenshot', 'screenshotDataUrl'
   ]);
 
   // Server-side Gemini API proxy route with rate limiting, input validation, and bounded deadlines
   app.post('/api/gemini', rateLimiter, async (req, res) => {
     const tStart = performance.now();
+    let effectiveScreenshot: string | null = null;
 
     // 1. Request Body Schema Validation
     if (req.body && typeof req.body === 'object') {
@@ -222,7 +224,23 @@ async function startServer() {
             },
           },
         });
-        const contentsPayload = rawPayload.contents || [{ role: 'user', parts: [{ text: rawPayload.prompt }] }];
+        let contentsPayload = rawPayload.contents || [{ role: 'user', parts: [{ text: rawPayload.prompt }] }];
+        const rawScreenshot = req.body?.screenshot || req.body?.screenshotDataUrl || rawPayload?.screenshot || rawPayload?.screenshotDataUrl;
+        if (rawScreenshot && typeof rawScreenshot === 'string' && rawScreenshot.startsWith('data:')) {
+          const match = rawScreenshot.match(/^data:([^;]+);base64,(.+)$/);
+          if (match) {
+            const mimeType = match[1];
+            const data = match[2];
+            if (Array.isArray(contentsPayload)) {
+              contentsPayload = contentsPayload.map((item: any, idx: number) => {
+                if (idx === 0 && Array.isArray(item.parts)) {
+                  return { ...item, parts: [{ inlineData: { mimeType, data } }, ...item.parts] };
+                }
+                return item;
+              });
+            }
+          }
+        }
         const configPayload: GenerateContentConfig = {};
 
         if (rawPayload.systemInstruction) {
@@ -314,7 +332,10 @@ async function startServer() {
         promptText,
         currentQuote,
         currentPage,
+        screenshot,
+        screenshotDataUrl,
       } = req.body;
+      effectiveScreenshot = (screenshotDataUrl || screenshot || currentPage?.screenshot || currentPage?.screenshotDataUrl || null) as string | null;
 
       if (!promptText || typeof promptText !== 'string' || promptText.trim().length === 0) {
         return res.status(400).json({ error: 'Missing or invalid promptText: must be a non-empty string' });
@@ -809,6 +830,26 @@ ${GROUNDING_SYSTEM_POLICY}`;
       let response: any = null;
       let lastError: any = null;
       let usedModel = targetModel;
+      let finalContents: any = payload;
+      if (effectiveScreenshot && typeof effectiveScreenshot === 'string' && effectiveScreenshot.startsWith('data:')) {
+        const match = effectiveScreenshot.match(/^data:([^;]+);base64,(.+)$/);
+        if (match) {
+          finalContents = {
+            parts: [
+              {
+                inlineData: {
+                  mimeType: match[1],
+                  data: match[2],
+                },
+              },
+              {
+                text: payload,
+              },
+            ],
+          };
+        }
+      }
+
       let ttftMs = 0;
       const tInferenceStart = performance.now();
 
@@ -818,7 +859,7 @@ ${GROUNDING_SYSTEM_POLICY}`;
           if (stream) {
             const streamResult = await ai.models.generateContentStream({
               model: currentModel,
-              contents: payload,
+              contents: finalContents,
               config: generateConfig,
             });
 
@@ -842,7 +883,7 @@ ${GROUNDING_SYSTEM_POLICY}`;
           } else {
             response = await ai.models.generateContent({
               model: currentModel,
-              contents: payload,
+              contents: finalContents,
               config: generateConfig,
             });
             ttftMs = performance.now() - tInferenceStart;
@@ -995,6 +1036,7 @@ ${GROUNDING_SYSTEM_POLICY}`;
         fallback: false,
       });
     } finally {
+      effectiveScreenshot = null;
       if (hasActiveSlot) {
         activeConcurrentRequests = Math.max(0, activeConcurrentRequests - 1);
       }

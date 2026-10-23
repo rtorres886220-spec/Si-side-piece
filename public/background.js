@@ -378,7 +378,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "CAPTURE_VISION_SCREENSHOT") {
-    captureTabScreenshot(message.tabId)
+    captureTabScreenshot(message.tabId, message.options)
       .then((dataUrl) => sendResponse({ success: true, dataUrl }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
@@ -728,12 +728,19 @@ async function dispatchDOMFallback(tabId, action, params) {
 }
 
 /**
- * Capture high-fidelity visual screenshot for Multimodal Grounding
+ * Capture ultra-low quota visual screenshot for Survey Grounding
+ * Clamped to 768px max dimension in WebP format at 40% quality (~258 tokens max, ~20KB-35KB).
+ * Ephemeral memory lifecycle with zero disk or storage persistence.
  */
-async function captureTabScreenshot(tabId) {
+async function captureTabScreenshot(tabId, options = {}) {
   const tab = await chrome.tabs.get(tabId);
   if (!tab || !tab.url) throw new Error("Invalid tab for screenshot");
   checkDomainAllowed(tab.url);
+
+  // Survey-specific isolation gating: ensure visual capture only occurs on the active survey tab
+  if (options && options.forSurveyOnly && !options.isSurvey) {
+    throw new Error("Security Exception: Visual inspection is strictly restricted to active survey tasks.");
+  }
 
   const debugTarget = { tabId };
   let isDebuggerAttached = false;
@@ -746,11 +753,48 @@ async function captureTabScreenshot(tabId) {
 
   try {
     await sendCommand(debugTarget, "Page.enable", {});
-    const screenshot = await sendCommand(debugTarget, "Page.captureScreenshot", {
-      format: "jpeg",
-      quality: 80
-    });
-    return `data:image/jpeg;base64,${screenshot.data}`;
+
+    // Inspect layout metrics to calculate aspect-preserving downscaling to max 768px
+    const metrics = await sendCommand(debugTarget, "Page.getLayoutMetrics", {}).catch(() => null);
+    const vp = metrics?.visualViewport || metrics?.cssVisualViewport || { clientWidth: 1280, clientHeight: 800 };
+    const vpWidth = Math.max(320, Math.round(vp.clientWidth || 1280));
+    const vpHeight = Math.max(240, Math.round(vp.clientHeight || 800));
+    const maxDim = options?.maxDimension || 768;
+    const maxCurrentDim = Math.max(vpWidth, vpHeight);
+    const scale = maxCurrentDim > maxDim ? Number((maxDim / maxCurrentDim).toFixed(3)) : 1;
+
+    const requestedFormat = (options?.format || "webp").toLowerCase();
+    const format = (requestedFormat === "webp" || requestedFormat === "png") ? requestedFormat : "jpeg";
+    const quality = options?.quality !== undefined ? Math.max(10, Math.min(100, options.quality)) : 40;
+
+    const screenshotParams = {
+      format,
+      clip: {
+        x: 0,
+        y: 0,
+        width: vpWidth,
+        height: vpHeight,
+        scale: Math.max(0.2, Math.min(1, scale))
+      }
+    };
+    if (format !== "png") {
+      screenshotParams.quality = quality;
+    }
+
+    let screenshot;
+    try {
+      screenshot = await sendCommand(debugTarget, "Page.captureScreenshot", screenshotParams);
+    } catch {
+      // Fallback without clip if specific device scales are rejected by the target browser engine
+      screenshot = await sendCommand(debugTarget, "Page.captureScreenshot", {
+        format: "jpeg",
+        quality: 45
+      });
+      return `data:image/jpeg;base64,${screenshot.data}`;
+    }
+
+    const mime = format === "webp" ? "image/webp" : (format === "png" ? "image/png" : "image/jpeg");
+    return `data:${mime};base64,${screenshot.data}`;
   } finally {
     if (isDebuggerAttached) {
       try {

@@ -3797,17 +3797,47 @@ async function handleSurveyWorkflowExecution(argOrPrompt, options = {}) {
     signal: state.abortController?.signal,
     evidenceText: state.pageContext?.bodyText || "",
     promptText: userPromptText,
+    apiClient: state.apiClient || (typeof SidekickApiClient !== "undefined" ? new SidekickApiClient(state.apiKey, state.selectedModel, state.backendUrl) : null),
+    captureScreenshotFn: async () => {
+      return new Promise((resolve) => {
+        chrome.runtime.sendMessage({
+          type: "CAPTURE_VISION_SCREENSHOT",
+          tabId: targetTabId,
+          options: {
+            format: "webp",
+            quality: 40,
+            maxDimension: 768,
+            forSurveyOnly: true,
+            isSurvey: true,
+          }
+        }, (res) => {
+          if (chrome.runtime.lastError || !res || !res.success) {
+            resolve(null);
+          } else {
+            resolve(res.dataUrl || null);
+          }
+        });
+        setTimeout(() => resolve(null), 4000);
+      });
+    },
+    onVisualGroundingAttempt: ({ question }) => {
+      renderAgentStepBadge(`[Visual Inspection] 768px WebP inspection for "${question.text.slice(0, 30)}"`, true);
+    },
     onQuestionStart: (q) => {
       renderAgentStepBadge(`Processing question: "${q.text.slice(0, 35)}"`, true);
     },
-    onQuestionAnswered: ({ question, answer }) => {
+    onQuestionAnswered: ({ question, answer, isAttentionTrap }) => {
+      const trapBadge = isAttentionTrap ? " 🛡️ *(Quality Trap Caught & Neutralized)*" : "";
       renderAgentStepBadge(`[Verified] "${question.text.slice(0, 30)}": ${answer.join(", ")}`, true);
-      renderAssistantPlainMessage(`✓ **${question.text}:** Selected \`${answer.join(", ")}\` (state verified)`);
+      renderAssistantPlainMessage(`✓ **${question.text}:** Selected \`${answer.join(", ")}\` (state verified)${trapBadge}`);
+    },
+    onPacingWait: ({ waitMs, reason }) => {
+      renderAgentStepBadge(`Anti-speeding dwell: ${(waitMs / 1000).toFixed(1)}s`, true);
     },
     onQuestionPaused: (pauseInfo) => {
       if (pauseInfo.category === "personal_info_required") {
         renderAgentStepBadge("Paused: Personal info required", false);
-        renderAssistantPlainMessage(`🔒 **Personal Information Required:**\n${pauseInfo.reason}\n\n*Si strictly refuses to invent personal history or identity.* Please answer this question directly or authorize your profile.`);
+        renderAssistantPlainMessage(`🔒 **Personal Information Required:**\n${pauseInfo.reason}\n\n*Sidekick strictly avoids inconsistent personal facts.* Please update your persona profile or clarify in chat.`);
       } else if (pauseInfo.category === "ambiguous") {
         renderAgentStepBadge("Paused: Ambiguous question", false);
         renderAssistantPlainMessage(`❓ **Ambiguous Question Paused:**\n${pauseInfo.reason}\n\nPlease clarify your choice in chat.`);
@@ -3844,7 +3874,7 @@ async function handleSurveyWorkflowExecution(argOrPrompt, options = {}) {
         renderAssistantPlainMessage("ℹ️ Survey was already submitted in this session. Avoiding duplicate submission.");
       } else if (status === "COMPLETED" || status === "SURVEY_COMPLETED") {
         renderAgentStepBadge(`Survey Completed (${record?.length || 0} questions answered)`, true);
-        renderAssistantPlainMessage(`🎉 **Survey Completed & Verified:** Answered and verified ${record?.length || 0} question(s).${completionEvidence ? ` Confirmation: "${completionEvidence.text?.slice(0, 100)}"` : ""}`);
+        renderAssistantPlainMessage(`🎉 **Survey Completed & Verified:** Answered and verified ${record?.length || 0} question(s) with zero random answers.${completionEvidence ? ` Confirmation: "${completionEvidence.text?.slice(0, 100)}"` : ""}`);
       } else {
         renderAgentStepBadge(`Survey: ${status}`, true);
         renderAssistantPlainMessage(message || `Survey session ended with status: ${status}`);
@@ -3884,6 +3914,41 @@ async function handleSurveyWorkflowExecution(argOrPrompt, options = {}) {
   renderAssistantPlainMessage("📋 Scanning page for survey questions and controls...", "system");
 
   try {
+    // 0. SURVEY JUNKIE DASHBOARD INTERCEPTOR
+    const currentUrl = state.activeTabUrl || "";
+    const isSurveyJunkie = typeof SurveyEngine !== "undefined" && SurveyEngine.isSurveyJunkie(currentUrl);
+
+    if (isSurveyJunkie) {
+      const dashData = await new Promise((res) => {
+        chrome.tabs.sendMessage(targetTabId, { action: "SCAN_SURVEY_JUNKIE_DASHBOARD" }, { frameId: 0 }, (r) => {
+          const _ = chrome.runtime.lastError;
+          res(r?.dashboard || null);
+        });
+        setTimeout(() => res(null), 800);
+      });
+
+      if (dashData && dashData.cards && dashData.cards.length > 0) {
+        const best = dashData.bestSurvey;
+        renderAssistantPlainMessage(`🎯 **Survey Junkie Dashboard Detected:** Found **${dashData.cards.length} available survey(s)**.\n\n🏆 **Top Recommended Survey:**\n• **Reward:** ${best.points} Points\n• **Est. Duration:** ${best.minutes} Minutes\n• **Efficiency:** \`${best.ptsPerMinute} pts/min\` (Best ROI)\n\n🚀 Launching survey now...`);
+        renderAgentStepBadge(`Launching Survey (${best.points} pts / ${best.minutes}m)`, true);
+
+        // Launch survey
+        await new Promise((res) => {
+          chrome.tabs.sendMessage(targetTabId, { action: "LAUNCH_SURVEY_JUNKIE_SURVEY", cardId: best.id, selector: best.buttonSelector }, { frameId: 0 }, (r) => {
+            const _ = chrome.runtime.lastError;
+            res(r);
+          });
+          setTimeout(() => res(null), 1200);
+        });
+
+        renderAssistantPlainMessage("⏳ Survey launched! Waiting for survey questionnaire router to stabilize...");
+        await new Promise((r) => setTimeout(r, 3000));
+        await extractContext();
+        // Continue workflow execution on newly loaded survey questionnaire
+        return handleSurveyWorkflowExecution(promptText, options);
+      }
+    }
+
     // Bounded polling for live survey parsing to handle delayed rendering gracefully
     let surveyData = null;
     let scanAttempts = 0;
@@ -3936,7 +4001,14 @@ async function handleSurveyWorkflowExecution(argOrPrompt, options = {}) {
     const userPreferences = storage.sidekickUserPreferences || {};
 
     const allowAutoSubmit = options.reviewMode ? false : true;
-    const engine = new SurveyEngine({ userProfile, userPreferences, allowAutoSubmit });
+    const engine = new SurveyEngine({
+      userProfile,
+      userPreferences,
+      allowAutoSubmit,
+      autonomousMode: true,
+      useAutonomousPersona: true,
+      humanPacingEnabled: true,
+    });
     state.activeSurveyEngine = engine;
 
     const workflowResult = await engine.processSurveyWorkflow(
