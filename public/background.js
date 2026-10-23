@@ -172,9 +172,9 @@ async function getManagedGroupState() {
   ]);
 
   let groupId = storage.sidekickManagedGroupId || null;
-  const isolationEnabled = storage.sidekickGroupIsolationEnabled !== false;
-  let groupTitle = storage.sidekickManagedGroupName || "Sidekick Workgroup";
-  let groupColor = "purple";
+  const isolationEnabled = storage.sidekickGroupIsolationEnabled !== false; // Default: Strict isolation
+  let groupTitle = storage.sidekickManagedGroupName || "Si";
+  let groupColor = "grey"; // "grey" is Chrome's ice white / silver tab group pill
   let groupTabs = [];
   let isConfigured = false;
 
@@ -184,7 +184,7 @@ async function getManagedGroupState() {
       if (group) {
         isConfigured = true;
         groupTitle = group.title || groupTitle;
-        groupColor = group.color || "purple";
+        groupColor = group.color || "grey";
         groupTabs = await chrome.tabs.query({ groupId });
       }
     } catch {
@@ -221,7 +221,7 @@ async function getManagedGroupState() {
   };
 }
 
-async function createOrBindGroup({ targetTabId, existingGroupId, title = "Sidekick Workgroup", color = "purple" } = {}) {
+async function createOrBindGroup({ targetTabId, existingGroupId, title = "Si", color = "grey" } = {}) {
   if (!chrome.tabs || !chrome.tabGroups) {
     throw new Error("Tab Groups API not supported");
   }
@@ -239,6 +239,8 @@ async function createOrBindGroup({ targetTabId, existingGroupId, title = "Sideki
     }
     finalGroupId = await chrome.tabs.group({ tabIds: [tabId] });
     await chrome.tabGroups.update(finalGroupId, { title, color });
+  } else if (targetTabId) {
+    await chrome.tabs.group({ tabIds: [targetTabId], groupId: finalGroupId });
   }
 
   await chrome.storage.local.set({
@@ -247,7 +249,20 @@ async function createOrBindGroup({ targetTabId, existingGroupId, title = "Sideki
     sidekickGroupIsolationEnabled: true
   });
 
-  return await getManagedGroupState();
+  const updatedState = await getManagedGroupState();
+  broadcastToSidepanel({ type: "TAB_GROUP_STATE_UPDATED", state: updatedState });
+  return updatedState;
+}
+
+async function addTabToManagedGroup(tabId) {
+  const managed = await getManagedGroupState();
+  if (managed.groupId) {
+    await chrome.tabs.group({ tabIds: [tabId], groupId: managed.groupId });
+    const updatedState = await getManagedGroupState();
+    broadcastToSidepanel({ type: "TAB_GROUP_STATE_UPDATED", state: updatedState });
+    return updatedState;
+  }
+  return await createOrBindGroup({ targetTabId: tabId, title: "Si", color: "grey" });
 }
 
 // Clean up storage if group closed
@@ -256,7 +271,17 @@ if (chrome.tabGroups && chrome.tabGroups.onRemoved) {
     const storage = await chrome.storage.local.get("sidekickManagedGroupId");
     if (storage.sidekickManagedGroupId === group.id) {
       await chrome.storage.local.remove("sidekickManagedGroupId");
+      const updatedState = await getManagedGroupState();
+      broadcastToSidepanel({ type: "TAB_GROUP_STATE_UPDATED", state: updatedState });
     }
+  });
+}
+
+// Broadcast tab activation to update isolation banner immediately
+if (chrome.tabs && chrome.tabs.onActivated) {
+  chrome.tabs.onActivated.addListener(async () => {
+    const groupState = await getManagedGroupState();
+    broadcastToSidepanel({ type: "TAB_GROUP_STATE_UPDATED", state: groupState });
   });
 }
 
@@ -302,6 +327,14 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
   const tab = await chrome.tabs.get(tabId);
   if (!tab || !tab.url) throw new Error("Target tab not accessible");
   checkDomainAllowed(tab.url);
+
+  // Strict Workgroup Isolation Guard: Verify target tab belongs to authorized "Si" group
+  const managed = await getManagedGroupState();
+  if (managed.isolationEnabled && managed.groupId) {
+    if (tab.groupId !== managed.groupId) {
+      throw new Error(`Security Exception: Tab #${tabId} ("${tab.title || 'Untitled'}") is outside the authorized "Si" tab group. Automation is strictly locked.`);
+    }
+  }
 
   // Direct tab navigation without debugger attachment
   if (action === "navigate") {
@@ -487,7 +520,7 @@ class BackgroundGeminiClient {
         "gemini_sidekick_proxy_url"
       ]);
       const apiKey = (storage.gemini_sidekick_api_key || "").trim();
-      const model = storage.gemini_sidekick_model || "gemini-2.0-flash";
+      const model = storage.gemini_sidekick_model || "gemini-3.5-flash-lite";
       const proxyUrl = (storage.gemini_sidekick_proxy_url || "http://localhost:3000").replace(/\/+$/, "");
 
       while (attempt <= maxRetries) {
@@ -626,20 +659,20 @@ class AutonomousAgentEngine {
     this.abortController = new AbortController();
     startLoopKeepAlive();
 
-    // Determine target tab
+    // Determine target tab and automatically group into "Si" (ice white / silver)
     let tab = null;
-    const managed = await getManagedGroupState();
-    if (managed.isConfigured && managed.tabs.length > 0) {
-      const activeGroupTab = managed.tabs.find((t) => t.active) || managed.tabs[0];
-      tab = await chrome.tabs.get(activeGroupTab.id).catch(() => null);
-    }
-    if (!tab) {
-      const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (activeTabs && activeTabs.length > 0) tab = activeTabs[0];
-    }
+    const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTabs && activeTabs.length > 0) tab = activeTabs[0];
     if (!tab || !tab.id) {
       tab = await chrome.tabs.create({ url: "https://www.google.com", active: true });
-      await delay(1000);
+      await delay(800);
+    }
+
+    // Auto-group active tab into "Si" workgroup so extension knows what it has access to
+    const managed = await getManagedGroupState();
+    if (!managed.groupId || tab.groupId !== managed.groupId) {
+      const bound = await addTabToManagedGroup(tab.id);
+      console.log(`[TabGroups] Auto-grouped tab ${tab.id} into "${bound.groupTitle}"`);
     }
 
     this.tabId = tab.id;
@@ -1071,6 +1104,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "CREATE_OR_BIND_GROUP") {
     createOrBindGroup(message.params)
       .then((state) => sendResponse({ success: true, state }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "ADD_TAB_TO_MANAGED_GROUP") {
+    addTabToManagedGroup(message.tabId)
+      .then((state) => sendResponse({ success: true, state }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "SET_GROUP_ISOLATION") {
+    chrome.storage.local.set({ sidekickGroupIsolationEnabled: message.enabled !== false })
+      .then(getManagedGroupState)
+      .then((state) => {
+        broadcastToSidepanel({ type: "TAB_GROUP_STATE_UPDATED", state });
+        sendResponse({ success: true, state });
+      })
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }

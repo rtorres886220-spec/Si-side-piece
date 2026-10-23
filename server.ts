@@ -133,6 +133,133 @@ async function startServer() {
     res.sendFile(path.resolve(__dirname, isProd ? 'dist/privacy.html' : 'public/privacy.html'));
   });
 
+  // Diagnostic Chatbot endpoint powered exclusively by gemini-3.5-flash-lite
+  app.post('/api/diagnostic-chat', rateLimiter, async (req, res) => {
+    try {
+      const { message, history, context } = req.body || {};
+      if (!message || typeof message !== 'string') {
+        return res.status(400).json({ error: 'Missing diagnostic query message' });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY ? String(process.env.GEMINI_API_KEY).replace(/['"\s]/g, '').trim() : undefined;
+      if (!apiKey) {
+        return res.status(503).json({ error: 'GEMINI_API_KEY not configured on server' });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          timeout: 30000,
+          headers: { 'User-Agent': 'aistudio-build' },
+        },
+      });
+
+      const diagnosticSystemInstruction = `You are the Sidekick Chrome Extension System Diagnostic Engineer.
+You have complete, comprehensive, architectural understanding of the Gemini Sidekick Chrome Extension (Manifest V3) and its full ecosystem.
+
+YOUR MISSION:
+Pinpoint exactly what and why any part of the extension is not functioning properly, and provide direct, actionable steps to resolve it.
+
+ARCHITECTURE & SYSTEM SPECIFICATION:
+1. Manifest V3 & Extension Model:
+   - Manifest: V3 ('manifest.json').
+   - Permissions: 'sidePanel', 'tabs', 'tabGroups', 'activeTab', 'webNavigation', 'scripting', 'storage', 'debugger'.
+   - Host Permissions: '<all_urls>', 'https://generativelanguage.googleapis.com/*'.
+   - Background Worker ('background.js'): Manages the extension lifecycle, listens for runtime messages ('EXECUTE_CDP_ACTION', 'CAPTURE_VISION_SCREENSHOT'), and performs JIT CDP debugging.
+   - Sidepanel ('sidepanel.html', 'sidepanel.js', 'sidepanel.css'): Dumb UI client for background autonomous browser agents, handles chat turns, human-in-the-loop gates, settings drawers.
+   - Content Script ('content.js'): Injected on document_idle across all frames. Traverses the live DOM, redacts PII (SSN, credit card, tokens), purges injected hidden payloads (zero-width characters, hidden tags), gathers interactive elements and structured tables, and communicates with background.js.
+
+2. Chrome DevTools Protocol (CDP) Engine:
+   - Just-In-Time (JIT) Attachment: 'chrome.debugger.attach({ tabId }, "1.3")'.
+   - NEVER leaves the debugger permanently attached. Automatically detaches in 'finally' blocks to prevent performance drag or browser warnings.
+   - Action Dispatch: Dispatches native trusted hardware events:
+     * 'click': Input.dispatchMouseEvent ('mouseMoved', 'mousePressed', 'mouseReleased').
+     * 'type': Input.dispatchMouseEvent to focus, followed by Input.dispatchKeyEvent for each character and optional Enter.
+     * 'scroll': Input.dispatchMouseEvent ('mouseWheel').
+     * 'uploadFile': DOM.setFileInputFiles via DOM.querySelector node.
+     * 'navigate': Page.navigate with Page.enable.
+   - Hard Denylist: Automation is strictly prohibited on sensitive domains (chase.com, wellsfargo.com, bankofamerica.com, citibank.com, capitalone.com, paypal.com, stripe.com, coinbase.com, binance.com, kraken.com, 1password.com, bitwarden.com, lastpass.com, console.aws.amazon.com/billing, console.cloud.google.com/billing).
+   - Sensitive Element Lock: Automated interaction with card numbers, CVV, Stripe or PayPal widgets is blocked.
+   - Internal URL Lock: Cannot attach to 'chrome://', 'chrome-extension://', 'edge://', or 'about:blank'.
+
+3. Multi-Agent Engine (Client-Side & Server-Proxy):
+   - 'apiClient.js': Resilient caller to Gemini API or server proxy with jittered backoff, 4-second pacing interval, and rate-limit handling.
+   - 'router.js' & 'deterministicRouter.ts': Deterministic fast-paths for conversational greetings and unambiguous clicks/scrolls that execute instantly with 0ms Gemini latency.
+   - 'coordinator.js': Decomposes complex user goals into ledger steps and coordinates agent execution.
+   - 'workers.js': Action worker executing CDP commands.
+   - 'critic.js': Verifies post-execution state on the live page.
+   - 'surveyEngine.js': Autonomous survey progression, anti-screenout demographic logic, and attention-check trap detection.
+   - 'groundingEngine.ts': Fact-checking engine that parses paragraphs, extracts atomic claims, and validates citations against live DOM evidence.
+
+4. Server Proxy & Quotas ('server.ts'):
+   - Model: Exclusively 'gemini-3.5-flash-lite'.
+   - Rate Limiting: 60 requests/minute (300 for localhost), 120 requests/hour (1000 for localhost), max 5 concurrent requests.
+   - Undici dispatcher configured with 300,000ms header/body timeouts to avoid 'UND_ERR_HEADERS_TIMEOUT'.
+
+5. Common Failure Modes & Pinpoint Diagnoses:
+   - "Debugger attach failed / Another debugger is already attached":
+     * Cause: The user has Chrome DevTools (F12) open on the target tab! Chrome only allows one debugger client per tab.
+     * Fix: Close DevTools (F12) on that tab, then retry the action.
+   - "Cannot attach debugger to internal browser pages":
+     * Cause: Trying to automate 'chrome://extensions', 'chrome://settings', or the Sidekick panel itself.
+     * Fix: Navigate the tab to a standard public website (http/https).
+   - "Security Exception: Automation is strictly prohibited on sensitive domain":
+     * Cause: Target domain is on the banking/credential/billing denylist.
+     * Fix: Sidekick intentionally blocks automation on financial institutions to protect user funds.
+   - "Clicks not landing / Element not clicked":
+     * Cause: Coordinate drift from dynamic page resize, lazy-loaded content, or sticky headers obscuring the target coordinate.
+     * Fix: Scroll the element into view first, or check if the target is inside an isolated cross-origin iframe.
+   - "API Error 429 / 503 / Quota Exceeded":
+     * Cause: Gemini API rate limit or high server load.
+     * Fix: Verify API key quotas in Google AI Studio, ensure server rate limiter has not been triggered, or wait for the 4-second client pacing window.
+   - "Extension won't open when clicking icon":
+     * Cause: Service worker went inactive or 'sidePanel.setPanelBehavior({ openPanelOnActionClick: true })' failed.
+     * Fix: Inspect 'chrome://extensions', click 'Service worker (Inspect views)', and check console for initialization errors.
+   - "Red Status Badge / Offline":
+     * Cause: The local Express server on port 3000 is not running, or network connection to the server proxy failed.
+     * Fix: Run 'npm run dev' to boot 'server.ts' and ensure port 3000 is bound to '0.0.0.0'.
+
+TONE & OUTPUT STYLE:
+- Clear, authoritative, pinpoint technical precision.
+- Immediately identify the exact component, file, or protocol constraint causing the failure.
+- Provide numbered, step-by-step remediation commands or instructions.`;
+
+      const contents: any[] = [];
+      if (Array.isArray(history) && history.length > 0) {
+        for (const item of history.slice(-8)) {
+          contents.push({
+            role: item.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: item.text || '' }],
+          });
+        }
+      }
+
+      let userPrompt = message;
+      if (context) {
+        userPrompt = `[DIAGNOSTIC RUNTIME CONTEXT: ${JSON.stringify(context)}]\n\nDiagnostic Question: ${message}`;
+      }
+      contents.push({
+        role: 'user',
+        parts: [{ text: userPrompt }],
+      });
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-flash-lite',
+        contents,
+        config: {
+          systemInstruction: diagnosticSystemInstruction,
+          temperature: 0.2,
+        },
+      });
+
+      const answer = response.text || 'No diagnostic output generated.';
+      return res.json({ success: true, answer, model: 'gemini-3.5-flash-lite' });
+    } catch (err: any) {
+      console.error('Diagnostic Chat Error:', err);
+      return res.status(500).json({ error: err.message || 'Diagnostic service error' });
+    }
+  });
+
   // Allowed request body schema for /api/gemini
   const ALLOWED_BODY_FIELDS = new Set([
     'apiKey', 'model', 'promptText', 'currentQuote', 'currentPage', 'rawPayload', 'stream',
@@ -190,18 +317,9 @@ async function startServer() {
 
     try {
       const rawPayload = req.body?.rawPayload;
-      let requestedModel = String(req.body?.model || 'gemini-2.0-flash').trim();
-      if (requestedModel.includes('3.5') || requestedModel.includes('3.1') || requestedModel.includes('3.8') || requestedModel.includes('gemini-flash-latest')) {
-        requestedModel = 'gemini-2.0-flash';
-      }
       const stream = Boolean(req.body?.stream);
-
-      const targetModel = requestedModel || 'gemini-2.0-flash';
-      const cascade = [
-        targetModel,
-        'gemini-2.0-flash',
-        'gemini-1.5-flash',
-      ].filter((m, i, a) => a.indexOf(m) === i);
+      const targetModel = 'gemini-3.5-flash-lite';
+      const cascade = ['gemini-3.5-flash-lite'];
 
       // SPECIALIST MULTI-AGENT RAW PAYLOAD PROXY PATH:
       // Preserves full systemInstruction, generationConfig (e.g. responseMimeType: "application/json"),

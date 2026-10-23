@@ -145,7 +145,7 @@ async function runAllTests() {
   (globalThis as any).chrome = {
     storage: {
       local: {
-        get: (keys: any, cb: (res: any) => void) => {
+        get: (keys: any, cb?: (res: any) => void) => {
           const res: any = {};
           if (typeof keys === 'string') {
             res[keys] = mockStorageStore[keys];
@@ -156,7 +156,11 @@ async function runAllTests() {
               res[k] = mockStorageStore[k] !== undefined ? mockStorageStore[k] : keys[k];
             }
           }
-          cb(res);
+          if (cb) {
+            cb(res);
+          } else {
+            return Promise.resolve(res);
+          }
         },
         set: (items: any, cb?: () => void) => {
           Object.assign(mockStorageStore, items);
@@ -468,7 +472,7 @@ async function runAllTests() {
 
   assert(sidepanel.state.apiKey === NEW_VALID_KEY, 'state.apiKey successfully updated after valid verification');
   assert(mockStorageStore['gemini_sidekick_api_key'] === NEW_VALID_KEY, 'Verified key is successfully written to storage');
-  assert(saveStatus.textContent?.includes('verified') || saveStatus.textContent?.includes('saved'), 'Save status confirms verified save');
+  assert(saveStatus.textContent?.toLowerCase().includes('verified') || saveStatus.textContent?.toLowerCase().includes('saved'), 'Save status confirms verified save');
 
   // ---------------------------------------------------------------------------
   // TEST 10: Secret Redaction Security Invariant

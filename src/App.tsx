@@ -624,14 +624,29 @@ export default function App() {
   const [engineMode, setEngineMode] = useState<"server-live" | "workbench-sim">("server-live");
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("gemini-2.0-flash");
+  const [selectedModel, setSelectedModel] = useState("gemini-3.5-flash-lite");
   const [tabReadState, setTabReadState] = useState<"reading" | "ready" | "off" | "failed">("ready");
   const [tabEnabled, setTabEnabled] = useState(true);
   const [activeSelectionQuote, setActiveSelectionQuote] = useState<string>("");
   const [activeCitationDrawer, setActiveCitationDrawer] = useState<{ pIdx: number; cIdx: number } | null>(null);
   const [citationStatus, setCitationStatus] = useState<Record<string, string>>({});
 
-  // Human-in-the-Loop Safety Gate Modal State
+  // Hidden Diagnostic Chatbot State (Toggled via ` or ~)
+  const [showDiagnostic, setShowDiagnostic] = useState(false);
+  const [diagnosticMessages, setDiagnosticMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([
+    {
+      role: "assistant",
+      text: "I am armed with complete architectural understanding of Sidekick MV3 (JIT CDP attachment, service worker lifecycle, DOM sanitization, rate limits, and survey traps). What issue are you experiencing?",
+    },
+  ]);
+  const [diagnosticInput, setDiagnosticInput] = useState("");
+  const [isDiagnosticBusy, setIsDiagnosticBusy] = useState(false);
+  const diagnosticLogRef = useRef<HTMLDivElement | null>(null);
+
+  // Chrome Tab Grouping & Strict Workgroup Isolation State (Matching MV3 Extension)
+  const [managedTabs, setManagedTabs] = useState<string[]>(["transformer-paper"]);
+  const [isolationEnabled, setIsolationEnabled] = useState<boolean>(true);
+  const [isGroupDrawerOpen, setIsGroupDrawerOpen] = useState<boolean>(false);
   const [safetyModal, setSafetyModal] = useState<{
     visible: boolean;
     stepNumber: number;
@@ -804,6 +819,74 @@ export default function App() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isBusy, activeTaskLedger]);
+
+  // Global shortcut listener for Backquote / Tilde (` or ~) to toggle hidden diagnostic copilot
+  useEffect(() => {
+    const handleDiagnosticKey = (e: KeyboardEvent) => {
+      if (e.code === "Backquote" || e.key === "`" || e.key === "~") {
+        const activeEl = document.activeElement;
+        const isTyping = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA");
+        if (isTyping && activeEl?.id !== "webDiagnosticInput") {
+          return;
+        }
+        e.preventDefault();
+        setShowDiagnostic((prev) => !prev);
+      } else if (e.key === "Escape" && showDiagnostic) {
+        setShowDiagnostic(false);
+      }
+    };
+    window.addEventListener("keydown", handleDiagnosticKey);
+    return () => window.removeEventListener("keydown", handleDiagnosticKey);
+  }, [showDiagnostic]);
+
+  useEffect(() => {
+    if (showDiagnostic && diagnosticLogRef.current) {
+      diagnosticLogRef.current.scrollTop = diagnosticLogRef.current.scrollHeight;
+    }
+  }, [diagnosticMessages, showDiagnostic]);
+
+  const handleDiagnosticSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const query = diagnosticInput.trim();
+    if (!query || isDiagnosticBusy) return;
+
+    setDiagnosticMessages((prev) => [...prev, { role: "user", text: query }]);
+    setDiagnosticInput("");
+    setIsDiagnosticBusy(true);
+
+    try {
+      const res = await fetch("/api/diagnostic-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: query,
+          history: diagnosticMessages.slice(-6),
+          context: {
+            activePageId,
+            serverHealth,
+            model: "gemini-3.5-flash-lite",
+            engineMode,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.answer) {
+        setDiagnosticMessages((prev) => [...prev, { role: "assistant", text: data.answer }]);
+      } else {
+        setDiagnosticMessages((prev) => [
+          ...prev,
+          { role: "assistant", text: `Diagnosis error: ${data.error || "Failed to generate diagnostic response"}` },
+        ]);
+      }
+    } catch (err: any) {
+      setDiagnosticMessages((prev) => [
+        ...prev,
+        { role: "assistant", text: `Connection error to /api/diagnostic-chat: ${err.message}` },
+      ]);
+    } finally {
+      setIsDiagnosticBusy(false);
+    }
+  };
 
   useEffect(() => {
     return () => {
@@ -1495,16 +1578,14 @@ export default function App() {
 
     // 14. /model
     if (cmdToken === "/model") {
-      const targetModel = (argLower.includes("1.5") || argLower.includes("fallback") || argLower.includes("pro"))
-        ? "gemini-1.5-flash"
-        : "gemini-2.0-flash";
+      const targetModel = "gemini-3.5-flash-lite";
       setSelectedModel(targetModel);
-      showToast(`Model switched to ${targetModel}`);
+      showToast(`Model configured to ${targetModel}`);
       setChatMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          text: `⚡ Active model set to **${targetModel}** (${targetModel === "gemini-2.0-flash" ? "Recommended Fast Responsive Companion" : "Balanced Production Flash Model"}).`
+          text: `⚡ Active model set to **${targetModel}** (Exclusive System Model).`
         }
       ]);
       setIsBusy(false);
@@ -1591,7 +1672,7 @@ export default function App() {
         ...prev,
         {
           role: "assistant",
-          text: `🌐 Executable cURL Request:\n\n\`\`\`bash\ncurl https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "contents": [{\n      "parts": [{\n        "text": "Summarize this research paper: ${currentPage.url}"\n      }]\n    }]\n  }'\n\`\`\``
+          text: `🌐 Executable cURL Request:\n\n\`\`\`bash\ncurl https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=$GEMINI_API_KEY \\\n  -H "Content-Type: application/json" \\\n  -d '{\n    "contents": [{\n      "parts": [{\n        "text": "Summarize this research paper: ${currentPage.url}"\n      }]\n    }]\n  }'\n\`\`\``
         }
       ]);
       setIsBusy(false);
@@ -1788,6 +1869,9 @@ export default function App() {
     }
 
     setActiveFollowUps([]);
+
+    // Automatically group the active tab into the managed Si workgroup when starting a task
+    setManagedTabs((prev) => (prev.includes(activePageId) ? prev : [...prev, activePageId]));
 
     // Check Domain Deny-List
     if (currentPage.domain === "chase.com") {
@@ -2615,7 +2699,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
 ## Key Upgrades:
 1. **Option B Chrome DevTools Protocol (CDP)**: Dispatches true OS-level trusted mouse clicks and keyboard keystrokes via \`chrome.debugger\`.
 2. **Ephemeral JIT Attachment**: Calls \`chrome.debugger.attach\` only for milliseconds during approved actions and detaches immediately so the yellow warning banner does not linger.
-3. **High-Demand Auto-Fallback**: Automatically retries and cascades from gemini-2.0-flash to gemini-1.5-flash if Google servers experience high demand spikes.
+3. **High-Efficiency Intelligence**: Exclusively powered by Google's ultra-low latency gemini-3.5-flash-lite model with deep thinking enabled.
 4. **Defense-in-Depth Sanitization**: Strips hidden/invisible DOM elements, zero-width injection attacks, and automatically masks Credit Cards (Luhn validated), SSNs, and Bearer tokens.
 5. **Cryptographic UUID Enclaves**: Page contents are sealed in \`<<<UNTRUSTED_CONTENT_[UUID]>>>\` to neutralize Indirect Prompt Injection (IPI).
 6. **Human-in-the-Loop (HITL) Gate**: High-risk actions (Submit, Pay, Delete, Confirm) require explicit user approval.
@@ -2827,6 +2911,159 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                 </div>
               </header>
 
+              {/* Chrome Tab Group Bar: Si */}
+              <div className="relative z-20 flex items-center justify-between px-3.5 py-1.5 border-b border-white/[0.04] bg-white/[0.01]">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsGroupDrawerOpen((prev) => !prev)}
+                    className="inline-flex items-center gap-1.5 bg-white/[0.05] hover:bg-white/[0.09] border border-white/10 hover:border-white/20 rounded-full px-2.5 py-0.5 text-[11px] text-[#eceef4] font-extralight transition-all group"
+                    title="Manage Si Chrome Tab Group"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-100 shadow-[0_0_8px_rgba(255,255,255,0.85)]" />
+                    <span className="font-extralight">Si</span>
+                    <span className="font-mono text-[10px] text-white/50">{managedTabs.length} tabs</span>
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const unmanaged = DEMO_PAGES.find((p) => !managedTabs.includes(p.id));
+                    if (unmanaged) {
+                      setManagedTabs((prev) => [...prev, unmanaged.id]);
+                      setActivePageId(unmanaged.id);
+                    } else {
+                      const nextId = DEMO_PAGES.find((p) => p.id !== activePageId)?.id || "transformer-paper";
+                      setActivePageId(nextId);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-500/10 hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10.5px] font-extralight transition-all"
+                  title="Open new tab in this group"
+                >
+                  + New Tab
+                </button>
+              </div>
+
+              {/* Tab Group Details & Managed Tabs Popover Drawer */}
+              {isGroupDrawerOpen && (
+                <div className="absolute top-[76px] left-3 right-3 z-40 bg-[#090b10]/95 border border-white/10 rounded-xl p-3 shadow-2xl backdrop-blur-md space-y-2.5 animate-in fade-in duration-150">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-white/[0.06]">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-100 shadow-[0_0_8px_rgba(255,255,255,0.85)]" />
+                      <span className="text-xs font-light text-white">Managed Chrome Tab Group: Si</span>
+                    </div>
+                    <button
+                      onClick={() => setIsGroupDrawerOpen(false)}
+                      className="w-5 h-5 rounded flex items-center justify-center text-white/60 hover:text-white"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-white/[0.03] border border-white/[0.05]">
+                    <div>
+                      <div className="text-[11px] text-white font-normal">Strict Group Isolation</div>
+                      <div className="text-[9.5px] text-white/50 leading-tight">Sidekick will ONLY control tabs inside this group</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsolationEnabled((prev) => !prev)}
+                      className={`w-9 h-5 rounded-full transition-colors relative p-0.5 ${isolationEnabled ? "bg-sky-500" : "bg-white/20"}`}
+                    >
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${isolationEnabled ? "translate-x-4" : "translate-x-0"}`} />
+                    </button>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[10px] font-mono text-white/60 px-0.5">
+                      <span>Tabs in Si Workgroup ({managedTabs.length})</span>
+                      {!managedTabs.includes(activePageId) && (
+                        <button
+                          type="button"
+                          onClick={() => setManagedTabs((prev) => [...prev, activePageId])}
+                          className="text-sky-400 hover:text-sky-300 font-sans"
+                        >
+                          + Add Current
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-28 overflow-y-auto space-y-1 scrollbar-thin">
+                      {DEMO_PAGES.map((page) => {
+                        const isGrouped = managedTabs.includes(page.id);
+                        const isActive = activePageId === page.id;
+                        return (
+                          <div
+                            key={page.id}
+                            className={`flex items-center justify-between px-2 py-1 rounded text-[11px] transition-colors ${
+                              isActive ? "bg-white/[0.08] text-white" : "bg-black/30 text-white/70"
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setActivePageId(page.id)}
+                              className="truncate text-left flex-1 hover:text-white"
+                              title={page.title}
+                            >
+                              {isActive && <span className="text-sky-400 font-mono mr-1">▶</span>}
+                              {page.domain}
+                            </button>
+                            <div className="flex items-center gap-1 shrink-0 ml-2">
+                              {isGrouped ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setManagedTabs((prev) => prev.filter((id) => id !== page.id))}
+                                  className="text-[9.5px] text-rose-400/80 hover:text-rose-300 font-mono"
+                                  title="Remove from group"
+                                >
+                                  remove
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setManagedTabs((prev) => [...prev, page.id])}
+                                  className="text-[9.5px] text-sky-400/90 hover:text-sky-300 font-mono"
+                                >
+                                  + group
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Isolation Warning Banner: Alert when active tab is outside the managed group */}
+              {isolationEnabled && !managedTabs.includes(activePageId) && (
+                <div className="relative z-20 px-3 py-1.5 bg-black/90 border-b border-sky-400/30 flex items-center justify-between text-xs animate-in fade-in duration-150">
+                  <div className="flex items-center gap-1.5 text-sky-200">
+                    <Lock className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <span className="text-[11px] font-sans font-light">Tab outside Si group. Automation locked.</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setManagedTabs((prev) => [...prev, activePageId])}
+                      className="px-2 py-0.5 rounded text-[10px] font-mono bg-sky-500/20 text-sky-300 border border-sky-400/40 hover:bg-sky-500/30 transition-all"
+                    >
+                      + Add to Si
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const firstManaged = managedTabs[0] || "transformer-paper";
+                        setActivePageId(firstManaged);
+                      }}
+                      className="px-2 py-0.5 rounded text-[10px] font-mono bg-white/[0.06] text-white/70 border border-white/10 hover:text-white transition-all"
+                    >
+                      Switch to Si
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Settings Drawer */}
               {showSettings && (
                 <div className="relative z-20 px-5 py-4 bg-[#07080b]/95 border-b border-white/5 space-y-3.5 font-sans animate-in fade-in duration-200">
@@ -2896,9 +3133,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                       onChange={(e) => setSelectedModel(e.target.value)}
                       className="w-full bg-white/[0.04] border border-white/[0.06] rounded-lg px-3 py-1.5 text-xs text-[#eceef4] font-mono outline-none"
                     >
-                      <option value="gemini-2.0-flash">gemini-2.0-flash (Recommended Fast & Multimodal)</option>
-                      <option value="gemini-1.5-flash">gemini-1.5-flash (Balanced Production)</option>
-                      <option value="gemini-1.5-pro">gemini-1.5-pro (Complex Reasoning)</option>
+                      <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Only Model)</option>
                     </select>
                     <div className="mt-1 flex items-center justify-between text-[11px] font-mono text-[#777c8a]">
                       <span>Thinking Level</span>
@@ -2938,13 +3173,19 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                 {chatMessages.length === 0 && (
                   <div className="mt-auto mb-7 flex flex-col items-start text-left gap-3.5">
                     <h1
-                      className="text-[21px] text-[#F2F3F5] leading-[1.3] font-light"
-                      style={{ fontFamily: "'Geist', sans-serif", fontWeight: 250, letterSpacing: "0.01em" }}
+                      className="text-[#F2F3F5] font-light text-left"
+                      style={{ fontFamily: "'Geist', sans-serif", fontWeight: 250, letterSpacing: "0.01em", textAlign: "left", lineHeight: "32.55px", fontSize: "23px" }}
                     >
-                      A little clarity. A new perspective.
+                      A little clarity
                       <span
-                        className="block mt-1 text-[20px] text-[#B8C0CE] leading-[1.35] font-thin"
-                        style={{ fontWeight: 100, letterSpacing: "0.015em" }}
+                        className="block mt-1 text-[#B8C0CE] font-thin"
+                        style={{ fontWeight: 100, letterSpacing: "0.015em", lineHeight: "32px", fontSize: "23px" }}
+                      >
+                        A new perspective
+                      </span>
+                      <span
+                        className="block mt-1 text-[#B8C0CE] font-thin"
+                        style={{ fontWeight: 100, letterSpacing: "0.015em", lineHeight: "30px", fontSize: "19px" }}
                       >
                         Where would you like to begin?
                       </span>
@@ -2952,39 +3193,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                     <p
                       className="text-[12.5px] text-[#A1AAB9] leading-[1.85] max-w-[340px]"
                       style={{ fontFamily: "'Geist', sans-serif", fontWeight: 200, letterSpacing: "0.04em" }}
-                    >
-                      Try{" "}
-                      <button
-                        type="button"
-                        onClick={() => handleSubmitPrompt("Run Agent Behavior Audit")}
-                        className="inline text-[#A1AAB9] hover:text-[#F2F3F5] relative group font-thin transition-colors"
-                        style={{ fontWeight: 200 }}
-                      >
-                        Agent Behavior Audit
-                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#A1AAB9] transition-all duration-200 group-hover:w-full" />
-                      </button>
-                      ,{" "}
-                      <button
-                        type="button"
-                        onClick={() => handleSubmitPrompt("/sludge-audit")}
-                        className="inline text-[#A1AAB9] hover:text-[#F2F3F5] relative group font-thin transition-colors"
-                        style={{ fontWeight: 200 }}
-                      >
-                        Consumer Defense
-                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#A1AAB9] transition-all duration-200 group-hover:w-full" />
-                      </button>
-                      , or{" "}
-                      <button
-                        type="button"
-                        onClick={() => handleSubmitPrompt("Autonomous Browser Execution")}
-                        className="inline text-[#A1AAB9] hover:text-[#F2F3F5] relative group font-thin transition-colors"
-                        style={{ fontWeight: 200 }}
-                      >
-                        Autonomous Browser Execution
-                        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-[#A1AAB9] transition-all duration-200 group-hover:w-full" />
-                      </button>
-                      .
-                    </p>
+                    />
                   </div>
                 )}
 
@@ -3650,7 +3859,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                       <div className="space-y-1.5 text-[11px] font-mono">
                         <div className="flex items-center justify-between p-1.5 rounded bg-black/30 border border-white/[0.03]">
                           <span className="text-white/80">1. Default Model Endpoint</span>
-                          <span className="text-emerald-300">gemini-2.0-flash ✓</span>
+                          <span className="text-emerald-300">gemini-3.5-flash-lite ✓</span>
                         </div>
                         <div className="flex items-center justify-between p-1.5 rounded bg-black/30 border border-white/[0.03]">
                           <span className="text-white/80">2. Manifest CSP connect-src</span>
@@ -4609,6 +4818,90 @@ ${currentPage.content.slice(0, 320)}...
           </div>
         )}
       </main>
+
+      {/* Hidden Diagnostic Chatbot Modal (Toggled via ` or ~) */}
+      {showDiagnostic && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="relative w-full max-w-lg bg-[#090b10] border border-white/[0.14] rounded-2xl shadow-[0_24px_64px_rgba(0,0,0,0.85),0_0_0_1px_rgba(56,189,248,0.2)] flex flex-col overflow-hidden max-h-[85vh]">
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.08] bg-white/[0.02]">
+              <div className="flex items-center gap-2.5">
+                <span className="text-[11px] font-mono tracking-wider text-sky-400 bg-sky-500/10 border border-sky-500/25 px-2 py-0.5 rounded font-medium">
+                  DIAGNOSTIC COPILOT
+                </span>
+                <span className="text-[11px] font-mono text-white/50">
+                  gemini-3.5-flash-lite
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDiagnostic(false)}
+                className="text-white/50 hover:text-white p-1 transition-colors text-lg leading-none cursor-pointer"
+                aria-label="Close diagnostic copilot"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Meta bar */}
+            <div className="flex items-center justify-between px-4 py-1.5 text-[10.5px] font-mono text-white/50 bg-black/40 border-b border-white/[0.04]">
+              <span>Toggle anytime with <code className="bg-white/10 px-1 py-0.5 rounded text-white/90">`</code> or <code className="bg-white/10 px-1 py-0.5 rounded text-white/90">~</code></span>
+              <span className={serverHealth?.hasApiKey ? "text-emerald-400" : "text-amber-400"}>
+                Server: {serverHealth?.hasApiKey ? "Online (Key Injected)" : "Ready (Local Proxy)"}
+              </span>
+            </div>
+
+            {/* Diagnostic Message Log */}
+            <div ref={diagnosticLogRef} className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[50vh]">
+              {diagnosticMessages.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}
+                >
+                  <span className="text-[10px] font-mono text-white/40 mb-1 px-1">
+                    {msg.role === "user" ? "You" : "Sidekick Diagnostic Copilot"}
+                  </span>
+                  <div
+                    className={`max-w-[88%] rounded-xl px-3.5 py-2.5 text-xs font-mono leading-relaxed whitespace-pre-wrap ${
+                      msg.role === "user"
+                        ? "bg-sky-500/20 text-sky-100 border border-sky-500/35"
+                        : "bg-white/[0.04] text-white/90 border border-white/[0.08]"
+                    }`}
+                  >
+                    {msg.text}
+                  </div>
+                </div>
+              ))}
+              {isDiagnosticBusy && (
+                <div className="flex items-center gap-2 text-xs font-mono text-sky-400/80 px-2">
+                  <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping" />
+                  <span>Diagnosing extension architecture…</span>
+                </div>
+              )}
+            </div>
+
+            {/* Input Form */}
+            <form onSubmit={handleDiagnosticSubmit} className="flex items-center gap-2 p-3 border-t border-white/[0.08] bg-black/50">
+              <input
+                id="webDiagnosticInput"
+                type="text"
+                value={diagnosticInput}
+                onChange={(e) => setDiagnosticInput(e.target.value)}
+                placeholder="Ask why CDP failed, check permissions, or diagnose an issue…"
+                className="flex-1 bg-white/[0.05] border border-white/[0.12] rounded-lg px-3 py-2 text-xs font-mono text-white placeholder-white/40 outline-none focus:border-sky-400/60 transition-all"
+                autoFocus
+              />
+              <button
+                type="submit"
+                disabled={isDiagnosticBusy || !diagnosticInput.trim()}
+                className="px-3.5 py-2 rounded-lg bg-sky-400 hover:bg-sky-300 disabled:opacity-40 text-black text-xs font-mono font-medium transition-all cursor-pointer"
+              >
+                Send
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
