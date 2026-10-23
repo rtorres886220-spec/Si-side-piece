@@ -7,8 +7,8 @@
 
 (function () {
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-  const PRIMARY_MODEL = "gemini-3.5-flash-lite";
-  const TEMPORARY_FALLBACK_MODEL = "gemini-3.1-flash-lite";
+  const PRIMARY_MODEL = "gemini-2.0-flash";
+  const TEMPORARY_FALLBACK_MODEL = "gemini-1.5-flash";
 
   class SidekickApiClient {
     constructor(apiKey, defaultModel = PRIMARY_MODEL, proxyBaseUrl = "") {
@@ -16,6 +16,9 @@
       this.defaultModel = defaultModel || PRIMARY_MODEL;
       this.proxyBaseUrl = proxyBaseUrl || "";
       this._requestQueue = Promise.resolve(); // Serializes model calls within this client
+      this._lastRequestEndTime = 0;
+      this._minRequestIntervalMs = 4000; // Pacing to protect 15 RPM free tier
+      this.onRateLimitPause = null;
     }
 
     setApiKey(key) {
@@ -60,12 +63,24 @@
     }
 
     /**
-     * Serialized request execution
+     * Serialized request execution with pacing
      */
     async executeRequest(requestBody, options = {}) {
       // Serialize so calls do not race or blow rate limits
       const run = async () => {
-        return this._callWithRetry(requestBody, options);
+        const now = Date.now();
+        const elapsedSinceLast = now - this._lastRequestEndTime;
+        if (elapsedSinceLast < this._minRequestIntervalMs && this._lastRequestEndTime > 0) {
+          await this._sleep(this._minRequestIntervalMs - elapsedSinceLast, options.signal);
+        }
+        try {
+          const res = await this._callWithRetry(requestBody, options);
+          this._lastRequestEndTime = Date.now();
+          return res;
+        } catch (err) {
+          this._lastRequestEndTime = Date.now();
+          throw err;
+        }
       };
 
       const resultPromise = this._requestQueue.then(run, run);
@@ -280,11 +295,35 @@
             errorText = res.statusText || `HTTP ${status}`;
           }
 
-          // Handle 429 Too Many Requests or 503 Service Unavailable with bounded backoff
-          if ((status === 429 || status === 503) && attempt <= maxRetries) {
+          // Handle 429 Rate Limit (Free tier 15 RPM limit) with strict 60s automatic pause
+          if (status === 429) {
+            console.warn(`[ApiClient] 429 Rate Limit hit on ${currentModel}. Pausing for 60 seconds.`);
+            const notifyPause = options.onRateLimitPause || this.onRateLimitPause;
+            if (typeof notifyPause === "function") {
+              notifyPause(60, "Rate limit: Pausing for 60s");
+            }
+            // Strict 60-second backoff with second-by-second countdown
+            for (let sec = 60; sec > 0; sec--) {
+              if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+              const notifyCountdown = options.onRateLimitCountdown || this.onRateLimitCountdown;
+              if (typeof notifyCountdown === "function") {
+                notifyCountdown(sec);
+              }
+              await this._sleep(1000, signal);
+            }
+            const notifyResume = options.onRateLimitResume || this.onRateLimitResume;
+            if (typeof notifyResume === "function") {
+              notifyResume();
+            }
+            // Retry the call
+            continue;
+          }
+
+          // Handle 503 Service Unavailable with bounded exponential backoff
+          if (status === 503 && attempt <= maxRetries) {
             const jitter = (Math.random() - 0.5) * 0.5 * delayMs;
             const waitTime = Math.max(300, Math.round(delayMs + jitter));
-            console.warn(`[ApiClient] Received ${status} from ${currentModel}. Retrying in ${waitTime}ms (attempt ${attempt}/${maxRetries}). Error: ${errorText}`);
+            console.warn(`[ApiClient] Received 503 from ${currentModel}. Retrying in ${waitTime}ms (attempt ${attempt}/${maxRetries}). Error: ${errorText}`);
             await this._sleep(waitTime, signal);
             delayMs *= 2;
 

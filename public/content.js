@@ -36,6 +36,26 @@
       return false;
     }
 
+    // DOM Stripper for Autonomous Browser Agent & Gemini Reasoning
+    if (message.action === "EXTRACT_STRIPPED_DOM" || message.type === "EXTRACT_STRIPPED_DOM") {
+      try {
+        const data = stripAndExtractDOM();
+        sendResponse({ success: true, data });
+      } catch (e) {
+        sendResponse({ success: false, error: e.message });
+      }
+      return false;
+    }
+
+    // Scroll & Coordinate Resolver with 200ms layout wait (The CDP Click Bug Fix)
+    if (message.action === "GET_ELEMENT_COORDINATES" || message.type === "GET_ELEMENT_COORDINATES") {
+      const targetId = message.elementId || message.targetId || message.id || message.selector;
+      prepareElementCoordinates(targetId)
+        .then((coords) => sendResponse(coords))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+      return true; // Keep channel open for async response
+    }
+
     // A5/A6/A12: Inspect element at specific viewport coordinates for human gate & safety checks
     if (message.action === "inspectPoint" && message.x !== undefined && message.y !== undefined) {
       try {
@@ -262,6 +282,236 @@
     window.__SIDEKICK_MESSAGE_LISTENER__ = messageHandler;
   }
   chrome.runtime.onMessage.addListener(messageHandler);
+
+  // =========================================================================
+  // DOM STRIPPER, SHADOW DOM RESOLVER & JIT COORDINATE LOCATOR FOR AUTONOMOUS AGENT
+  // =========================================================================
+  const sidekickElementMap = new Map();
+
+  function walkAllNodes(rootNode, callback) {
+    if (!rootNode) return;
+    const walker = document.createTreeWalker(
+      rootNode,
+      NodeFilter.SHOW_ELEMENT,
+      null,
+      false
+    );
+    let curr = walker.currentNode;
+    while (curr) {
+      callback(curr);
+      if (curr.shadowRoot) {
+        walkAllNodes(curr.shadowRoot, callback);
+      }
+      curr = walker.nextNode();
+    }
+  }
+
+  function isElementStrippedVisible(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.hidden) return false;
+    if (el.getAttribute("aria-hidden") === "true") return false;
+    const tag = (el.tagName || "").toLowerCase();
+    if (tag === "script" || tag === "style" || tag === "noscript" || tag === "template") return false;
+
+    let style;
+    try {
+      style = window.getComputedStyle(el);
+    } catch {
+      return false;
+    }
+    if (!style) return false;
+    if (style.display === "none") return false;
+    if (style.visibility === "hidden" || style.visibility === "collapse") return false;
+    if (style.opacity === "0") return false;
+
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 && rect.height <= 0) return false;
+
+    // Check deliberate off-screen positions (e.g. left: -9999px)
+    const docScrollY = window.scrollY || window.pageYOffset || 0;
+    const docScrollX = window.scrollX || window.pageXOffset || 0;
+    const docTop = rect.top + docScrollY;
+    const docLeft = rect.left + docScrollX;
+    if (docLeft < -2000 || docTop < -20000 || rect.left < -5000) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function isInteractiveCandidate(el) {
+    const tag = (el.tagName || "").toLowerCase();
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    const type = (el.getAttribute("type") || "").toLowerCase();
+
+    if (tag === "button" || role === "button") return "button";
+    if (tag === "a" && (el.hasAttribute("href") || role === "link")) return "link";
+    if (tag === "input") {
+      if (type === "hidden") return null;
+      if (type === "checkbox") return "checkbox";
+      if (type === "radio") return "radio";
+      if (type === "submit" || type === "button") return "button";
+      return "input";
+    }
+    if (tag === "select" || role === "combobox" || role === "listbox") return "select";
+    if (tag === "textarea") return "textarea";
+    if (tag === "summary") return "button";
+    if (role === "link" || role === "tab" || role === "menuitem" || role === "switch" || role === "option") {
+      return role;
+    }
+    if (el.onclick || el.getAttribute("onclick") || el.getAttribute("tabindex") === "0") {
+      return "button";
+    }
+    return null;
+  }
+
+  function stripAndExtractDOM() {
+    sidekickElementMap.clear();
+    const interactiveList = [];
+    const tagCounts = {};
+
+    walkAllNodes(document.body, (el) => {
+      if (!isElementStrippedVisible(el)) return;
+      const kind = isInteractiveCandidate(el);
+      if (!kind) return;
+
+      tagCounts[kind] = (tagCounts[kind] || 0) + 1;
+      const tagId = `[${kind}_${tagCounts[kind]}]`;
+      const cleanId = `${kind}_${tagCounts[kind]}`;
+
+      // Assign simplified attribute and register
+      el.setAttribute("data-sidekick-id", cleanId);
+      sidekickElementMap.set(tagId, el);
+      sidekickElementMap.set(cleanId, el);
+
+      // Extract accurate text / label / placeholder
+      let label = (
+        el.getAttribute("aria-label") ||
+        el.getAttribute("placeholder") ||
+        el.getAttribute("title") ||
+        el.innerText ||
+        el.textContent ||
+        ""
+      ).trim().replace(/\s+/g, " ").slice(0, 80);
+
+      const rect = el.getBoundingClientRect();
+      interactiveList.push({
+        id: tagId,
+        kind,
+        tag: el.tagName.toLowerCase(),
+        type: el.type || "",
+        text: label,
+        value: (el.value || "").slice(0, 50),
+        checked: Boolean(el.checked || el.getAttribute("aria-checked") === "true"),
+        disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true"),
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      });
+    });
+
+    // Extract clean visible page text (free of boilerplate and script junk)
+    const cleanBodyText = (document.body ? document.body.innerText || "" : "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .slice(0, 150)
+      .join("\n")
+      .slice(0, 15000);
+
+    const elementsSummary = interactiveList
+      .map((item) => {
+        let desc = `${item.id} ${item.kind.toUpperCase()}: "${item.text}"`;
+        if (item.value) desc += ` (value: "${item.value}")`;
+        if (item.checked) desc += ` [CHECKED]`;
+        if (item.disabled) desc += ` [DISABLED]`;
+        return desc;
+      })
+      .join("\n");
+
+    return {
+      url: window.location.href,
+      title: document.title,
+      interactiveElementsCount: interactiveList.length,
+      interactiveElements: interactiveList,
+      elementsSummary,
+      visiblePageText: cleanBodyText
+    };
+  }
+
+  async function prepareElementCoordinates(targetId) {
+    if (!targetId) {
+      return { success: false, error: "Missing element identifier." };
+    }
+
+    let cleanId = String(targetId).trim();
+    let normalizedKey = cleanId;
+    if (!cleanId.startsWith("[") && cleanId.includes("_")) {
+      normalizedKey = `[${cleanId}]`;
+    }
+
+    let el = sidekickElementMap.get(normalizedKey) || sidekickElementMap.get(cleanId);
+
+    if (!el) {
+      const rawId = cleanId.replace(/^\[/, "").replace(/\]$/, "");
+      el = document.querySelector(`[data-sidekick-id="${CSS.escape(rawId)}"]`);
+    }
+
+    if (!el && (cleanId.startsWith("#") || cleanId.startsWith("."))) {
+      try {
+        el = document.querySelector(cleanId);
+      } catch {}
+    }
+
+    if (!el) {
+      const rawId = cleanId.replace(/^\[/, "").replace(/\]$/, "");
+      walkAllNodes(document.body, (node) => {
+        if (!el && node.getAttribute && node.getAttribute("data-sidekick-id") === rawId) {
+          el = node;
+        }
+      });
+    }
+
+    if (!el) {
+      return { success: false, error: `Target element '${targetId}' was not found in the DOM.` };
+    }
+
+    if (typeof isPaymentWidgetOrSensitiveField === "function" && isPaymentWidgetOrSensitiveField(el)) {
+      return { success: false, error: "Security Exception: Element is a sensitive payment or credential input." };
+    }
+
+    // 1. Scroll element into center view
+    try {
+      el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    } catch {
+      el.scrollIntoView(true);
+    }
+
+    // 2. Wait 200ms for browser paint / layout settling (Critical CDP fix)
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // 3. Compute live center coordinates
+    const rect = el.getBoundingClientRect();
+    const centerX = Math.round(rect.left + rect.width / 2);
+    const centerY = Math.round(rect.top + rect.height / 2);
+
+    try {
+      showActionIndicator(centerX, centerY, cleanId);
+    } catch {}
+
+    return {
+      success: true,
+      x: centerX,
+      y: centerY,
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      tag: el.tagName.toLowerCase(),
+      type: el.type || "",
+      id: cleanId,
+      isVisible: rect.width > 0 && rect.height > 0
+    };
+  }
 
   // Cache & Mutation Tracking for Zero-Staleness Instant Extraction
   let cachedContext = null;

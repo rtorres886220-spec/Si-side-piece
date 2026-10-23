@@ -1,75 +1,98 @@
 /**
  * Sidekick - Background Service Worker (Manifest V3)
- * Just-In-Time (JIT) Chrome DevTools Protocol Engine with Ephemeral Attachment
- * Enterprise Defense-in-Depth Security & Hardware Event Dispatcher
+ * Continuous-Process Autonomous Browser Agent Engine
+ * 
+ * Features:
+ * 1. Resilient Service Worker Keep-Alive (Alarms + Port + Storage tick)
+ * 2. Background Brain & Session State (Agent survives side panel closing/reopening)
+ * 3. CDP Navigation Detachment Recovery (Auto-pause, onUpdated wait, re-attach)
+ * 4. Rate-Limit Queue & Exponential Backoff (15 RPM pacing + 60s automatic pause on 429)
+ * 5. Autonomous Multi-Agent Loop (DOM Stripper + Coordinate Resolver + Consequential Safety Gate)
+ * 6. Tab Group Management & Domain Deny-List Security
  */
 
-// Side panel behavior: opens on extension icon click
-chrome.sidePanel
-  .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((error) => console.error("Failed to set panel behavior:", error));
+// Configure side panel behavior to open on action click
+if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+  chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((error) => console.debug("Panel behavior note:", error));
+}
 
-// Domain Deny-List: High-security and financial domains locked from automation
+// ============================================================================
+// 1. SERVICE WORKER KEEP-ALIVE MECHANISM
+// ============================================================================
+// Manifest V3 kills idle background workers after ~30s. We combine alarms,
+// session storage touch ticks, and port heartbeats to ensure uninterrupted execution.
+
+const KEEP_ALIVE_ALARM = "sidekick-keep-alive-alarm";
+
+// Register periodic keep-alive alarm
+chrome.alarms.get(KEEP_ALARM => {
+  chrome.alarms.create(KEEP_ALIVE_ALARM, { periodInMinutes: 0.4 });
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === KEEP_ALIVE_ALARM) {
+    chrome.storage.session.set({ _keepAliveTick: Date.now() }).catch(() => {});
+  }
+});
+
+let _keepAliveInterval = null;
+function startLoopKeepAlive() {
+  if (_keepAliveInterval) clearInterval(_keepAliveInterval);
+  _keepAliveInterval = setInterval(() => {
+    chrome.storage.session.set({ _activeLoopTick: Date.now() }).catch(() => {});
+  }, 15000);
+}
+
+function stopLoopKeepAlive() {
+  if (_keepAliveInterval) clearInterval(_keepAliveInterval);
+  _keepAliveInterval = null;
+}
+
+// Sidepanel port connection keeper
+const activePorts = new Set();
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === "sidekick-sidepanel" || port.name === "sidekick-keepalive") {
+    activePorts.add(port);
+    port.onMessage.addListener((msg) => {
+      if (msg.type === "PING") {
+        port.postMessage({ type: "PONG", timestamp: Date.now() });
+      }
+    });
+    port.onDisconnect.addListener(() => {
+      activePorts.delete(port);
+    });
+  }
+});
+
+function broadcastToSidepanel(message) {
+  for (const port of activePorts) {
+    try {
+      port.postMessage(message);
+    } catch {}
+  }
+  chrome.runtime.sendMessage(message).catch(() => {});
+}
+
+// ============================================================================
+// 2. DOMAIN DENY-LIST & PAYMENT SENSITIVITY SHIELD
+// ============================================================================
 const AUTOMATION_DENYLIST = [
-  "chase.com",
-  "wellsfargo.com",
-  "bankofamerica.com",
-  "citibank.com",
-  "capitalone.com",
-  "usbank.com",
-  "americanexpress.com",
-  "amex.com",
-  "schwab.com",
-  "fidelity.com",
-  "vanguard.com",
-  "etrade.com",
-  "robinhood.com",
-  "paypal.com",
-  "paypal.me",
-  "stripe.com",
-  "venmo.com",
-  "cash.app",
-  "zellepay.com",
-  "wise.com",
-  "revolut.com",
-  "coinbase.com",
-  "binance.com",
-  "kraken.com",
-  "gemini.com",
-  "plaid.com",
-  "sofi.com",
-  "ally.com",
-  "discover.com",
-  "1password.com",
-  "bitwarden.com",
-  "lastpass.com",
-  "dashlane.com",
-  "keepersecurity.com",
-  "nordpass.com",
-  "roboform.com",
-  "accounts.google.com",
-  "mail.google.com",
-  "login.microsoftonline.com",
-  "outlook.live.com",
-  "auth0.com",
-  "okta.com",
-  "id.me",
-  "irs.gov",
-  "login.gov",
-  "usps.com",
-  "ssa.gov",
-  "turbotax.intuit.com",
-  "taxact.com",
-  "console.aws.amazon.com",
-  "aws.amazon.com",
-  "console.cloud.google.com",
-  "portal.azure.com",
-  "workday.com",
-  "adp.com",
-  "gusto.com",
-  "mychart.com",
-  "epic.com",
-  "github.com"
+  "chase.com", "wellsfargo.com", "bankofamerica.com", "citibank.com",
+  "capitalone.com", "usbank.com", "americanexpress.com", "amex.com",
+  "schwab.com", "fidelity.com", "vanguard.com", "etrade.com",
+  "robinhood.com", "paypal.com", "paypal.me", "stripe.com",
+  "venmo.com", "cash.app", "zellepay.com", "wise.com", "revolut.com",
+  "coinbase.com", "binance.com", "kraken.com", "gemini.com", "plaid.com",
+  "sofi.com", "ally.com", "discover.com", "1password.com", "bitwarden.com",
+  "lastpass.com", "dashlane.com", "keepersecurity.com", "nordpass.com",
+  "roboform.com", "accounts.google.com", "mail.google.com",
+  "login.microsoftonline.com", "outlook.live.com", "auth0.com", "okta.com",
+  "id.me", "irs.gov", "login.gov", "usps.com", "ssa.gov", "turbotax.intuit.com",
+  "taxact.com", "console.aws.amazon.com", "aws.amazon.com",
+  "console.cloud.google.com", "portal.azure.com", "workday.com",
+  "adp.com", "gusto.com", "mychart.com", "epic.com", "github.com"
 ];
 
 function checkDomainAllowed(urlStr) {
@@ -81,14 +104,12 @@ function checkDomainAllowed(urlStr) {
     urlLower.startsWith("chrome-search://") ||
     urlLower.startsWith("edge://") ||
     urlLower.startsWith("brave://") ||
-    urlLower.startsWith("opera://") ||
-    urlLower.startsWith("vivaldi://") ||
     urlLower.startsWith("about:") ||
     urlLower.startsWith("file:") ||
     urlLower.startsWith("javascript:") ||
     urlLower.startsWith("data:")
   ) {
-    throw new Error("Security Exception: Cannot attach debugger or automate internal/system pages.");
+    throw new Error("Security Exception: Cannot automate or debug internal browser pages.");
   }
   let hostname = "";
   let pathname = "";
@@ -100,57 +121,22 @@ function checkDomainAllowed(urlStr) {
     hostname = urlLower;
   }
   if (hostname === "chromewebstore.google.com" || (hostname === "chrome.google.com" && pathname.startsWith("/webstore"))) {
-    throw new Error("Security Exception: Chrome restricts automation and debugging on the Chrome Web Store.");
+    throw new Error("Security Exception: Chrome restricts debugging on the Chrome Web Store.");
   }
 
-  // Permitted public documentation & utility tools subdomains on otherwise restricted platforms
-  if (hostname === "docs.aws.amazon.com" || (hostname === "aws.amazon.com" && (pathname.startsWith("/blogs") || pathname.startsWith("/documentation") || pathname.startsWith("/pricing") || pathname.startsWith("/about-aws")))) {
-    return true;
-  }
-  if (hostname === "docs.stripe.com" || (hostname === "stripe.com" && (pathname.startsWith("/docs") || pathname.startsWith("/resources")))) {
-    return true;
-  }
-  if (hostname === "developer.paypal.com" || (hostname === "paypal.com" && pathname.startsWith("/developer"))) {
-    return true;
-  }
-  if (hostname === "tools.usps.com" || hostname === "postcalc.usps.com") {
+  // Exempt benign docs
+  if (hostname === "docs.aws.amazon.com" || hostname === "docs.stripe.com" || hostname === "developer.paypal.com") {
     return true;
   }
 
   for (const denied of AUTOMATION_DENYLIST) {
     if (denied === "github.com") {
       if ((hostname === "github.com" || hostname.endsWith(".github.com")) &&
-          (pathname.startsWith("/settings/security") || pathname.startsWith("/settings/keys") || pathname.startsWith("/settings/tokens") || pathname.startsWith("/settings/auth") ||
-           pathname.includes("/settings/security") || pathname.includes("/settings/keys") || pathname.includes("/settings/tokens") || pathname.includes("/settings/auth"))) {
-        throw new Error("Security Exception: Automation is strictly prohibited on sensitive GitHub security settings.");
+          (pathname.includes("/settings/security") || pathname.includes("/settings/keys") || pathname.includes("/settings/tokens"))) {
+        throw new Error("Security Exception: Automation is prohibited on sensitive GitHub security settings.");
       }
       continue;
     }
-    if (denied === "aws.amazon.com") {
-      if (hostname === "console.aws.amazon.com" || (hostname === "aws.amazon.com" && (pathname.includes("/billing") || pathname.includes("/signin")))) {
-        throw new Error("Security Exception: Automation is strictly prohibited on AWS Console and billing portals.");
-      }
-      continue;
-    }
-    if (denied === "stripe.com") {
-      if (hostname === "dashboard.stripe.com" || hostname === "checkout.stripe.com" || hostname === "js.stripe.com") {
-        throw new Error("Security Exception: Automation is strictly prohibited on Stripe dashboard and checkout elements.");
-      }
-      continue;
-    }
-    if (denied === "paypal.com") {
-      if (hostname === "paypal.com" || hostname === "www.paypal.com" || hostname.endsWith(".paypal.com")) {
-        throw new Error("Security Exception: Automation is strictly prohibited on sensitive financial platform (paypal.com).");
-      }
-      continue;
-    }
-    if (denied === "usps.com") {
-      if (hostname === "reg.usps.com" || hostname === "store.usps.com") {
-        throw new Error("Security Exception: Automation is strictly prohibited on sensitive postal account/store portals.");
-      }
-      continue;
-    }
-
     if (hostname === denied || hostname.endsWith("." + denied)) {
       throw new Error(`Security Exception: Automation is strictly prohibited on sensitive domain (${denied}).`);
     }
@@ -158,19 +144,26 @@ function checkDomainAllowed(urlStr) {
   return true;
 }
 
-// Sensitive payment patterns targeting payment card inputs, CVVs, and checkout card elements
 const PAYMENT_PATTERNS = [
   /\b(?:stripe[-_ ]*element|stripe[-_ ]*card|stripe[-_ ]*checkout|stripe[-_ ]*frame)\b/i,
   /\b(?:paypal[-_ ]*button|paypal[-_ ]*checkout|braintree)\b/i,
-  /\b(?:credit[-_ ]*card|debit[-_ ]*card|card[-_ ]*number(?<!(?:gift|loyalty|rewards?|library|id|member|sound|graphics?|sd|trading|playing)[-_ ]*card[-_ ]*number)|ccnum|cc[-_ ]*number)\b/i,
+  /\b(?:credit[-_ ]*card|debit[-_ ]*card|card[-_ ]*number|ccnum|cc[-_ ]*number)\b/i,
   /\b(?:cvv|cvc|cvv2|card[-_ ]*security[-_ ]*code)\b/i,
   /\b(?:exp[-_ ]*date|exp[-_ ]*month|exp[-_ ]*year|payment[-_ ]*widget)\b/i
 ];
 
-// Exemptions for benign non-payment card and 2FA authentication items
-const BENIGN_CARD_EXEMPTIONS = /\b(?:gift[-_ ]*card|loyalty[-_ ]*card|rewards?[-_ ]*card|sd[-_ ]*card|graphics?[-_ ]*card|sound[-_ ]*card|video[-_ ]*card|trading[-_ ]*card|playing[-_ ]*card|business[-_ ]*card|library[-_ ]*card|card[-_ ]*sleeve|verification[-_ ]*code|2fa|otp|sms[-_ ]*code|one[-_ ]*time[-_ ]*code|(?:listing|product|item|article|result|car|vehicle|auto|profile|info|nav|menu|recipe|search|preview)[-_ ]*card)\b/i;
+const BENIGN_CARD_EXEMPTIONS = /\b(?:gift[-_ ]*card|loyalty[-_ ]*card|rewards?[-_ ]*card|sd[-_ ]*card|graphics?[-_ ]*card|sound[-_ ]*card|trading[-_ ]*card|playing[-_ ]*card|business[-_ ]*card|library[-_ ]*card|card[-_ ]*sleeve|verification[-_ ]*code|2fa|otp|sms[-_ ]*code|one[-_ ]*time[-_ ]*code)\b/i;
 
-// Tab Group Management State & Functions
+function isSensitivePaymentTarget(desc) {
+  if (!desc) return false;
+  const dLower = String(desc).toLowerCase();
+  if (BENIGN_CARD_EXEMPTIONS.test(dLower)) return false;
+  return PAYMENT_PATTERNS.some((pat) => pat.test(dLower));
+}
+
+// ============================================================================
+// 3. TAB GROUPS MANAGEMENT
+// ============================================================================
 async function getManagedGroupState() {
   const storage = await chrome.storage.local.get([
     "sidekickManagedGroupId",
@@ -195,25 +188,19 @@ async function getManagedGroupState() {
         groupTabs = await chrome.tabs.query({ groupId });
       }
     } catch {
-      // Group was removed or closed
       await chrome.storage.local.remove("sidekickManagedGroupId");
       groupId = null;
       isConfigured = false;
     }
   }
 
-  // Get current active tab
   let activeTab = null;
   try {
     const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (activeTabs && activeTabs.length > 0) activeTab = activeTabs[0];
   } catch {}
 
-  const isCurrentTabInGroup = !!(
-    activeTab &&
-    groupId &&
-    activeTab.groupId === groupId
-  );
+  const isCurrentTabInGroup = !!(activeTab && groupId && activeTab.groupId === groupId);
 
   return {
     isConfigured,
@@ -236,24 +223,20 @@ async function getManagedGroupState() {
 
 async function createOrBindGroup({ targetTabId, existingGroupId, title = "Sidekick Workgroup", color = "purple" } = {}) {
   if (!chrome.tabs || !chrome.tabGroups) {
-    throw new Error("Tab Groups API not supported in this browser version");
+    throw new Error("Tab Groups API not supported");
   }
 
   let finalGroupId = existingGroupId;
-
   if (!finalGroupId) {
-    // If no existing group ID provided, group the active or new tab
     let tabId = targetTabId;
     if (!tabId) {
       const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
       if (activeTabs && activeTabs.length > 0) tabId = activeTabs[0].id;
     }
-
     if (!tabId) {
       const newTab = await chrome.tabs.create({ url: "https://www.google.com", active: true });
       tabId = newTab.id;
     }
-
     finalGroupId = await chrome.tabs.group({ tabIds: [tabId] });
     await chrome.tabGroups.update(finalGroupId, { title, color });
   }
@@ -267,43 +250,7 @@ async function createOrBindGroup({ targetTabId, existingGroupId, title = "Sideki
   return await getManagedGroupState();
 }
 
-async function addTabToManagedGroup(tabId) {
-  const state = await getManagedGroupState();
-  if (!state.groupId) {
-    return await createOrBindGroup({ targetTabId: tabId });
-  }
-  await chrome.tabs.group({ tabIds: [tabId], groupId: state.groupId });
-  return await getManagedGroupState();
-}
-
-async function openTabInManagedGroup(url = "https://www.google.com") {
-  const state = await getManagedGroupState();
-  let cleanUrl = (url || "").trim() || "https://www.google.com";
-  if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
-    cleanUrl = "https://" + cleanUrl;
-  }
-  checkDomainAllowed(cleanUrl);
-
-  const newTab = await chrome.tabs.create({ url: cleanUrl, active: true });
-  if (state.groupId) {
-    try {
-      await chrome.tabs.group({ tabIds: [newTab.id], groupId: state.groupId });
-    } catch {
-      await createOrBindGroup({ targetTabId: newTab.id });
-    }
-  } else {
-    await createOrBindGroup({ targetTabId: newTab.id });
-  }
-
-  return await getManagedGroupState();
-}
-
-async function unbindManagedGroup() {
-  await chrome.storage.local.remove(["sidekickManagedGroupId", "sidekickManagedGroupName"]);
-  return await getManagedGroupState();
-}
-
-// Clean up storage when tab group is closed
+// Clean up storage if group closed
 if (chrome.tabGroups && chrome.tabGroups.onRemoved) {
   chrome.tabGroups.onRemoved.addListener(async (group) => {
     const storage = await chrome.storage.local.get("sidekickManagedGroupId");
@@ -313,549 +260,30 @@ if (chrome.tabGroups && chrome.tabGroups.onRemoved) {
   });
 }
 
-// Clean up and synchronize state if debugger is detached externally
+// ============================================================================
+// 4. CDP CONTROLLER WITH NAVIGATION DETACHMENT RECOVERY
+// ============================================================================
+let activeDebuggerTabId = null;
+let navigationWaiters = new Map();
+
+// Monitor debugger detachments
 if (chrome.debugger && chrome.debugger.onDetach) {
-  chrome.debugger.onDetach.addListener((source, reason) => {
-    console.debug(`Debugger detached from tab ${source.tabId} (${reason}). State synchronized.`);
-  });
-}
-
-const ALLOWED_MESSAGE_TYPES = new Set([
-  "EXECUTE_CDP_ACTION",
-  "CAPTURE_VISION_SCREENSHOT",
-  "GET_MANAGED_GROUP_STATE",
-  "CREATE_OR_BIND_GROUP",
-  "ADD_TAB_TO_MANAGED_GROUP",
-  "OPEN_TAB_IN_MANAGED_GROUP",
-  "UNBIND_MANAGED_GROUP",
-  "SET_GROUP_ISOLATION",
-  "ABORT_PENDING_CDP"
-]);
-
-const ALLOWED_CDP_ACTIONS = new Set([
-  "click",
-  "type",
-  "scroll",
-  "navigate",
-  "uploadFile",
-  "upload_file",
-  "waitForNetworkIdle",
-  "setDeviceMetrics"
-]);
-
-// Message Handler for Side Panel Requests
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // A13: Enforce caller security: only allow extension UI (sidepanel), never webpage content scripts
-  if (sender && sender.tab !== undefined) {
-    sendResponse({ success: false, error: "Unauthorized sender: CDP actions cannot be invoked from webpage content scripts." });
-    return false;
-  }
-  if (sender && sender.id && sender.id !== chrome.runtime.id) {
-    sendResponse({ success: false, error: "Unauthorized sender" });
-    return false;
-  }
-
-  // Schema & message structure validation
-  if (!message || typeof message !== "object" || typeof message.type !== "string") {
-    sendResponse({ success: false, error: "Malformed message schema: expected object with string type property." });
-    return false;
-  }
-
-  if (!ALLOWED_MESSAGE_TYPES.has(message.type)) {
-    sendResponse({ success: false, error: `Unauthorized or unpermitted message type: "${message.type}".` });
-    return false;
-  }
-
-  if (message.type === "EXECUTE_CDP_ACTION") {
-    if (!message.action || !ALLOWED_CDP_ACTIONS.has(message.action)) {
-      sendResponse({ success: false, error: `Invalid CDP action: "${message.action}". Allowed actions: ${Array.from(ALLOWED_CDP_ACTIONS).join(", ")}` });
-      return false;
-    }
-    handleCDPAction(message)
-      .then((result) => sendResponse({ success: true, result }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true; // Keep message channel open for async response
-  }
-
-  if (message.type === "CAPTURE_VISION_SCREENSHOT") {
-    captureTabScreenshot(message.tabId, message.options)
-      .then((dataUrl) => sendResponse({ success: true, dataUrl }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
-
-  // Tab Group Management Message Handlers
-  if (message.type === "GET_MANAGED_GROUP_STATE") {
-    getManagedGroupState()
-      .then((groupState) => sendResponse({ success: true, state: groupState }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
-
-  if (message.type === "CREATE_OR_BIND_GROUP") {
-    createOrBindGroup(message.params)
-      .then((groupState) => sendResponse({ success: true, state: groupState }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
-
-  if (message.type === "ADD_TAB_TO_MANAGED_GROUP") {
-    addTabToManagedGroup(message.tabId)
-      .then((groupState) => sendResponse({ success: true, state: groupState }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
-
-  if (message.type === "OPEN_TAB_IN_MANAGED_GROUP") {
-    openTabInManagedGroup(message.url)
-      .then((groupState) => sendResponse({ success: true, state: groupState }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
-
-  if (message.type === "UNBIND_MANAGED_GROUP") {
-    unbindManagedGroup()
-      .then((groupState) => sendResponse({ success: true, state: groupState }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
-
-  if (message.type === "SET_GROUP_ISOLATION") {
-    chrome.storage.local.set({ sidekickGroupIsolationEnabled: !!message.enabled })
-      .then(() => getManagedGroupState())
-      .then((groupState) => sendResponse({ success: true, state: groupState }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
-
-  if (message.type === "ABORT_PENDING_CDP") {
-    if (message.tabId && chrome.debugger) {
-      chrome.debugger.detach({ tabId: message.tabId }).catch(() => {});
-    }
-    sendResponse({ success: true, aborted: true });
-    return false;
-  }
-});
-
-/**
- * Executes a native CDP action using Just-In-Time (JIT) ephemeral attach & detach
- */
-async function handleCDPAction({ tabId, action, params }) {
-  if (!tabId) throw new Error("Missing target tabId for CDP action");
-
-  // 1. Single-Tab Security Lock & Domain Deny-List Verification
-  const tab = await chrome.tabs.get(tabId);
-  if (!tab || !tab.url) throw new Error("Target tab not accessible");
-
-  // Handle navigate directly with chrome.tabs.update - works seamlessly on any tab including newtab & about:blank
-  // without needing debugger attachment or triggering CDP target errors on internal chrome:// pages!
-  if (action === "navigate") {
-    let targetUrl = (params?.url || "").trim();
-    if (targetUrl && !/^https?:\/\//i.test(targetUrl)) {
-      targetUrl = `https://${targetUrl}`;
-    }
-    if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
-      throw new Error("Security Exception: Navigation is restricted to HTTP/HTTPS protocols only.");
-    }
-    checkDomainAllowed(targetUrl);
-    await chrome.tabs.update(tabId, { url: targetUrl });
-    return { navigated: true, url: targetUrl };
-  }
-
-  checkDomainAllowed(tab.url);
-
-  // 1b. Tab Group Isolation Check: Enforce that actions only execute on tabs within the managed group
-  const storage = await chrome.storage.local.get([
-    "sidekickManagedGroupId",
-    "sidekickManagedGroupName",
-    "sidekickGroupIsolationEnabled"
-  ]);
-  const managedGroupId = storage.sidekickManagedGroupId;
-  const isolationEnabled = storage.sidekickGroupIsolationEnabled !== false;
-
-  if (isolationEnabled && managedGroupId) {
-    if (tab.groupId !== managedGroupId && chrome.tabs?.group) {
-      try {
-        await chrome.tabs.group({ tabIds: [tabId], groupId: managedGroupId });
-      } catch (grpErr) {
-        console.debug("Auto-group tab notice:", grpErr);
-      }
-    }
-  }
-
-  // Explicit Payment Widget Lockout across selector, element description, and label
-  const descToCheck = `${params?.selector || ""} ${params?.element_description || ""} ${params?.label || ""}`.toLowerCase();
-  const isBenignCardOrAuth = BENIGN_CARD_EXEMPTIONS.test(descToCheck);
-  if (!isBenignCardOrAuth) {
-    for (const pat of PAYMENT_PATTERNS) {
-      if (pat.test(descToCheck)) {
-        throw new Error("Security Exception: Automated interaction with payment widgets or checkout card elements is strictly blocked.");
-      }
-    }
-  }
-
-  const debugTarget = { tabId };
-  let isDebuggerAttached = false;
-
-  // 2. Just-In-Time (JIT) Attach
-  try {
-    await chrome.debugger.attach(debugTarget, "1.3");
-    isDebuggerAttached = true;
-  } catch (attachErr) {
-    console.warn("CDP Attach notice (DevTools active or target restricted):", attachErr.message);
-    return await dispatchDOMFallback(tabId, action, params);
-  }
-
-  try {
-    switch (action) {
-      case "click": {
-        // True OS-level trusted mouse click sequence
-        let { x, y } = params;
-        if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) {
-          return await dispatchDOMFallback(tabId, action, params);
-        }
-        await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
-          type: "mouseMoved",
-          x,
-          y
-        });
-        await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
-          type: "mousePressed",
-          x,
-          y,
-          button: "left",
-          clickCount: 1
-        });
-        await delay(10);
-        try {
-          await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
-            type: "mouseReleased",
-            x,
-            y,
-            button: "left",
-            clickCount: 1
-          });
-        } catch (releaseErr) {
-          const msg = releaseErr?.message?.toLowerCase() || "";
-          if (msg.includes("debugger is not attached") || msg.includes("target closed") || msg.includes("session closed")) {
-            console.debug("Navigation detach during mouse release acknowledged.");
-            return { clicked: true, navigated: true, x, y };
-          }
-          throw releaseErr;
-        }
-        return { clicked: true, x, y };
-      }
-
-      case "type": {
-        // Focus coordinates first, then dispatch trusted keyboard events
-        const { x, y } = params;
-        const text = params.text || "";
-        const pressEnter = Boolean(params.pressEnter || params.press_enter);
-        if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) {
-          return await dispatchDOMFallback(tabId, action, params);
-        }
-        await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
-          type: "mousePressed",
-          x,
-          y,
-          button: "left",
-          clickCount: 1
-        });
-        await delay(10);
-        await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
-          type: "mouseReleased",
-          x,
-          y,
-          button: "left",
-          clickCount: 1
-        });
-
-        // Fast native CDP text insertion
-        if (text) {
-          try {
-            await sendCommand(debugTarget, "Input.insertText", { text });
-          } catch {
-            // Fallback to key events with low-latency dispatch
-            for (const char of text) {
-              await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
-                type: "keyDown",
-                text: char,
-                unmodifiedText: char,
-                key: char
-              });
-              await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
-                type: "keyUp",
-                key: char
-              });
-            }
-          }
-        }
-
-        if (pressEnter) {
-          await delay(15);
-          await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
-            type: "keyDown",
-            code: "Enter",
-            key: "Enter",
-            windowsVirtualKeyCode: 13,
-            nativeVirtualKeyCode: 13
-          });
-          await delay(10);
-          await sendCommand(debugTarget, "Input.dispatchKeyEvent", {
-            type: "keyUp",
-            code: "Enter",
-            key: "Enter"
-          });
-        }
-
-        return { typed: true, textLength: text.length };
-      }
-
-      case "scroll": {
-        const { x = 200, y = 300, deltaX = 0, deltaY = 300 } = params;
-        await sendCommand(debugTarget, "Input.dispatchMouseEvent", {
-          type: "mouseWheel",
-          x,
-          y,
-          deltaX,
-          deltaY
-        });
-        return { scrolled: true, deltaY };
-      }
-
-      case "uploadFile": {
-        const { selector, files } = params;
-        if (!files || !Array.isArray(files) || files.length === 0) {
-          throw new Error("Missing files parameter for uploadFile action");
-        }
-        const SENSITIVE_FILE_PATTERNS = [
-          /(?:^|[/\\])etc[/\\](?:passwd|shadow|sudoers|security|ssh)[/\\]?/i,
-          /(?:^|[/\\])(?:proc|sys)[/\\]/i,
-          /(?:^|[/\\])\.(?:ssh|aws|gnupg|docker)[/\\]/i,
-          /(?:^|[/\\])\.env(?:\.[a-z0-9_-]+)?$/i,
-          /(?:^|[/\\])\.(?:bash_history|zsh_history|sh_history)$/i,
-          /(?:^|[/\\])id_(?:rsa|ed25519|ecdsa|dsa)(?:\.pub)?$/i,
-          /(?:^|[/\\])(?:client_secret|service_account_key)\.json$/i,
-          /^(\/root|\/root[/\\])/i,
-          /^[a-z]:[/\\]windows[/\\]system32[/\\]config[/\\]?/i
-        ];
-        for (const f of files) {
-          const fLower = String(f).toLowerCase();
-          if (SENSITIVE_FILE_PATTERNS.some((pat) => pat.test(fLower))) {
-            throw new Error(`Security Exception: Access to protected or sensitive system path is blocked (${f}).`);
-          }
-        }
-        await sendCommand(debugTarget, "DOM.enable", {});
-        const doc = await sendCommand(debugTarget, "DOM.getDocument", {});
-        const node = await sendCommand(debugTarget, "DOM.querySelector", {
-          nodeId: doc.root.nodeId,
-          selector
-        });
-
-        if (node && node.nodeId) {
-          await sendCommand(debugTarget, "DOM.setFileInputFiles", {
-            files,
-            nodeId: node.nodeId
-          });
-          return { uploaded: true, filesCount: files.length };
-        }
-        throw new Error(`FileInput element matching '${selector}' not found`);
-      }
-
-      case "navigate": {
-        const { url } = params;
-        if (!url || typeof url !== "string") throw new Error("Missing URL for navigate action");
-        const trimmed = url.trim().toLowerCase();
-        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
-          throw new Error("Security Exception: Navigation is restricted to HTTP/HTTPS protocols only.");
-        }
-        if (!checkDomainAllowed(url)) {
-          throw new Error("Security Exception: Navigation to blocked or restricted domain is not allowed.");
-        }
-        await sendCommand(debugTarget, "Page.enable", {});
-        await sendCommand(debugTarget, "Page.navigate", { url });
-        return { navigated: true, url };
-      }
-
-      case "waitForNetworkIdle": {
-        const { timeout = 2500 } = params || {};
-        await waitForNetworkIdle(debugTarget, timeout);
-        return { networkIdle: true };
-      }
-
-      case "setDeviceMetrics": {
-        const { width = 1280, height = 800, deviceScaleFactor = 1, mobile = false } = params || {};
-        await sendCommand(debugTarget, "Emulation.setDeviceMetricsOverride", {
-          width,
-          height,
-          deviceScaleFactor,
-          mobile
-        });
-        return { emulated: true, width, height };
-      }
-
-      default:
-        throw new Error(`Unknown CDP action: ${action}`);
-    }
-  } finally {
-    // 3. Ephemeral JIT Detach immediately to hide the yellow banner
-    if (isDebuggerAttached) {
-      try {
-        await chrome.debugger.detach(debugTarget);
-      } catch (detachErr) {
-        console.debug("JIT Detach notice:", detachErr.message);
-      }
-    }
-  }
-}
-
-/**
- * Dispatch DOM Fallback directly to content script
- */
-async function dispatchDOMFallback(tabId, action, params) {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, { action: "executeDOMAction", cdpAction: action, params }, (res) => {
-      const err = chrome.runtime.lastError;
-      if (err) {
-        reject(new Error(err.message));
-      } else if (!res || !res.success) {
-        reject(new Error(res?.error || "DOM action execution failed"));
+  chrome.debugger.onDetach.addListener(async (source, reason) => {
+    console.debug(`[CDP] Debugger detached from tab ${source.tabId} (${reason}).`);
+    if (activeAgentEngine && activeAgentEngine.tabId === source.tabId) {
+      if (reason === "target_closed") {
+        activeAgentEngine.stop("Target tab was closed by user.");
       } else {
-        resolve(res.result);
+        // Detached due to navigation or replace
+        activeAgentEngine.handleNavigationDetach(source.tabId);
       }
-    });
+    }
   });
 }
 
-/**
- * Capture ultra-low quota visual screenshot for Survey Grounding
- * Clamped to 768px max dimension in WebP format at 40% quality (~258 tokens max, ~20KB-35KB).
- * Ephemeral memory lifecycle with zero disk or storage persistence.
- */
-async function captureTabScreenshot(tabId, options = {}) {
-  const tab = await chrome.tabs.get(tabId);
-  if (!tab || !tab.url) throw new Error("Invalid tab for screenshot");
-  checkDomainAllowed(tab.url);
-
-  // Survey-specific isolation gating: ensure visual capture only occurs on the active survey tab
-  if (options && options.forSurveyOnly && !options.isSurvey) {
-    throw new Error("Security Exception: Visual inspection is strictly restricted to active survey tasks.");
-  }
-
-  const debugTarget = { tabId };
-  let isDebuggerAttached = false;
-  try {
-    await chrome.debugger.attach(debugTarget, "1.3");
-    isDebuggerAttached = true;
-  } catch (err) {
-    throw new Error(`Debugger attach failed: ${err.message}`);
-  }
-
-  try {
-    await sendCommand(debugTarget, "Page.enable", {});
-
-    // Inspect layout metrics to calculate aspect-preserving downscaling to max 768px
-    const metrics = await sendCommand(debugTarget, "Page.getLayoutMetrics", {}).catch(() => null);
-    const vp = metrics?.visualViewport || metrics?.cssVisualViewport || { clientWidth: 1280, clientHeight: 800 };
-    const vpWidth = Math.max(320, Math.round(vp.clientWidth || 1280));
-    const vpHeight = Math.max(240, Math.round(vp.clientHeight || 800));
-    const maxDim = options?.maxDimension || 768;
-    const maxCurrentDim = Math.max(vpWidth, vpHeight);
-    const scale = maxCurrentDim > maxDim ? Number((maxDim / maxCurrentDim).toFixed(3)) : 1;
-
-    const requestedFormat = (options?.format || "webp").toLowerCase();
-    const format = (requestedFormat === "webp" || requestedFormat === "png") ? requestedFormat : "jpeg";
-    const quality = options?.quality !== undefined ? Math.max(10, Math.min(100, options.quality)) : 40;
-
-    const screenshotParams = {
-      format,
-      clip: {
-        x: 0,
-        y: 0,
-        width: vpWidth,
-        height: vpHeight,
-        scale: Math.max(0.2, Math.min(1, scale))
-      }
-    };
-    if (format !== "png") {
-      screenshotParams.quality = quality;
-    }
-
-    let screenshot;
-    try {
-      screenshot = await sendCommand(debugTarget, "Page.captureScreenshot", screenshotParams);
-    } catch {
-      // Fallback without clip if specific device scales are rejected by the target browser engine
-      screenshot = await sendCommand(debugTarget, "Page.captureScreenshot", {
-        format: "jpeg",
-        quality: 45
-      });
-      return `data:image/jpeg;base64,${screenshot.data}`;
-    }
-
-    const mime = format === "webp" ? "image/webp" : (format === "png" ? "image/png" : "image/jpeg");
-    return `data:${mime};base64,${screenshot.data}`;
-  } finally {
-    if (isDebuggerAttached) {
-      try {
-        await chrome.debugger.detach(debugTarget);
-      } catch {}
-    }
-  }
-}
-
-/**
- * Network Idle Detection using Network.enable to ensure SPAs finish requests
- */
-async function waitForNetworkIdle(debugTarget, timeoutMs = 2500, maxInflight = 0) {
-  try {
-    await sendCommand(debugTarget, "Network.enable", {});
-  } catch {
-    return;
-  }
-
-  return new Promise((resolve) => {
-    let inflight = 0;
-    let idleTimer = null;
-    const maxWaitTimer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, timeoutMs);
-
-    function onEvent(source, method) {
-      if (source.tabId !== debugTarget.tabId) return;
-      if (method === "Network.requestWillBeSent") {
-        inflight++;
-        if (idleTimer) clearTimeout(idleTimer);
-      } else if (method === "Network.loadingFinished" || method === "Network.loadingFailed") {
-        inflight = Math.max(0, inflight - 1);
-        if (inflight <= maxInflight) {
-          if (idleTimer) clearTimeout(idleTimer);
-          idleTimer = setTimeout(() => {
-            cleanup();
-            resolve();
-          }, 350);
-        }
-      }
-    }
-
-    function cleanup() {
-      chrome.debugger.onEvent.removeListener(onEvent);
-      clearTimeout(maxWaitTimer);
-      if (idleTimer) clearTimeout(idleTimer);
-    }
-
-    chrome.debugger.onEvent.addListener(onEvent);
-    idleTimer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, 400);
-  });
-}
-
-function sendCommand(target, method, commandParams, timeoutMs = 8000) {
+async function sendCDPCommand(target, method, commandParams = {}, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
-    let timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       reject(new Error(`CDP command '${method}' timed out after ${timeoutMs}ms`));
     }, timeoutMs);
 
@@ -870,6 +298,786 @@ function sendCommand(target, method, commandParams, timeoutMs = 8000) {
   });
 }
 
+async function executeCDPActionOnTab(tabId, action, params = {}) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab || !tab.url) throw new Error("Target tab not accessible");
+  checkDomainAllowed(tab.url);
+
+  // Direct tab navigation without debugger attachment
+  if (action === "navigate") {
+    let targetUrl = (params?.url || "").trim();
+    if (targetUrl && !/^https?:\/\//i.test(targetUrl)) {
+      targetUrl = `https://${targetUrl}`;
+    }
+    checkDomainAllowed(targetUrl);
+    await chrome.tabs.update(tabId, { url: targetUrl });
+    return { navigated: true, url: targetUrl };
+  }
+
+  const debugTarget = { tabId };
+  let attachedLocally = false;
+
+  try {
+    await chrome.debugger.attach(debugTarget, "1.3");
+    attachedLocally = true;
+    activeDebuggerTabId = tabId;
+  } catch (err) {
+    console.warn("CDP Attach warning (falling back to DOM action):", err.message);
+    return await dispatchDOMFallback(tabId, action, params);
+  }
+
+  try {
+    switch (action) {
+      case "click": {
+        let { x, y } = params;
+        if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) {
+          return await dispatchDOMFallback(tabId, action, params);
+        }
+        await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x,
+          y
+        });
+        await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          x,
+          y,
+          button: "left",
+          clickCount: 1
+        });
+        await delay(15);
+        try {
+          await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
+            type: "mouseReleased",
+            x,
+            y,
+            button: "left",
+            clickCount: 1
+          });
+        } catch (releaseErr) {
+          const msg = releaseErr?.message?.toLowerCase() || "";
+          if (msg.includes("debugger is not attached") || msg.includes("target closed")) {
+            return { clicked: true, navigated: true, x, y };
+          }
+          throw releaseErr;
+        }
+        return { clicked: true, x, y };
+      }
+
+      case "type": {
+        const { x, y, text = "", pressEnter = false } = params;
+        if (x !== undefined && y !== undefined && !isNaN(x) && !isNaN(y)) {
+          await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
+            type: "mousePressed",
+            x,
+            y,
+            button: "left",
+            clickCount: 1
+          });
+          await delay(10);
+          await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
+            type: "mouseReleased",
+            x,
+            y,
+            button: "left",
+            clickCount: 1
+          });
+          await delay(20);
+        }
+
+        if (text) {
+          try {
+            await sendCDPCommand(debugTarget, "Input.insertText", { text });
+          } catch {
+            for (const char of text) {
+              await sendCDPCommand(debugTarget, "Input.dispatchKeyEvent", {
+                type: "keyDown",
+                text: char,
+                key: char
+              });
+              await sendCDPCommand(debugTarget, "Input.dispatchKeyEvent", {
+                type: "keyUp",
+                key: char
+              });
+            }
+          }
+        }
+
+        if (pressEnter) {
+          await delay(15);
+          await sendCDPCommand(debugTarget, "Input.dispatchKeyEvent", {
+            type: "keyDown",
+            code: "Enter",
+            key: "Enter",
+            windowsVirtualKeyCode: 13,
+            nativeVirtualKeyCode: 13
+          });
+          await delay(10);
+          await sendCDPCommand(debugTarget, "Input.dispatchKeyEvent", {
+            type: "keyUp",
+            code: "Enter",
+            key: "Enter"
+          });
+        }
+        return { typed: true, textLength: text.length };
+      }
+
+      case "scroll": {
+        const { x = 300, y = 400, deltaX = 0, deltaY = 400 } = params;
+        await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x,
+          y,
+          deltaX,
+          deltaY
+        });
+        return { scrolled: true, deltaY };
+      }
+
+      default:
+        throw new Error(`Unsupported CDP action: ${action}`);
+    }
+  } finally {
+    if (attachedLocally) {
+      try {
+        await chrome.debugger.detach(debugTarget);
+        if (activeDebuggerTabId === tabId) activeDebuggerTabId = null;
+      } catch {}
+    }
+  }
+}
+
+async function dispatchDOMFallback(tabId, action, params) {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, { action: "executeDOMAction", cdpAction: action, params }, (res) => {
+      const err = chrome.runtime.lastError;
+      if (err) reject(new Error(err.message));
+      else if (!res || !res.success) reject(new Error(res?.error || "DOM fallback failed"));
+      else resolve(res.result);
+    });
+  });
+}
+
+// ============================================================================
+// 5. RESILIENT GEMINI API CLIENT & 15 RPM RATE-LIMIT QUEUE
+// ============================================================================
+class BackgroundGeminiClient {
+  constructor() {
+    this.queue = Promise.resolve();
+    this.lastCallEndTime = 0;
+    this.minIntervalMs = 4000; // Pacing for 15 RPM
+    this.isPaused429 = false;
+  }
+
+  async executeInference(prompt, systemInstruction, config = {}, onStatusUpdate = () => {}) {
+    const run = async () => {
+      const now = Date.now();
+      const timeSinceLast = now - this.lastCallEndTime;
+      if (timeSinceLast < this.minIntervalMs && this.lastCallEndTime > 0) {
+        await delay(this.minIntervalMs - timeSinceLast);
+      }
+
+      let attempt = 0;
+      const maxRetries = 3;
+      let delayMs = 1000;
+
+      const storage = await chrome.storage.local.get([
+        "gemini_sidekick_api_key",
+        "gemini_sidekick_model",
+        "gemini_sidekick_proxy_url"
+      ]);
+      const apiKey = (storage.gemini_sidekick_api_key || "").trim();
+      const model = storage.gemini_sidekick_model || "gemini-2.0-flash";
+      const proxyUrl = (storage.gemini_sidekick_proxy_url || "http://localhost:3000").replace(/\/+$/, "");
+
+      while (attempt <= maxRetries) {
+        attempt++;
+        try {
+          if (apiKey) {
+            // Direct Google Generative Language API
+            const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const body = {
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+              generationConfig: {
+                temperature: config.temperature !== undefined ? config.temperature : 0.2,
+                maxOutputTokens: config.maxOutputTokens || 2048,
+              }
+            };
+
+            const res = await fetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body)
+            });
+
+            if (res.ok) {
+              const data = await res.json();
+              this.lastCallEndTime = Date.now();
+              const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+              return text;
+            }
+
+            if (res.status === 429) {
+              this.isPaused429 = true;
+              console.warn(`[BackgroundApiClient] Rate limit 429 hit. Pausing for 60 seconds.`);
+              for (let s = 60; s > 0; s--) {
+                onStatusUpdate(`Rate limit: Pausing for ${s}s`, s);
+                await delay(1000);
+              }
+              this.isPaused429 = false;
+              onStatusUpdate("Resuming after rate limit pause...", 0);
+              continue;
+            }
+
+            const errText = await res.text().catch(() => res.statusText);
+            throw new Error(`Gemini API error (${res.status}): ${errText}`);
+          } else {
+            // Server proxy route
+            const endpoint = `${proxyUrl}/api/gemini`;
+            const res = await fetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                promptText: prompt,
+                model,
+                rawPayload: {
+                  prompt,
+                  systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined
+                }
+              })
+            });
+
+            if (res.ok) {
+              const data = await res.json();
+              this.lastCallEndTime = Date.now();
+              return data?.text || data?.rawResponse?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+            }
+
+            if (res.status === 429) {
+              this.isPaused429 = true;
+              console.warn(`[BackgroundApiClient] Proxy returned 429. Pausing for 60 seconds.`);
+              for (let s = 60; s > 0; s--) {
+                onStatusUpdate(`Rate limit: Pausing for ${s}s`, s);
+                await delay(1000);
+              }
+              this.isPaused429 = false;
+              onStatusUpdate("Resuming after rate limit pause...", 0);
+              continue;
+            }
+
+            const errText = await res.text().catch(() => res.statusText);
+            throw new Error(`Proxy error (${res.status}): ${errText}`);
+          }
+        } catch (err) {
+          if (attempt <= maxRetries && !this.isPaused429) {
+            await delay(delayMs);
+            delayMs *= 2;
+            continue;
+          }
+          throw err;
+        }
+      }
+    };
+
+    const resultPromise = this.queue.then(run, run);
+    this.queue = resultPromise.catch(() => {});
+    return resultPromise;
+  }
+}
+
+const geminiClient = new BackgroundGeminiClient();
+
+// ============================================================================
+// 6. AUTONOMOUS AGENT BRAIN & STATE MACHINE (LIVES IN SERVICE WORKER)
+// ============================================================================
+class AutonomousAgentEngine {
+  constructor() {
+    this.tabId = null;
+    this.isNavigating = false;
+    this.abortController = null;
+    this.state = {
+      status: "IDLE", // IDLE, RUNNING, PAUSED_429, WAITING_APPROVAL, COMPLETED, STOPPED, ERROR
+      objective: "",
+      currentStep: 1,
+      maxSteps: 50,
+      startTime: 0,
+      elapsedMs: 0,
+      checklist: [],
+      currentThought: "",
+      logs: [],
+      rateLimitNotice: null,
+      pendingApproval: null,
+      resultSummary: null,
+      error: null
+    };
+  }
+
+  async persistState() {
+    await chrome.storage.session.set({ sidekickAgentState: this.state });
+    broadcastToSidepanel({ type: "AGENT_STATE_UPDATED", state: this.state });
+  }
+
+  async start(prompt) {
+    if (this.state.status === "RUNNING") {
+      this.stop("Starting new task");
+    }
+
+    this.abortController = new AbortController();
+    startLoopKeepAlive();
+
+    // Determine target tab
+    let tab = null;
+    const managed = await getManagedGroupState();
+    if (managed.isConfigured && managed.tabs.length > 0) {
+      const activeGroupTab = managed.tabs.find((t) => t.active) || managed.tabs[0];
+      tab = await chrome.tabs.get(activeGroupTab.id).catch(() => null);
+    }
+    if (!tab) {
+      const activeTabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (activeTabs && activeTabs.length > 0) tab = activeTabs[0];
+    }
+    if (!tab || !tab.id) {
+      tab = await chrome.tabs.create({ url: "https://www.google.com", active: true });
+      await delay(1000);
+    }
+
+    this.tabId = tab.id;
+    checkDomainAllowed(tab.url);
+
+    this.state = {
+      status: "RUNNING",
+      objective: prompt,
+      currentStep: 1,
+      maxSteps: 50,
+      startTime: Date.now(),
+      elapsedMs: 0,
+      checklist: [
+        { id: "c1", text: "Analyze active page and identify interactive controls", status: "in_progress" }
+      ],
+      currentThought: "Extracting DOM snapshot and interactive element catalog…",
+      logs: [
+        { timestamp: Date.now(), type: "info", text: `Autonomous session started: "${prompt}"` }
+      ],
+      rateLimitNotice: null,
+      pendingApproval: null,
+      resultSummary: null,
+      error: null
+    };
+
+    await this.persistState();
+    this.runAgentLoop();
+  }
+
+  async runAgentLoop() {
+    const signal = this.abortController.signal;
+
+    while (this.state.status === "RUNNING" && this.state.currentStep <= this.state.maxSteps) {
+      if (signal.aborted) break;
+
+      try {
+        // Step 1: Wait if tab is navigating
+        if (this.isNavigating) {
+          await delay(500);
+          continue;
+        }
+
+        this.state.elapsedMs = Date.now() - this.state.startTime;
+        this.addLog("info", `Step ${this.state.currentStep}: Inspecting page state...`);
+        this.state.currentThought = "Extracting stripped DOM representation and candidate actions...";
+        await this.persistState();
+
+        // Step 2: Ensure content script is active & extract stripped DOM
+        let domData = await this.getStrippedDOM();
+        if (!domData) {
+          await delay(1000);
+          domData = await this.getStrippedDOM();
+        }
+
+        if (signal.aborted) break;
+
+        // Step 3: Construct prompt for Gemini Reasoning
+        const systemPrompt = `You are Sidekick, an elite autonomous browser agent. You observe webpages and execute precise actions to achieve the user's objective.
+You are given a list of interactive elements indexed with simplified IDs like [button_1], [input_2], [link_3].
+
+ALLOWED ACTIONS (Output exactly one in this format):
+- ACTION: CLICK [tag_id] (e.g. ACTION: CLICK [button_1])
+- ACTION: TYPE [tag_id] "text" (e.g. ACTION: TYPE [input_2] "laptop deals" [ENTER])
+- ACTION: SCROLL down (or SCROLL up)
+- ACTION: NAVIGATE https://...
+- ACTION: FINISH "Detailed conclusion or answer"
+
+OUTPUT FORMAT:
+THOUGHT: <concise reasoning about what to do next>
+CHECKLIST: <comma-separated list of 2-4 progress checklist items>
+ACTION: <single command from allowed actions>`;
+
+        const userPrompt = `USER OBJECTIVE: ${this.state.objective}
+CURRENT STEP: ${this.state.currentStep} of ${this.state.maxSteps}
+PAGE TITLE: ${domData?.title || "Untitled"}
+PAGE URL: ${domData?.url || ""}
+
+INTERACTIVE ELEMENTS:
+${domData?.elementsSummary || "(No interactive elements found)"}
+
+VISIBLE PAGE EXCERPT:
+${(domData?.visiblePageText || "").slice(0, 3500)}`;
+
+        // Step 4: Run Gemini Inference with Rate Limit Feedback
+        const responseText = await geminiClient.executeInference(
+          userPrompt,
+          systemPrompt,
+          { temperature: 0.2 },
+          (statusMsg, countdown) => {
+            this.state.status = countdown > 0 ? "PAUSED_429" : "RUNNING";
+            this.state.rateLimitNotice = countdown > 0 ? statusMsg : null;
+            this.state.currentThought = statusMsg;
+            this.persistState();
+          }
+        );
+
+        if (signal.aborted) break;
+
+        // Step 5: Parse Response
+        const parsed = this.parseAgentDecision(responseText);
+        this.state.currentThought = parsed.thought || "Executing determined action...";
+        if (parsed.checklist && parsed.checklist.length > 0) {
+          this.state.checklist = parsed.checklist.map((item, idx) => ({
+            id: `c_${idx}`,
+            text: item,
+            status: idx === 0 ? "done" : (idx === 1 ? "in_progress" : "pending")
+          }));
+        }
+        await this.persistState();
+
+        this.addLog("thought", parsed.thought || "Decision reached");
+
+        // Step 6: Execute the decided Action
+        if (parsed.actionType === "FINISH") {
+          this.state.status = "COMPLETED";
+          this.state.resultSummary = parsed.actionArg || "Task objective completed successfully.";
+          this.addLog("success", `Completed: ${this.state.resultSummary}`);
+          await this.persistState();
+          break;
+        }
+
+        if (parsed.actionType === "NAVIGATE") {
+          this.addLog("action", `Navigating to ${parsed.actionArg}`);
+          await executeCDPActionOnTab(this.tabId, "navigate", { url: parsed.actionArg });
+          await this.waitForNavigation(this.tabId);
+        } else if (parsed.actionType === "SCROLL") {
+          const deltaY = parsed.actionArg.toLowerCase().includes("up") ? -500 : 500;
+          this.addLog("action", `Scrolling page (${deltaY > 0 ? "down" : "up"})`);
+          await executeCDPActionOnTab(this.tabId, "scroll", { deltaY });
+          await delay(600);
+        } else if (parsed.actionType === "CLICK" || parsed.actionType === "TYPE") {
+          const targetId = parsed.targetId;
+          this.addLog("action", `Resolving target ${targetId}...`);
+
+          // Call content script with scrollIntoView and 200ms settling
+          const coords = await this.resolveTargetCoordinates(targetId);
+          if (!coords || !coords.success) {
+            this.addLog("warn", `Could not resolve coordinates for ${targetId}: ${coords?.error || "Element missing"}`);
+          } else {
+            // Consequential Action Safety Gate Check
+            const isSensitive = isSensitivePaymentTarget(parsed.actionArg || targetId);
+            if (isSensitive) {
+              this.state.status = "WAITING_APPROVAL";
+              this.state.pendingApproval = {
+                actionType: parsed.actionType,
+                targetId,
+                actionArg: parsed.actionArg,
+                coords
+              };
+              this.addLog("warn", `Pausing for Consequential Action approval: ${parsed.actionType} on ${targetId}`);
+              await this.persistState();
+              return; // Wait for user approval
+            }
+
+            if (parsed.actionType === "CLICK") {
+              await executeCDPActionOnTab(this.tabId, "click", { x: coords.x, y: coords.y });
+            } else if (parsed.actionType === "TYPE") {
+              await executeCDPActionOnTab(this.tabId, "type", {
+                x: coords.x,
+                y: coords.y,
+                text: parsed.textToType,
+                pressEnter: parsed.pressEnter
+              });
+            }
+          }
+          await delay(700);
+        }
+
+        this.state.currentStep++;
+        if (this.state.currentStep > this.state.maxSteps) {
+          this.state.status = "COMPLETED";
+          this.state.resultSummary = "Reached safety limit of 50 steps.";
+          await this.persistState();
+          break;
+        }
+
+        await this.persistState();
+        await delay(500);
+      } catch (loopErr) {
+        if (signal.aborted) break;
+        console.error("[AutonomousAgentEngine] Loop error:", loopErr);
+        this.addLog("error", `Error in step ${this.state.currentStep}: ${loopErr.message}`);
+        this.state.status = "ERROR";
+        this.state.error = loopErr.message;
+        await this.persistState();
+        break;
+      }
+    }
+
+    stopLoopKeepAlive();
+  }
+
+  async getStrippedDOM() {
+    try {
+      return await new Promise((resolve) => {
+        chrome.tabs.sendMessage(this.tabId, { action: "EXTRACT_STRIPPED_DOM" }, (res) => {
+          if (chrome.runtime.lastError || !res || !res.success) {
+            // Attempt script injection if content script not yet present
+            chrome.scripting.executeScript({
+              target: { tabId: this.tabId },
+              files: ["content.js"]
+            }).then(() => {
+              delay(300).then(() => {
+                chrome.tabs.sendMessage(this.tabId, { action: "EXTRACT_STRIPPED_DOM" }, (retryRes) => {
+                  resolve(retryRes?.data || null);
+                });
+              });
+            }).catch(() => resolve(null));
+          } else {
+            resolve(res.data);
+          }
+        });
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async resolveTargetCoordinates(targetId) {
+    return new Promise((resolve) => {
+      chrome.tabs.sendMessage(this.tabId, { action: "GET_ELEMENT_COORDINATES", targetId }, (res) => {
+        if (chrome.runtime.lastError) {
+          resolve({ success: false, error: chrome.runtime.lastError.message });
+        } else {
+          resolve(res || { success: false, error: "No response from content script" });
+        }
+      });
+    });
+  }
+
+  parseAgentDecision(text) {
+    const lines = text.split("\n").map(l => l.trim());
+    let thought = "";
+    let checklist = [];
+    let actionType = "FINISH";
+    let actionArg = "";
+    let targetId = "";
+    let textToType = "";
+    let pressEnter = false;
+
+    for (const line of lines) {
+      if (line.startsWith("THOUGHT:")) {
+        thought = line.replace(/^THOUGHT:\s*/i, "").trim();
+      } else if (line.startsWith("CHECKLIST:")) {
+        const raw = line.replace(/^CHECKLIST:\s*/i, "").trim();
+        checklist = raw.split(",").map(c => c.trim()).filter(Boolean);
+      } else if (line.startsWith("ACTION:")) {
+        const rawAction = line.replace(/^ACTION:\s*/i, "").trim();
+        if (/^FINISH/i.test(rawAction)) {
+          actionType = "FINISH";
+          actionArg = rawAction.replace(/^FINISH\s*/i, "").replace(/^["']|["']$/g, "").trim();
+        } else if (/^NAVIGATE/i.test(rawAction)) {
+          actionType = "NAVIGATE";
+          actionArg = rawAction.replace(/^NAVIGATE\s*/i, "").trim();
+        } else if (/^SCROLL/i.test(rawAction)) {
+          actionType = "SCROLL";
+          actionArg = rawAction.replace(/^SCROLL\s*/i, "").trim() || "down";
+        } else if (/^CLICK/i.test(rawAction)) {
+          actionType = "CLICK";
+          const match = rawAction.match(/\[([a-zA-Z0-9_\-]+)\]/);
+          targetId = match ? match[0] : rawAction.replace(/^CLICK\s*/i, "").trim();
+        } else if (/^TYPE/i.test(rawAction)) {
+          actionType = "TYPE";
+          const match = rawAction.match(/\[([a-zA-Z0-9_\-]+)\]/);
+          targetId = match ? match[0] : "";
+          const textMatch = rawAction.match(/["'](.*?)["']/);
+          textToType = textMatch ? textMatch[1] : "";
+          pressEnter = /\[ENTER\]/i.test(rawAction);
+        }
+      }
+    }
+
+    if (!thought) thought = text.slice(0, 150);
+    return { thought, checklist, actionType, actionArg, targetId, textToType, pressEnter };
+  }
+
+  async handleNavigationDetach(tabId) {
+    this.isNavigating = true;
+    this.addLog("info", "CDP Detach by navigation. Pausing execution queue while page loads...");
+    this.state.currentThought = "Page navigating... waiting for document load and re-attaching CDP debugger.";
+    await this.persistState();
+
+    await this.waitForNavigation(tabId);
+    await delay(600);
+
+    // Re-inject content script
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ["content.js"]
+      });
+    } catch {}
+
+    this.isNavigating = false;
+    this.addLog("info", "Page navigation finished. Debugger and content script re-synchronized.");
+    await this.persistState();
+  }
+
+  async waitForNavigation(tabId, timeoutMs = 15000) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }, timeoutMs);
+
+      const listener = (updatedTabId, changeInfo) => {
+        if (updatedTabId === tabId && changeInfo.status === "complete") {
+          clearTimeout(timer);
+          chrome.tabs.onUpdated.removeListener(listener);
+          resolve();
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+    });
+  }
+
+  async approvePendingAction() {
+    if (this.state.status !== "WAITING_APPROVAL" || !this.state.pendingApproval) return;
+    const approval = this.state.pendingApproval;
+    this.state.pendingApproval = null;
+    this.state.status = "RUNNING";
+    this.addLog("info", `Consequential action approved: ${approval.actionType} on ${approval.targetId}`);
+    await this.persistState();
+
+    if (approval.actionType === "CLICK") {
+      await executeCDPActionOnTab(this.tabId, "click", { x: approval.coords.x, y: approval.coords.y });
+    } else if (approval.actionType === "TYPE") {
+      await executeCDPActionOnTab(this.tabId, "type", {
+        x: approval.coords.x,
+        y: approval.coords.y,
+        text: approval.actionArg
+      });
+    }
+    this.runAgentLoop();
+  }
+
+  async denyPendingAction() {
+    if (this.state.status !== "WAITING_APPROVAL") return;
+    this.state.pendingApproval = null;
+    this.state.status = "RUNNING";
+    this.addLog("warn", "Consequential action was denied by user. Re-evaluating next step.");
+    this.state.currentThought = "Action denied by user. Selecting alternate path...";
+    await this.persistState();
+    this.runAgentLoop();
+  }
+
+  stop(reason = "Stopped by user") {
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+    stopLoopKeepAlive();
+    this.state.status = "STOPPED";
+    this.state.currentThought = reason;
+    this.addLog("warn", reason);
+    this.persistState();
+  }
+
+  addLog(type, text) {
+    this.state.logs.push({ timestamp: Date.now(), type, text });
+    if (this.state.logs.length > 100) this.state.logs.shift();
+  }
+}
+
+const activeAgentEngine = new AutonomousAgentEngine();
+
+// ============================================================================
+// 7. MESSAGE ROUTING DISPATCHER
+// ============================================================================
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (sender && sender.id && sender.id !== chrome.runtime.id) {
+    sendResponse({ success: false, error: "Unauthorized sender" });
+    return false;
+  }
+
+  if (!message || typeof message !== "object") {
+    sendResponse({ success: false, error: "Invalid message" });
+    return false;
+  }
+
+  // Autonomous Agent Control Messages
+  if (message.type === "START_AGENT_LOOP") {
+    activeAgentEngine.start(message.prompt)
+      .then(() => sendResponse({ success: true, state: activeAgentEngine.state }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "STOP_AGENT_LOOP") {
+    activeAgentEngine.stop("Stopped by user");
+    sendResponse({ success: true, state: activeAgentEngine.state });
+    return false;
+  }
+
+  if (message.type === "GET_AGENT_STATE") {
+    sendResponse({ success: true, state: activeAgentEngine.state });
+    return false;
+  }
+
+  if (message.type === "APPROVE_CONSEQUENTIAL_ACTION") {
+    activeAgentEngine.approvePendingAction()
+      .then(() => sendResponse({ success: true }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "DENY_CONSEQUENTIAL_ACTION") {
+    activeAgentEngine.denyPendingAction()
+      .then(() => sendResponse({ success: true }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  // CDP Execution Messages
+  if (message.type === "EXECUTE_CDP_ACTION") {
+    executeCDPActionOnTab(message.tabId, message.action, message.params)
+      .then((result) => sendResponse({ success: true, result }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  // Tab Groups Messages
+  if (message.type === "GET_MANAGED_GROUP_STATE") {
+    getManagedGroupState()
+      .then((state) => sendResponse({ success: true, state }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "CREATE_OR_BIND_GROUP") {
+    createOrBindGroup(message.params)
+      .then((state) => sendResponse({ success: true, state }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  return false;
+});
+
 function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }

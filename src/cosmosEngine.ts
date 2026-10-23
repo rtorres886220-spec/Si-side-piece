@@ -249,12 +249,30 @@ export function initLivingCosmos(options: {
   let animationFrameId = 0;
   const clock = new THREE.Clock();
 
+  let isManuallyPaused = false;
+
+  const pause = () => {
+    isManuallyPaused = true;
+    isRunning = false;
+    cancelAnimationFrame(animationFrameId);
+  };
+
+  const resume = () => {
+    if (!isManuallyPaused) return;
+    isManuallyPaused = false;
+    if (!document.hidden && !isRunning) {
+      isRunning = true;
+      clock.getDelta();
+      animate();
+    }
+  };
+
   const handleVisibilityChange = () => {
     if (document.hidden) {
       isRunning = false;
       cancelAnimationFrame(animationFrameId);
     } else {
-      if (!isRunning) {
+      if (!isRunning && !isManuallyPaused) {
         isRunning = true;
         clock.getDelta();
         animate();
@@ -305,6 +323,9 @@ export function initLivingCosmos(options: {
   console.log("[CosmosEngine] 3D Living Particle Globe initialized with full visual parity.");
 
   return {
+    pause,
+    resume,
+    isRunning: () => isRunning && !isManuallyPaused,
     destroy: () => {
       isRunning = false;
       cancelAnimationFrame(animationFrameId);

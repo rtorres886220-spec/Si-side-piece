@@ -190,17 +190,17 @@ async function startServer() {
 
     try {
       const rawPayload = req.body?.rawPayload;
-      let requestedModel = String(req.body?.model || 'gemini-3.5-flash-lite').trim();
-      if (requestedModel.includes('3.8') || requestedModel.includes('gemini-flash-latest')) {
-        requestedModel = 'gemini-3.5-flash-lite';
+      let requestedModel = String(req.body?.model || 'gemini-2.0-flash').trim();
+      if (requestedModel.includes('3.5') || requestedModel.includes('3.1') || requestedModel.includes('3.8') || requestedModel.includes('gemini-flash-latest')) {
+        requestedModel = 'gemini-2.0-flash';
       }
       const stream = Boolean(req.body?.stream);
 
-      const targetModel = requestedModel || 'gemini-3.5-flash-lite';
+      const targetModel = requestedModel || 'gemini-2.0-flash';
       const cascade = [
         targetModel,
-        'gemini-3.5-flash-lite',
-        'gemini-3.1-flash-lite',
+        'gemini-2.0-flash',
+        'gemini-1.5-flash',
       ].filter((m, i, a) => a.indexOf(m) === i);
 
       // SPECIALIST MULTI-AGENT RAW PAYLOAD PROXY PATH:

@@ -732,7 +732,6 @@ strong, b, .font-semibold, .font-medium {
   cursor: pointer;
   white-space: nowrap;
   line-height: 1.8;
-}
   overflow: hidden;
   text-overflow: ellipsis;
   transition: color 0.15s, background-color 0.15s;
@@ -1528,8 +1527,6 @@ strong, b, .font-semibold, .font-medium {
   font-size: 11.5px;
   color: var(--mute);
   line-height: 1.8;
-  transition: color 0.15s ease;
-}
   transition: color 0.15s ease;
 }
 
@@ -2800,7 +2797,15 @@ input:checked + .slider:before {
   border-left: 2px solid #38bdf8;
 }
 
+/* CPU Throttling Optimization: Pauses heavy CSS animations during active AI thinking/CDP */
+body.ai-active-throttling *,
+.sidekick-panel.ai-active-throttling * {
+  animation-play-state: paused !important;
+}
 
-
-
+body.ai-active-throttling .galaxy-canvas,
+.sidekick-panel.ai-active-throttling .galaxy-canvas {
+  opacity: 0.35;
+  transition: opacity 0.3s ease;
+}
 

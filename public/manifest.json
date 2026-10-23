@@ -12,7 +12,8 @@
     "webNavigation",
     "scripting",
     "storage",
-    "debugger"
+    "debugger",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -28,7 +29,7 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_idle",
+      "run_at": "document_end",
       "all_frames": false,
       "match_about_blank": false
     }
