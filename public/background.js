@@ -400,15 +400,18 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
   }
 
   const debugTarget = { tabId };
+  const isInAgentSession = Boolean(activeAgentEngine && activeAgentEngine.tabId === tabId && activeAgentEngine.state.status === "RUNNING");
   let attachedLocally = false;
 
-  try {
-    await chrome.debugger.attach(debugTarget, "1.3");
-    attachedLocally = true;
-    activeDebuggerTabId = tabId;
-  } catch (err) {
-    console.warn("CDP Attach warning (falling back to DOM action):", err.message);
-    return await dispatchDOMFallback(tabId, action, params);
+  if (activeDebuggerTabId !== tabId) {
+    try {
+      await chrome.debugger.attach(debugTarget, "1.3");
+      activeDebuggerTabId = tabId;
+      attachedLocally = !isInAgentSession;
+    } catch (err) {
+      console.warn("CDP Attach warning (falling back to DOM action):", err.message);
+      return await dispatchDOMFallback(tabId, action, params);
+    }
   }
 
   try {
@@ -419,9 +422,50 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
           return await dispatchDOMFallback(tabId, action, params);
         }
 
-        // Exact centroid coordinates (zero jitter offset for 100% first-try click accuracy)
-        const targetX = Math.round(x);
-        const targetY = Math.round(y);
+        let targetX = Math.round(x);
+        let targetY = Math.round(y);
+
+        // Pre-Click Coordinate Re-Verification & Occlusion Safety
+        try {
+          const targetFrameId = params.frameId !== undefined ? params.frameId : 0;
+          const verifyMsg = {
+            action: "reverifyCoordinates",
+            selector: params.selector || params.targetId,
+            elementId: params.targetId,
+            x: targetX,
+            y: targetY
+          };
+          const sendOptions = targetFrameId !== 0 ? { frameId: targetFrameId } : {};
+          const reverifyResp = await new Promise((resolve) => {
+            chrome.tabs.sendMessage(tabId, verifyMsg, sendOptions, (res) => {
+              if (chrome.runtime.lastError || !res || !res.success) resolve(null);
+              else resolve(res.coords);
+            });
+          });
+
+          if (reverifyResp) {
+            // Check if element is occluded by overlay/backdrop
+            if (reverifyResp.isOccluded || reverifyResp.isIntercepted || reverifyResp.blocked) {
+              const blocker = reverifyResp.occludedBy || reverifyResp.interceptedBy || "modal backdrop";
+              console.warn(`[Pre-Click] Target is occluded by ${blocker}. Halting click.`);
+              return {
+                clicked: false,
+                occluded: true,
+                occludedBy: blocker,
+                reason: `Target is occluded by overlay (${blocker})`
+              };
+            }
+
+            // Check if element moved by > 5px due to animation/reflow
+            if (reverifyResp.verified && (Math.abs(reverifyResp.x - targetX) > 5 || Math.abs(reverifyResp.y - targetY) > 5)) {
+              console.log(`[Pre-Click] Element shifted from (${targetX}, ${targetY}) to (${reverifyResp.x}, ${reverifyResp.y}). Re-centering click centroid.`);
+              targetX = reverifyResp.x;
+              targetY = reverifyResp.y;
+            }
+          }
+        } catch (reverifyErr) {
+          console.debug("[Pre-Click] Re-verification notice:", reverifyErr.message);
+        }
 
         const prevPos = lastMousePositions.get(tabId) || {
           x: Math.max(20, targetX - 60),
@@ -589,7 +633,7 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
         throw new Error(`Unsupported CDP action: ${action}`);
     }
   } finally {
-    if (attachedLocally) {
+    if (attachedLocally && !isInAgentSession) {
       try {
         await chrome.debugger.detach(debugTarget);
         if (activeDebuggerTabId === tabId) activeDebuggerTabId = null;
@@ -763,6 +807,7 @@ class AutonomousAgentEngine {
     this.tabId = null;
     this.isNavigating = false;
     this.abortController = null;
+    this.frameElementRegistry = new Map();
     this.state = {
       status: "IDLE", // IDLE, RUNNING, PAUSED_429, WAITING_APPROVAL, COMPLETED, STOPPED, ERROR
       objective: "",
@@ -791,6 +836,7 @@ class AutonomousAgentEngine {
     }
 
     this.abortController = new AbortController();
+    this.frameElementRegistry.clear();
     startLoopKeepAlive();
 
     // Determine target tab and automatically group into "Si" (ice white / silver)
@@ -811,6 +857,21 @@ class AutonomousAgentEngine {
 
     this.tabId = tab.id;
     checkDomainAllowed(tab.url);
+
+    // Attach persistent CDP session for entire autonomous run (prevents infobar reflow thrashing)
+    try {
+      if (activeDebuggerTabId && activeDebuggerTabId !== this.tabId) {
+        await chrome.debugger.detach({ tabId: activeDebuggerTabId });
+        activeDebuggerTabId = null;
+      }
+      if (activeDebuggerTabId !== this.tabId) {
+        await chrome.debugger.attach({ tabId: this.tabId }, "1.3");
+        activeDebuggerTabId = this.tabId;
+        console.log(`[CDP] Attached persistent debugger session for tab #${this.tabId}`);
+      }
+    } catch (attachErr) {
+      console.warn("[CDP] Session attach notice:", attachErr.message);
+    }
 
     this.state = {
       status: "RUNNING",
@@ -886,18 +947,21 @@ class AutonomousAgentEngine {
         const systemPrompt = `You are Sidekick, an elite autonomous browser agent powered by Gemini Multimodal Vision.
 You receive:
 1. A live JPEG screenshot of the current browser tab viewport.
-2. A list of interactive DOM elements indexed with IDs like [button_1], [button_2], [input_3], [select_4].
+2. A list of interactive DOM elements indexed with IDs like [button_1], [f1_radio_2], [select_3], along with exact spatial coordinates (x, y, w, h) and viewport location anchors (e.g. [Bottom Action Bar], [Center Main Content]).
 
-VISUAL INSPECTION DIRECTIVE (MANDATORY):
-1. First, examine the screenshot carefully. Look for any active modal dialogs, popup overlays, consent gates, or interstitials (e.g. "What you need to know...", "Attention", "Notice", "Accept", "Close", "Ok, let's go").
-2. If ANY modal or overlay dialog is visually covering or floating on top of the page:
+SPATIAL GROUNDING & VISUAL INSPECTION DIRECTIVE (MANDATORY):
+1. Examine the screenshot and cross-reference visible buttons with the provided spatial coordinates and location anchors:
+   - Match buttons by visual text, quadrant location (e.g. [Bottom-Right / Action Area], [Top Header]), and bounding coordinates (x, y, w, h).
+   - If an element is located inside a survey iframe, it is identified with a frame prefix such as [f1_radio_1] or [f2_button_2].
+2. Look for any active modal dialogs, popup overlays, consent gates, or interstitials (e.g. "What you need to know...", "Attention", "Notice", "Accept", "Close", "Ok, let's go").
+3. If ANY modal or overlay dialog is visually covering or floating on top of the page:
    - You MUST identify and interact with the button INSIDE that modal dialog (e.g. "Ok, let's go", "Accept", "Close", "Continue") to dismiss it.
    - NEVER click background buttons beneath the modal (such as background survey cards or links) while an overlay is active, as those clicks will be blocked by the backdrop!
-3. If no modal is present, visually confirm the location and state of the target element on the webpage before taking action.
-4. Output your visual observation in VISUAL_CHECK before your final action.
+4. If no modal is present, visually confirm the location and state of the target element on the webpage before taking action.
+5. Output your visual observation in VISUAL_CHECK before your final action.
 
 ALLOWED ACTIONS (Output exactly one in this format):
-- ACTION: CLICK [tag_id] (e.g. ACTION: CLICK [button_1])
+- ACTION: CLICK [tag_id] (e.g. ACTION: CLICK [button_1] or ACTION: CLICK [f1_radio_2])
 - ACTION: SELECT [tag_id] "option_text_or_value" (e.g. ACTION: SELECT [select_3] "California" or "CA")
 - ACTION: TYPE [tag_id] "text" (e.g. ACTION: TYPE [input_2] "laptop deals" [ENTER])
 - ACTION: SCROLL down (or SCROLL up)
@@ -908,7 +972,7 @@ CRITICAL FOR DROPDOWN MENUS:
 Always use ACTION: SELECT [tag_id] "option_text" for dropdown menus (<select>) instead of clicking them, ensuring first-try precision without getting trapped in open menus.
 
 OUTPUT FORMAT:
-VISUAL_CHECK: <crisp observation of what is visually on top in the screenshot, noting any active modal dialogs or overlays>
+VISUAL_CHECK: <crisp observation of what is visually on top in the screenshot, noting any active modal dialogs or overlays and spatial anchors>
 THOUGHT: <concise reasoning about what to do next based on both visual evidence and DOM>
 CHECKLIST: <comma-separated list of 2-4 progress checklist items>
 ACTION: <single command from allowed actions>`;
@@ -1039,13 +1103,24 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
             }
 
             if (parsed.actionType === "CLICK") {
-              await executeCDPActionOnTab(this.tabId, "click", { x: coords.x, y: coords.y });
+              const clickResult = await executeCDPActionOnTab(this.tabId, "click", {
+                x: coords.x,
+                y: coords.y,
+                targetId,
+                frameId: coords.frameId || 0
+              });
+              if (clickResult && clickResult.occluded) {
+                this.addLog("warn", `Target ${targetId} is occluded by ${clickResult.occludedBy || "overlay"}. Physical click prevented.`);
+                this.state.currentThought = `Target is occluded by ${clickResult.occludedBy || "modal backdrop"}. Redirecting attention to dismiss modal...`;
+              }
             } else if (parsed.actionType === "TYPE") {
               await executeCDPActionOnTab(this.tabId, "type", {
                 x: coords.x,
                 y: coords.y,
                 text: parsed.textToType,
-                pressEnter: parsed.pressEnter
+                pressEnter: parsed.pressEnter,
+                targetId,
+                frameId: coords.frameId || 0
               });
             }
           }
@@ -1074,20 +1149,30 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
     }
 
     stopLoopKeepAlive();
+    if (this.tabId && activeDebuggerTabId === this.tabId) {
+      try {
+        await chrome.debugger.detach({ tabId: this.tabId });
+        activeDebuggerTabId = null;
+        console.log(`[CDP] Cleanly detached persistent session from tab #${this.tabId}`);
+      } catch {}
+    }
   }
 
   async getStrippedDOM() {
     try {
-      return await new Promise((resolve) => {
-        chrome.tabs.sendMessage(this.tabId, { action: "EXTRACT_STRIPPED_DOM" }, (res) => {
+      this.frameElementRegistry.clear();
+
+      // 1. Extract from top frame (frameId: 0)
+      let topData = await new Promise((resolve) => {
+        chrome.tabs.sendMessage(this.tabId, { action: "EXTRACT_STRIPPED_DOM" }, { frameId: 0 }, (res) => {
           if (chrome.runtime.lastError || !res || !res.success) {
-            // Attempt script injection if content script not yet present
+            // Attempt script injection across all frames if content script not yet present
             chrome.scripting.executeScript({
-              target: { tabId: this.tabId },
+              target: { tabId: this.tabId, allFrames: true },
               files: ["content.js"]
             }).then(() => {
               delay(300).then(() => {
-                chrome.tabs.sendMessage(this.tabId, { action: "EXTRACT_STRIPPED_DOM" }, (retryRes) => {
+                chrome.tabs.sendMessage(this.tabId, { action: "EXTRACT_STRIPPED_DOM" }, { frameId: 0 }, (retryRes) => {
                   resolve(retryRes?.data || null);
                 });
               });
@@ -1097,18 +1182,119 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
           }
         });
       });
+
+      if (!topData) return null;
+
+      // 2. Discover and traverse subframes via webNavigation if available
+      let allFrames = [];
+      try {
+        if (chrome.webNavigation && chrome.webNavigation.getAllFrames) {
+          allFrames = await chrome.webNavigation.getAllFrames({ tabId: this.tabId });
+        }
+      } catch {}
+
+      const subframes = (allFrames || []).filter((f) => f.frameId !== 0);
+      const topIframes = topData.iframes || [];
+
+      if (subframes.length > 0) {
+        let combinedElements = [...(topData.interactiveElements || [])];
+        let subframeTexts = [];
+
+        for (let i = 0; i < subframes.length; i++) {
+          const sf = subframes[i];
+          const matchedIframe = topIframes[i] || topIframes.find((ifr) => ifr.src && sf.url && (sf.url.includes(ifr.src) || ifr.src.includes(sf.url))) || { rect: { left: 0, top: 0, width: 800, height: 600 } };
+          const frameOffset = matchedIframe.rect || { left: 0, top: 0, width: 800, height: 600 };
+
+          try {
+            const sfData = await new Promise((res) => {
+              chrome.tabs.sendMessage(this.tabId, { action: "EXTRACT_STRIPPED_DOM" }, { frameId: sf.frameId }, (response) => {
+                if (chrome.runtime.lastError || !response || !response.success) res(null);
+                else res(response.data);
+              });
+            });
+
+            if (sfData && sfData.interactiveElements && sfData.interactiveElements.length > 0) {
+              sfData.interactiveElements.forEach((el, elIdx) => {
+                const subTagId = `[f${sf.frameId}_${el.kind || 'el'}_${elIdx + 1}]`;
+                const origId = el.id;
+                const absX = Math.round(frameOffset.left + el.x);
+                const absY = Math.round(frameOffset.top + el.y);
+
+                this.frameElementRegistry.set(subTagId, {
+                  frameId: sf.frameId,
+                  origId: origId,
+                  cleanId: el.cleanId,
+                  iframeOffset: frameOffset
+                });
+
+                combinedElements.push({
+                  ...el,
+                  id: subTagId,
+                  x: absX,
+                  y: absY,
+                  frameId: sf.frameId,
+                  inIframe: true,
+                  iframeOffset: frameOffset
+                });
+              });
+
+              if (sfData.visiblePageText) {
+                subframeTexts.push(`[IFRAME #${sf.frameId} CONTENT]:\n${sfData.visiblePageText}`);
+              }
+            }
+          } catch {}
+        }
+
+        topData.interactiveElements = combinedElements;
+        topData.interactiveElementsCount = combinedElements.length;
+        if (subframeTexts.length > 0) {
+          topData.visiblePageText = `${topData.visiblePageText}\n\n${subframeTexts.join("\n\n")}`;
+        }
+
+        // Re-generate elementsSummary with updated spatial coordinates and frame indicators
+        topData.elementsSummary = combinedElements
+          .map((item) => {
+            const frameTag = item.inIframe ? " (in iframe)" : "";
+            const anchor = item.spatialAnchor || "Center Main Content";
+            let desc = `${item.id} ${item.kind.toUpperCase()}${frameTag}: "${item.text}" (x: ${item.x}, y: ${item.y}, w: ${item.width}, h: ${item.height}) [${anchor}]`;
+            if (item.options && item.options.length > 0) {
+              const optPreview = item.options.slice(0, 10).map((o) => `"${o.text || o.value}"`).join(", ");
+              desc += ` [Available Options: ${optPreview}]`;
+            } else if (item.value) {
+              desc += ` (value: "${item.value}")`;
+            }
+            if (item.checked) desc += ` [CHECKED]`;
+            if (item.disabled) desc += ` [DISABLED]`;
+            return desc;
+          })
+          .join("\n");
+      }
+
+      return topData;
     } catch {
       return null;
     }
   }
 
   async resolveTargetCoordinates(targetId) {
+    const reg = this.frameElementRegistry.get(targetId);
+    const targetFrameId = reg ? reg.frameId : 0;
+    const sendId = reg ? reg.origId : targetId;
+    const sendOptions = targetFrameId !== 0 ? { frameId: targetFrameId } : {};
+
     return new Promise((resolve) => {
-      chrome.tabs.sendMessage(this.tabId, { action: "GET_ELEMENT_COORDINATES", targetId }, (res) => {
+      chrome.tabs.sendMessage(this.tabId, { action: "GET_ELEMENT_COORDINATES", targetId: sendId }, sendOptions, (res) => {
         if (chrome.runtime.lastError) {
           resolve({ success: false, error: chrome.runtime.lastError.message });
-        } else {
+        } else if (!res || !res.success) {
           resolve(res || { success: false, error: "No response from content script" });
+        } else {
+          if (reg && reg.iframeOffset) {
+            res.x = Math.round(reg.iframeOffset.left + res.x);
+            res.y = Math.round(reg.iframeOffset.top + res.y);
+            res.frameId = targetFrameId;
+          }
+          resolve(res);
         }
       });
     });
@@ -1244,6 +1430,10 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
       this.abortController.abort();
     }
     stopLoopKeepAlive();
+    if (this.tabId && activeDebuggerTabId === this.tabId) {
+      chrome.debugger.detach({ tabId: this.tabId }).catch(() => {});
+      activeDebuggerTabId = null;
+    }
     this.state.status = "STOPPED";
     this.state.currentThought = reason;
     this.addLog("warn", reason);

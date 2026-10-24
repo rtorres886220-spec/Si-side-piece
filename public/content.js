@@ -18,20 +18,20 @@
 
   // Message Dispatcher
   const messageHandler = (message, sender, sendResponse) => {
-    // A1: Strict top-level frame restriction - never allow subframes to impersonate top page
-    if (window.top !== window.self) {
-      if (message.action === "extractContext") {
-        sendResponse({ success: false, error: "Subframe extraction prohibited" });
-      }
+    const isTopFrame = typeof window !== "undefined" && window.top === window.self;
+
+    // Strict citation extraction restriction - never allow subframes to impersonate top page citations
+    if (!isTopFrame && message.action === "extractContext") {
+      sendResponse({ success: false, error: "Subframe extraction prohibited", isTopFrame: false });
       return false;
     }
 
     if (message.action === "extractContext") {
       try {
         const context = extractVisibleSanitizedContext();
-        sendResponse({ success: true, context });
+        sendResponse({ success: true, context, isTopFrame: true });
       } catch (e) {
-        sendResponse({ success: false, error: e.message });
+        sendResponse({ success: false, error: e.message, isTopFrame: true });
       }
       return false;
     }
@@ -40,9 +40,9 @@
     if (message.action === "EXTRACT_STRIPPED_DOM" || message.type === "EXTRACT_STRIPPED_DOM") {
       try {
         const data = stripAndExtractDOM();
-        sendResponse({ success: true, data });
+        sendResponse({ success: true, data: { ...data, isTopFrame } });
       } catch (e) {
-        sendResponse({ success: false, error: e.message });
+        sendResponse({ success: false, error: e.message, isTopFrame });
       }
       return false;
     }
@@ -359,6 +359,29 @@
     }
   }
 
+  function findAssociatedLabel(el) {
+    if (!el || el.nodeType !== 1) return null;
+    let label = null;
+    if (el.id) {
+      try {
+        label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      } catch {}
+    }
+    if (!label && typeof el.closest === "function") {
+      label = el.closest("label");
+    }
+    if (!label && el.parentElement) {
+      label = el.parentElement.querySelector("label");
+    }
+    if (!label && el.nextElementSibling && (el.nextElementSibling.tagName || "").toLowerCase() === "label") {
+      label = el.nextElementSibling;
+    }
+    if (!label && el.previousElementSibling && (el.previousElementSibling.tagName || "").toLowerCase() === "label") {
+      label = el.previousElementSibling;
+    }
+    return label;
+  }
+
   function isElementStrippedVisible(el) {
     if (!el || el.nodeType !== 1) return false;
     if (el.hidden) return false;
@@ -375,10 +398,62 @@
     if (!style) return false;
     if (style.display === "none") return false;
     if (style.visibility === "hidden" || style.visibility === "collapse") return false;
+
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    const role = (el.getAttribute("role") || "").toLowerCase();
+    const isFormOption = (tag === "input" && (type === "radio" || type === "checkbox")) || role === "radio" || role === "checkbox";
+
+    // Custom-styled inputs: Qualtrics, Tailwind, Material UI use opacity:0 or zero dimensions with styled labels
+    if (isFormOption && (style.opacity === "0" || style.pointerEvents === "none")) {
+      const assocLabel = findAssociatedLabel(el);
+      if (assocLabel) {
+        try {
+          const lStyle = window.getComputedStyle(assocLabel);
+          if (lStyle.display !== "none" && lStyle.visibility !== "hidden" && lStyle.opacity !== "0") {
+            const lRect = assocLabel.getBoundingClientRect();
+            if (lRect.width > 0 && lRect.height > 0) {
+              el.__sidekick_assoc_label__ = assocLabel;
+              el.__sidekick_assoc_rect__ = lRect;
+              return true;
+            }
+          }
+        } catch {}
+      }
+      const surrogate = el.nextElementSibling || el.previousElementSibling;
+      if (surrogate && (surrogate.tagName === "SPAN" || surrogate.tagName === "DIV" || surrogate.tagName === "LABEL")) {
+        try {
+          const sStyle = window.getComputedStyle(surrogate);
+          if (sStyle.display !== "none" && sStyle.visibility !== "hidden" && sStyle.opacity !== "0") {
+            const sRect = surrogate.getBoundingClientRect();
+            if (sRect.width > 0 && sRect.height > 0) {
+              el.__sidekick_assoc_label__ = surrogate;
+              el.__sidekick_assoc_rect__ = sRect;
+              return true;
+            }
+          }
+        } catch {}
+      }
+    }
+
     if (style.opacity === "0") return false;
 
     const rect = el.getBoundingClientRect();
-    if (rect.width <= 0 && rect.height <= 0) return false;
+    if (rect.width <= 0 && rect.height <= 0) {
+      if (isFormOption) {
+        const assocLabel = findAssociatedLabel(el);
+        if (assocLabel) {
+          try {
+            const lRect = assocLabel.getBoundingClientRect();
+            if (lRect.width > 0 && lRect.height > 0) {
+              el.__sidekick_assoc_label__ = assocLabel;
+              el.__sidekick_assoc_rect__ = lRect;
+              return true;
+            }
+          } catch {}
+        }
+      }
+      return false;
+    }
 
     // Check deliberate off-screen positions (e.g. left: -9999px)
     const docScrollY = window.scrollY || window.pageYOffset || 0;
@@ -386,6 +461,17 @@
     const docTop = rect.top + docScrollY;
     const docLeft = rect.left + docScrollX;
     if (docLeft < -2000 || docTop < -20000 || rect.left < -5000) {
+      if (isFormOption) {
+        const assocLabel = findAssociatedLabel(el);
+        if (assocLabel) {
+          const lRect = assocLabel.getBoundingClientRect();
+          if (lRect.width > 0 && lRect.height > 0 && lRect.left >= -50) {
+            el.__sidekick_assoc_label__ = assocLabel;
+            el.__sidekick_assoc_rect__ = lRect;
+            return true;
+          }
+        }
+      }
       return false;
     }
 
@@ -406,15 +492,34 @@
       if (type === "submit" || type === "button") return "button";
       return "input";
     }
+    if (role === "radio") return "radio";
+    if (role === "checkbox" || role === "switch") return "checkbox";
     if (tag === "select" || role === "combobox" || role === "listbox") return "select";
     if (tag === "textarea") return "textarea";
     if (tag === "summary") return "button";
-    if (role === "link" || role === "tab" || role === "menuitem" || role === "switch" || role === "option") {
+    if (role === "link" || role === "tab" || role === "menuitem" || role === "option") {
       return role;
     }
     if (el.onclick || el.getAttribute("onclick") || el.getAttribute("tabindex") === "0") {
       return "button";
     }
+
+    // Detect non-semantic clickable elements styled with cursor: pointer
+    if (tag !== "body" && tag !== "html" && tag !== "svg" && tag !== "path") {
+      try {
+        const style = window.getComputedStyle(el);
+        if (style && style.cursor === "pointer") {
+          const text = (el.innerText || el.textContent || el.getAttribute("aria-label") || el.getAttribute("title") || "").trim();
+          if (text || el.querySelector("svg, img, i, span")) {
+            const innerControls = el.querySelectorAll("button, a, input, select, textarea");
+            if (innerControls.length === 0) {
+              return "button";
+            }
+          }
+        }
+      } catch {}
+    }
+
     return null;
   }
 
@@ -655,12 +760,44 @@
     const interactiveList = [];
     const tagCounts = {};
 
+    const viewportW = window.innerWidth || (document.documentElement ? document.documentElement.clientWidth : 1280);
+    const viewportH = window.innerHeight || (document.documentElement ? document.documentElement.clientHeight : 800);
+
+    function computeSpatialAnchor(x, y, w, h) {
+      if (y < viewportH * 0.22) {
+        if (x < viewportW * 0.33) return "Top-Left";
+        if (x > viewportW * 0.67) return "Top-Right";
+        return "Top Header";
+      }
+      if (y > viewportH * 0.78) {
+        if (x < viewportW * 0.33) return "Bottom-Left";
+        if (x > viewportW * 0.67) return "Bottom-Right / Action Area";
+        return "Bottom Action Bar";
+      }
+      if (x < viewportW * 0.28) return "Left Sidebar / Column";
+      if (x > viewportW * 0.72) return "Right Sidebar / Column";
+      return "Center Main Content";
+    }
+
     // Detect active modal or dialog overlay
     const activeModal = document.querySelector(
       'dialog[open], [role="dialog"]:not([hidden]):not(.hidden), [role="alertdialog"]:not([hidden]):not(.hidden), .modal:not([hidden]):not(.hidden), .popup:not([hidden]):not(.hidden), [class*="modal-dialog"]:not([hidden]):not(.hidden), [class*="modal-overlay"]:not([hidden]):not(.hidden)'
     );
 
-    walkAllNodes(document.body, (el) => {
+    const root = document.body || document.documentElement;
+    if (!root) {
+      return {
+        url: window.location.href,
+        title: document.title,
+        hasActiveModal: false,
+        interactiveElementsCount: 0,
+        interactiveElements: [],
+        elementsSummary: "",
+        visiblePageText: ""
+      };
+    }
+
+    walkAllNodes(root, (el) => {
       if (!isElementStrippedVisible(el)) return;
       const kind = isInteractiveCandidate(el);
       if (!kind) return;
@@ -674,17 +811,18 @@
       sidekickElementMap.set(tagId, el);
       sidekickElementMap.set(cleanId, el);
 
-      // Extract accurate text / label / placeholder
+      // Extract accurate text / label / placeholder with label adoption for custom inputs
       let label = (
         el.getAttribute("aria-label") ||
         el.getAttribute("placeholder") ||
         el.getAttribute("title") ||
         el.innerText ||
         el.textContent ||
+        (el.__sidekick_assoc_label__ ? (el.__sidekick_assoc_label__.innerText || el.__sidekick_assoc_label__.textContent || "") : "") ||
         ""
       ).trim().replace(/\s+/g, " ").slice(0, 80);
 
-      const rect = el.getBoundingClientRect();
+      const rect = el.__sidekick_assoc_rect__ || el.getBoundingClientRect();
       let selectOptions = null;
       let selectSelectedText = "";
       if (el.tagName.toLowerCase() === "select" && el.options) {
@@ -699,8 +837,15 @@
       const inActiveModal = activeModal ? (activeModal.contains(el) || el === activeModal) : false;
       const isBehindModal = activeModal ? !inActiveModal : false;
 
+      const cx = Math.round(rect.left + rect.width / 2);
+      const cy = Math.round(rect.top + rect.height / 2);
+      const cw = Math.round(rect.width);
+      const ch = Math.round(rect.height);
+      const spatialAnchor = computeSpatialAnchor(cx, cy, cw, ch);
+
       interactiveList.push({
         id: tagId,
+        cleanId,
         kind,
         tag: el.tagName.toLowerCase(),
         type: el.type || "",
@@ -712,10 +857,11 @@
         disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true"),
         inActiveModal,
         isBehindModal,
-        x: Math.round(rect.left + rect.width / 2),
-        y: Math.round(rect.top + rect.height / 2),
-        width: Math.round(rect.width),
-        height: Math.round(rect.height)
+        x: cx,
+        y: cy,
+        width: cw,
+        height: ch,
+        spatialAnchor
       });
     });
 
@@ -743,7 +889,7 @@
         if (activeModal) {
           layerTag = item.inActiveModal ? " [FRONT_MODAL_LAYER - CLICKABLE]" : " [BEHIND_MODAL_OVERLAY - OCCLUDED]";
         }
-        let desc = `${item.id} ${item.kind.toUpperCase()}: "${item.text}"${layerTag}`;
+        let desc = `${item.id} ${item.kind.toUpperCase()}: "${item.text}" (x: ${item.x}, y: ${item.y}, w: ${item.width}, h: ${item.height}) [${item.spatialAnchor}]${layerTag}`;
         if (item.options && item.options.length > 0) {
           const optPreview = item.options.slice(0, 10).map((o) => `"${o.text || o.value}"`).join(", ");
           desc += ` [Available Options: ${optPreview}${item.options.length > 10 ? `, ... (+${item.options.length - 10} more)` : ""}]`;
@@ -757,6 +903,31 @@
       })
       .join("\n");
 
+    // Discover embedded subframes in top frame
+    const iframeEntries = [];
+    if (window.top === window.self) {
+      const iframes = document.querySelectorAll("iframe, frame");
+      iframes.forEach((ifr, i) => {
+        try {
+          const r = ifr.getBoundingClientRect();
+          if (r.width > 20 && r.height > 20) {
+            iframeEntries.push({
+              index: i + 1,
+              id: ifr.id || `iframe_${i + 1}`,
+              name: ifr.name || "",
+              src: ifr.src || "",
+              rect: {
+                left: Math.round(r.left),
+                top: Math.round(r.top),
+                width: Math.round(r.width),
+                height: Math.round(r.height)
+              }
+            });
+          }
+        } catch {}
+      });
+    }
+
     return {
       url: window.location.href,
       title: document.title,
@@ -764,7 +935,8 @@
       interactiveElementsCount: interactiveList.length,
       interactiveElements: interactiveList,
       elementsSummary,
-      visiblePageText: cleanBodyText
+      visiblePageText: cleanBodyText,
+      iframes: iframeEntries
     };
   }
 
@@ -794,7 +966,7 @@
 
     if (!el) {
       const rawId = cleanId.replace(/^\[/, "").replace(/\]$/, "");
-      walkAllNodes(document.body, (node) => {
+      walkAllNodes(document.body || document.documentElement, (node) => {
         if (!el && node.getAttribute && node.getAttribute("data-sidekick-id") === rawId) {
           el = node;
         }
@@ -809,33 +981,42 @@
       return { success: false, error: "Security Exception: Element is a sensitive payment or credential input." };
     }
 
+    // Resolve target control or associated visible label for clicking
+    let targetElForClick = el;
+    if (el.__sidekick_assoc_label__) {
+      targetElForClick = el.__sidekick_assoc_label__;
+    } else if (el.tagName === "INPUT" && (el.type === "radio" || el.type === "checkbox")) {
+      const assoc = findAssociatedLabel(el);
+      if (assoc) targetElForClick = assoc;
+    }
+
     // 1. Smart Viewport Centering (Anti-Blur for open dropdowns & popovers)
-    const initialRect = el.getBoundingClientRect();
+    const initialRect = targetElForClick.getBoundingClientRect();
     const inViewport = initialRect.top >= 20 && initialRect.left >= 10 &&
                        initialRect.bottom <= (window.innerHeight || document.documentElement.clientHeight) - 20 &&
                        initialRect.right <= (window.innerWidth || document.documentElement.clientWidth) - 10;
 
-    const isInsideDropdown = Boolean(el.closest && el.closest('[role="listbox"], [role="menu"], .dropdown-menu, .select-options'));
+    const isInsideDropdown = Boolean(targetElForClick.closest && targetElForClick.closest('[role="listbox"], [role="menu"], .dropdown-menu, .select-options'));
 
     if (!inViewport) {
       if (isInsideDropdown) {
         // Scroll only nearest scrollable container to prevent blur dismissal
         try {
-          el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+          targetElForClick.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
         } catch {}
       } else {
         try {
-          el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+          targetElForClick.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
         } catch {
-          el.scrollIntoView(true);
+          targetElForClick.scrollIntoView(true);
         }
       }
       // Wait for layout settling only if scrolled
       await new Promise((resolve) => setTimeout(resolve, 80));
     }
 
-    // 2. Compute live center coordinates
-    const rect = el.getBoundingClientRect();
+    // 2. Compute live center coordinates from target click element
+    const rect = targetElForClick.getBoundingClientRect();
     const centerX = Math.round(rect.left + rect.width / 2);
     const centerY = Math.round(rect.top + rect.height / 2);
 
@@ -844,7 +1025,7 @@
     let occludedBy = "";
     try {
       const topEl = document.elementFromPoint(centerX, centerY);
-      if (topEl && topEl !== el && !el.contains(topEl) && !topEl.contains(el)) {
+      if (topEl && topEl !== targetElForClick && topEl !== el && !targetElForClick.contains(topEl) && !topEl.contains(targetElForClick) && !el.contains(topEl)) {
         isOccluded = true;
         occludedBy = topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : "");
       }
@@ -1873,9 +2054,16 @@
     }
     if (selector) {
       try {
-        const matched = document.querySelectorAll(selector);
-        if (matched.length === 0) {
-          return { x: fallbackX, y: fallbackY, verified: false, stale: true, reason: "Element no longer exists in DOM (stale target)" };
+        let matched = null;
+        try { matched = document.querySelectorAll(selector); } catch {}
+        if (!matched || matched.length === 0) {
+          const cleanId = String(selector).replace(/^\[|\]$/g, "");
+          const elFromMap = sidekickElementMap.get(`[${cleanId}]`) || sidekickElementMap.get(cleanId);
+          if (elFromMap && elFromMap.isConnected) {
+            matched = [elFromMap];
+          } else {
+            matched = document.querySelectorAll(`[data-sidekick-id="${CSS.escape(cleanId)}"]`);
+          }
         }
         if (matched.length > 1) {
           return { x: fallbackX, y: fallbackY, verified: false, ambiguous: true, reason: `Target selector matched ${matched.length} elements (ambiguous target)` };
@@ -1963,6 +2151,8 @@
           verified: !isIntercepted,
           isIntercepted,
           interceptedBy: isIntercepted ? interceptedBy : undefined,
+          isOccluded: isIntercepted,
+          occludedBy: isIntercepted ? interceptedBy : undefined,
           targetSelector: selector
         };
       } catch (err) {
