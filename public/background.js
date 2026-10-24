@@ -419,11 +419,9 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
           return await dispatchDOMFallback(tabId, action, params);
         }
 
-        // Apply natural micro-jitter to landing coordinates (+/- 2px)
-        const jitterX = Math.round((Math.random() - 0.5) * 4);
-        const jitterY = Math.round((Math.random() - 0.5) * 4);
-        const targetX = x + jitterX;
-        const targetY = y + jitterY;
+        // Exact centroid coordinates (zero jitter offset for 100% first-try click accuracy)
+        const targetX = Math.round(x);
+        const targetY = Math.round(y);
 
         const prevPos = lastMousePositions.get(tabId) || {
           x: Math.max(20, targetX - 60),
@@ -649,8 +647,22 @@ class BackgroundGeminiClient {
           if (apiKey) {
             // Direct Google Generative Language API
             const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const parts = [];
+            if (config.screenshotDataUrl && typeof config.screenshotDataUrl === "string" && config.screenshotDataUrl.startsWith("data:")) {
+              const match = config.screenshotDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+              if (match) {
+                parts.push({
+                  inlineData: {
+                    mimeType: match[1],
+                    data: match[2]
+                  }
+                });
+              }
+            }
+            parts.push({ text: prompt });
+
             const body = {
-              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              contents: [{ role: "user", parts }],
               systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
               generationConfig: {
                 temperature: config.temperature !== undefined ? config.temperature : 0.2,
@@ -667,7 +679,7 @@ class BackgroundGeminiClient {
             if (res.ok) {
               const data = await res.json();
               this.lastCallEndTime = Date.now();
-              const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+              const text = data?.candidates?.[0]?.content?.parts?.filter((p) => p && !p.thought && p.text).map((p) => p.text).join("") || data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
               return text;
             }
 
@@ -694,8 +706,10 @@ class BackgroundGeminiClient {
               body: JSON.stringify({
                 promptText: prompt,
                 model,
+                screenshotDataUrl: config.screenshotDataUrl || undefined,
                 rawPayload: {
                   prompt,
+                  screenshotDataUrl: config.screenshotDataUrl || undefined,
                   systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined
                 }
               })
@@ -822,6 +836,22 @@ class AutonomousAgentEngine {
     this.runAgentLoop();
   }
 
+  async captureCurrentTabScreenshot() {
+    try {
+      if (!this.tabId) return null;
+      const tab = await chrome.tabs.get(this.tabId);
+      if (!tab || tab.windowId === undefined) return null;
+      const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+        format: "jpeg",
+        quality: 75
+      });
+      return dataUrl;
+    } catch (err) {
+      console.warn("[AutonomousAgentEngine] Viewport screenshot notice:", err?.message || err);
+      return null;
+    }
+  }
+
   async runAgentLoop() {
     const signal = this.abortController.signal;
 
@@ -836,12 +866,15 @@ class AutonomousAgentEngine {
         }
 
         this.state.elapsedMs = Date.now() - this.state.startTime;
-        this.addLog("info", `Step ${this.state.currentStep}: Inspecting page state...`);
-        this.state.currentThought = "Extracting stripped DOM representation and candidate actions...";
+        this.addLog("info", `Step ${this.state.currentStep}: Capturing viewport screenshot & inspecting live state...`);
+        this.state.currentThought = "Capturing live viewport screenshot & extracting DOM representation...";
         await this.persistState();
 
-        // Step 2: Ensure content script is active & extract stripped DOM
-        let domData = await this.getStrippedDOM();
+        // Step 2: Ensure content script is active, extract stripped DOM & capture live viewport screenshot concurrently
+        let [domData, screenshotDataUrl] = await Promise.all([
+          this.getStrippedDOM(),
+          this.captureCurrentTabScreenshot()
+        ]);
         if (!domData) {
           await delay(1000);
           domData = await this.getStrippedDOM();
@@ -849,9 +882,19 @@ class AutonomousAgentEngine {
 
         if (signal.aborted) break;
 
-        // Step 3: Construct prompt for Gemini Reasoning
-        const systemPrompt = `You are Sidekick, an elite autonomous browser agent. You observe webpages and execute precise actions to achieve the user's objective.
-You are given a list of interactive elements indexed with simplified IDs like [button_1], [input_2], [select_3], [link_4].
+        // Step 3: Construct multimodal prompt for Gemini Vision & Reasoning
+        const systemPrompt = `You are Sidekick, an elite autonomous browser agent powered by Gemini Multimodal Vision.
+You receive:
+1. A live JPEG screenshot of the current browser tab viewport.
+2. A list of interactive DOM elements indexed with IDs like [button_1], [button_2], [input_3], [select_4].
+
+VISUAL INSPECTION DIRECTIVE (MANDATORY):
+1. First, examine the screenshot carefully. Look for any active modal dialogs, popup overlays, consent gates, or interstitials (e.g. "What you need to know...", "Attention", "Notice", "Accept", "Close", "Ok, let's go").
+2. If ANY modal or overlay dialog is visually covering or floating on top of the page:
+   - You MUST identify and interact with the button INSIDE that modal dialog (e.g. "Ok, let's go", "Accept", "Close", "Continue") to dismiss it.
+   - NEVER click background buttons beneath the modal (such as background survey cards or links) while an overlay is active, as those clicks will be blocked by the backdrop!
+3. If no modal is present, visually confirm the location and state of the target element on the webpage before taking action.
+4. Output your visual observation in VISUAL_CHECK before your final action.
 
 ALLOWED ACTIONS (Output exactly one in this format):
 - ACTION: CLICK [tag_id] (e.g. ACTION: CLICK [button_1])
@@ -865,7 +908,8 @@ CRITICAL FOR DROPDOWN MENUS:
 Always use ACTION: SELECT [tag_id] "option_text" for dropdown menus (<select>) instead of clicking them, ensuring first-try precision without getting trapped in open menus.
 
 OUTPUT FORMAT:
-THOUGHT: <concise reasoning about what to do next>
+VISUAL_CHECK: <crisp observation of what is visually on top in the screenshot, noting any active modal dialogs or overlays>
+THOUGHT: <concise reasoning about what to do next based on both visual evidence and DOM>
 CHECKLIST: <comma-separated list of 2-4 progress checklist items>
 ACTION: <single command from allowed actions>`;
 
@@ -873,18 +917,18 @@ ACTION: <single command from allowed actions>`;
 CURRENT STEP: ${this.state.currentStep} of ${this.state.maxSteps}
 PAGE TITLE: ${domData?.title || "Untitled"}
 PAGE URL: ${domData?.url || ""}
-
+${domData?.hasActiveModal ? "NOTICE: Active modal dialog layer detected in DOM! Prioritize front modal controls.\n" : ""}
 INTERACTIVE ELEMENTS:
 ${domData?.elementsSummary || "(No interactive elements found)"}
 
 VISIBLE PAGE EXCERPT:
 ${(domData?.visiblePageText || "").slice(0, 3500)}`;
 
-        // Step 4: Run Gemini Inference with Rate Limit Feedback
+        // Step 4: Run Gemini Multimodal Vision Inference with Rate Limit Feedback
         const responseText = await geminiClient.executeInference(
           userPrompt,
           systemPrompt,
-          { temperature: 0.2 },
+          { temperature: 0.2, screenshotDataUrl },
           (statusMsg, countdown) => {
             this.state.status = countdown > 0 ? "PAUSED_429" : "RUNNING";
             this.state.rateLimitNotice = countdown > 0 ? statusMsg : null;
@@ -897,6 +941,9 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
 
         // Step 5: Parse Response
         const parsed = this.parseAgentDecision(responseText);
+        if (parsed.visualCheck) {
+          this.addLog("info", `👁️ Visual Check: ${parsed.visualCheck}`);
+        }
         this.state.currentThought = parsed.thought || "Executing determined action...";
         if (parsed.checklist && parsed.checklist.length > 0) {
           this.state.checklist = parsed.checklist.map((item, idx) => ({
@@ -972,6 +1019,10 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
           if (!coords || !coords.success) {
             this.addLog("warn", `Could not resolve coordinates for ${targetId}: ${coords?.error || "Element missing"}`);
           } else {
+            if (coords.isOccluded) {
+              this.addLog("warn", `Target ${targetId} is occluded by ${coords.occludedBy || "overlay"}. Physical click may be intercepted by modal.`);
+            }
+
             // Consequential Action Safety Gate Check
             const isSensitive = isSensitivePaymentTarget(parsed.actionArg || targetId);
             if (isSensitive) {
@@ -1065,6 +1116,7 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
 
   parseAgentDecision(text) {
     const lines = text.split("\n").map(l => l.trim());
+    let visualCheck = "";
     let thought = "";
     let checklist = [];
     let actionType = "FINISH";
@@ -1074,7 +1126,9 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
     let pressEnter = false;
 
     for (const line of lines) {
-      if (line.startsWith("THOUGHT:")) {
+      if (line.startsWith("VISUAL_CHECK:")) {
+        visualCheck = line.replace(/^VISUAL_CHECK:\s*/i, "").trim();
+      } else if (line.startsWith("THOUGHT:")) {
         thought = line.replace(/^THOUGHT:\s*/i, "").trim();
       } else if (line.startsWith("CHECKLIST:")) {
         const raw = line.replace(/^CHECKLIST:\s*/i, "").trim();
@@ -1112,7 +1166,7 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
     }
 
     if (!thought) thought = text.slice(0, 150);
-    return { thought, checklist, actionType, actionArg, targetId, textToType, pressEnter };
+    return { visualCheck, thought, checklist, actionType, actionArg, targetId, textToType, pressEnter };
   }
 
   async handleNavigationDetach(tabId) {

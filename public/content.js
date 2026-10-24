@@ -655,6 +655,11 @@
     const interactiveList = [];
     const tagCounts = {};
 
+    // Detect active modal or dialog overlay
+    const activeModal = document.querySelector(
+      'dialog[open], [role="dialog"]:not([hidden]):not(.hidden), [role="alertdialog"]:not([hidden]):not(.hidden), .modal:not([hidden]):not(.hidden), .popup:not([hidden]):not(.hidden), [class*="modal-dialog"]:not([hidden]):not(.hidden), [class*="modal-overlay"]:not([hidden]):not(.hidden)'
+    );
+
     walkAllNodes(document.body, (el) => {
       if (!isElementStrippedVisible(el)) return;
       const kind = isInteractiveCandidate(el);
@@ -691,6 +696,9 @@
         });
       }
 
+      const inActiveModal = activeModal ? (activeModal.contains(el) || el === activeModal) : false;
+      const isBehindModal = activeModal ? !inActiveModal : false;
+
       interactiveList.push({
         id: tagId,
         kind,
@@ -702,12 +710,23 @@
         selectedText: selectSelectedText,
         checked: Boolean(el.checked || el.getAttribute("aria-checked") === "true"),
         disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true"),
+        inActiveModal,
+        isBehindModal,
         x: Math.round(rect.left + rect.width / 2),
         y: Math.round(rect.top + rect.height / 2),
         width: Math.round(rect.width),
         height: Math.round(rect.height)
       });
     });
+
+    // If active modal is present, sort modal elements to the very top
+    if (activeModal) {
+      interactiveList.sort((a, b) => {
+        if (a.inActiveModal && !b.inActiveModal) return -1;
+        if (!a.inActiveModal && b.inActiveModal) return 1;
+        return 0;
+      });
+    }
 
     // Extract clean visible page text (free of boilerplate and script junk)
     const cleanBodyText = (document.body ? document.body.innerText || "" : "")
@@ -720,7 +739,11 @@
 
     const elementsSummary = interactiveList
       .map((item) => {
-        let desc = `${item.id} ${item.kind.toUpperCase()}: "${item.text}"`;
+        let layerTag = "";
+        if (activeModal) {
+          layerTag = item.inActiveModal ? " [FRONT_MODAL_LAYER - CLICKABLE]" : " [BEHIND_MODAL_OVERLAY - OCCLUDED]";
+        }
+        let desc = `${item.id} ${item.kind.toUpperCase()}: "${item.text}"${layerTag}`;
         if (item.options && item.options.length > 0) {
           const optPreview = item.options.slice(0, 10).map((o) => `"${o.text || o.value}"`).join(", ");
           desc += ` [Available Options: ${optPreview}${item.options.length > 10 ? `, ... (+${item.options.length - 10} more)` : ""}]`;
@@ -737,6 +760,7 @@
     return {
       url: window.location.href,
       title: document.title,
+      hasActiveModal: Boolean(activeModal),
       interactiveElementsCount: interactiveList.length,
       interactiveElements: interactiveList,
       elementsSummary,
@@ -815,6 +839,17 @@
     const centerX = Math.round(rect.left + rect.width / 2);
     const centerY = Math.round(rect.top + rect.height / 2);
 
+    // True Hit-Test Verification (Catches modal backdrop and overlay occlusion)
+    let isOccluded = false;
+    let occludedBy = "";
+    try {
+      const topEl = document.elementFromPoint(centerX, centerY);
+      if (topEl && topEl !== el && !el.contains(topEl) && !topEl.contains(el)) {
+        isOccluded = true;
+        occludedBy = topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : "");
+      }
+    } catch {}
+
     // Update visible cursor position
     try {
       updateVisibleCursor(centerX, centerY, 80);
@@ -830,6 +865,8 @@
       tag: el.tagName.toLowerCase(),
       type: el.type || "",
       id: cleanId,
+      isOccluded,
+      occludedBy,
       isVisible: rect.width > 0 && rect.height > 0
     };
   }
