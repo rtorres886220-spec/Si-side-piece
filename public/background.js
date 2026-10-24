@@ -323,6 +323,39 @@ async function sendCDPCommand(target, method, commandParams = {}, timeoutMs = 10
   });
 }
 
+// Anti-Bot Stealth Mouse Tracker & Cubic Bezier Generator
+const lastMousePositions = new Map();
+
+function generateCubicBezierWaypoints(startX, startY, endX, endY, steps = 3) {
+  const dx = endX - startX;
+  const dy = endY - startY;
+  const dist = Math.hypot(dx, dy);
+
+  if (dist < 12) {
+    return [{ x: endX, y: endY }];
+  }
+
+  // Perpendicular deviation scaled by distance (capped at 25px)
+  const normX = -dy / (dist || 1);
+  const normY = dx / (dist || 1);
+  const curvature = (Math.random() - 0.5) * Math.min(25, dist * 0.18);
+
+  const cx1 = startX + dx * 0.33 + normX * curvature;
+  const cy1 = startY + dy * 0.33 + normY * curvature;
+  const cx2 = startX + dx * 0.66 - normX * (curvature * 0.5);
+  const cy2 = startY + dy * 0.66 - normY * (curvature * 0.5);
+
+  const waypoints = [];
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const u = 1 - t;
+    const x = Math.round(u * u * u * startX + 3 * u * u * t * cx1 + 3 * u * t * t * cx2 + t * t * t * endX);
+    const y = Math.round(u * u * u * startY + 3 * u * u * t * cy1 + 3 * u * t * t * cy2 + t * t * t * endY);
+    waypoints.push({ x, y });
+  }
+  return waypoints;
+}
+
 async function executeCDPActionOnTab(tabId, action, params = {}) {
   const tab = await chrome.tabs.get(tabId);
   if (!tab || !tab.url) throw new Error("Target tab not accessible");
@@ -347,6 +380,25 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
     return { navigated: true, url: targetUrl };
   }
 
+  // Fast Native Select Option Dispatch (Framework & React Safe)
+  if (action === "select_option" || action === "select") {
+    return await new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(tabId, {
+        action: "SELECT_OPTION",
+        targetId: params.targetId || params.id || params.selector,
+        value: params.value || params.option_value || params.text
+      }, (res) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else if (!res || !res.success) {
+          reject(new Error(res?.error || "Failed to select option"));
+        } else {
+          resolve(res);
+        }
+      });
+    });
+  }
+
   const debugTarget = { tabId };
   let attachedLocally = false;
 
@@ -366,40 +418,90 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
         if (x === undefined || y === undefined || isNaN(x) || isNaN(y)) {
           return await dispatchDOMFallback(tabId, action, params);
         }
-        await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
-          type: "mouseMoved",
-          x,
-          y
-        });
+
+        // Apply natural micro-jitter to landing coordinates (+/- 2px)
+        const jitterX = Math.round((Math.random() - 0.5) * 4);
+        const jitterY = Math.round((Math.random() - 0.5) * 4);
+        const targetX = x + jitterX;
+        const targetY = y + jitterY;
+
+        const prevPos = lastMousePositions.get(tabId) || {
+          x: Math.max(20, targetX - 60),
+          y: Math.max(20, targetY - 40)
+        };
+
+        const waypoints = generateCubicBezierWaypoints(prevPos.x, prevPos.y, targetX, targetY, 3);
+        const dist = Math.hypot(targetX - prevPos.x, targetY - prevPos.y);
+        const totalDuration = Math.min(100, Math.max(40, Math.round(30 + dist * 0.08)));
+        const stepDelay = Math.max(10, Math.round(totalDuration / waypoints.length));
+
+        // Update visible OS cursor in page overlay
+        chrome.tabs.sendMessage(tabId, {
+          action: "UPDATE_CURSOR_POSITION",
+          x: targetX,
+          y: targetY,
+          durationMs: totalDuration
+        }).catch(() => {});
+
+        // Dispatch mouseMoved waypoints
+        for (const pt of waypoints) {
+          await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: pt.x,
+            y: pt.y
+          });
+          await delay(stepDelay);
+        }
+
+        lastMousePositions.set(tabId, { x: targetX, y: targetY });
+
+        // Dispatch mousePressed
         await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
           type: "mousePressed",
-          x,
-          y,
+          x: targetX,
+          y: targetY,
           button: "left",
           clickCount: 1
         });
-        await delay(15);
+
+        // Natural human click hold duration with Gaussian jitter (45-75ms)
+        const holdDuration = 45 + Math.round(Math.random() * 30);
+        await delay(holdDuration);
+
         try {
           await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
             type: "mouseReleased",
-            x,
-            y,
+            x: targetX,
+            y: targetY,
             button: "left",
             clickCount: 1
           });
+          // Visual click pulse ripple
+          chrome.tabs.sendMessage(tabId, {
+            action: "SHOW_CLICK_PULSE",
+            x: targetX,
+            y: targetY
+          }).catch(() => {});
         } catch (releaseErr) {
           const msg = releaseErr?.message?.toLowerCase() || "";
           if (msg.includes("debugger is not attached") || msg.includes("target closed")) {
-            return { clicked: true, navigated: true, x, y };
+            return { clicked: true, navigated: true, x: targetX, y: targetY };
           }
           throw releaseErr;
         }
-        return { clicked: true, x, y };
+        return { clicked: true, x: targetX, y: targetY };
       }
 
       case "type": {
         const { x, y, text = "", pressEnter = false } = params;
         if (x !== undefined && y !== undefined && !isNaN(x) && !isNaN(y)) {
+          chrome.tabs.sendMessage(tabId, {
+            action: "UPDATE_CURSOR_POSITION",
+            x,
+            y,
+            durationMs: 80
+          }).catch(() => {});
+
           await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
             type: "mousePressed",
             x,
@@ -407,7 +509,7 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
             button: "left",
             clickCount: 1
           });
-          await delay(10);
+          await delay(20);
           await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
             type: "mouseReleased",
             x,
@@ -415,7 +517,8 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
             button: "left",
             clickCount: 1
           });
-          await delay(20);
+          await delay(25);
+          lastMousePositions.set(tabId, { x, y });
         }
 
         if (text) {
@@ -456,7 +559,23 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
       }
 
       case "scroll": {
-        const { x = 300, y = 400, deltaX = 0, deltaY = 400 } = params;
+        const { x = 400, y = 350, deltaX = 0, deltaY = 400 } = params;
+        const dir = deltaY > 0 ? "down" : "up";
+
+        // Show scroll indicator badge on visible cursor
+        chrome.tabs.sendMessage(tabId, {
+          action: "SHOW_SCROLL_INDICATOR",
+          x,
+          y,
+          direction: dir
+        }).catch(() => {});
+
+        await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x,
+          y
+        });
+        await delay(25);
         await sendCDPCommand(debugTarget, "Input.dispatchMouseEvent", {
           type: "mouseWheel",
           x,
@@ -464,6 +583,7 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
           deltaX,
           deltaY
         });
+        lastMousePositions.set(tabId, { x, y });
         return { scrolled: true, deltaY };
       }
 
@@ -731,14 +851,18 @@ class AutonomousAgentEngine {
 
         // Step 3: Construct prompt for Gemini Reasoning
         const systemPrompt = `You are Sidekick, an elite autonomous browser agent. You observe webpages and execute precise actions to achieve the user's objective.
-You are given a list of interactive elements indexed with simplified IDs like [button_1], [input_2], [link_3].
+You are given a list of interactive elements indexed with simplified IDs like [button_1], [input_2], [select_3], [link_4].
 
 ALLOWED ACTIONS (Output exactly one in this format):
 - ACTION: CLICK [tag_id] (e.g. ACTION: CLICK [button_1])
+- ACTION: SELECT [tag_id] "option_text_or_value" (e.g. ACTION: SELECT [select_3] "California" or "CA")
 - ACTION: TYPE [tag_id] "text" (e.g. ACTION: TYPE [input_2] "laptop deals" [ENTER])
 - ACTION: SCROLL down (or SCROLL up)
 - ACTION: NAVIGATE https://...
 - ACTION: FINISH "Detailed conclusion or answer"
+
+CRITICAL FOR DROPDOWN MENUS:
+Always use ACTION: SELECT [tag_id] "option_text" for dropdown menus (<select>) instead of clicking them, ensuring first-try precision without getting trapped in open menus.
 
 OUTPUT FORMAT:
 THOUGHT: <concise reasoning about what to do next>
@@ -802,12 +926,48 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
           const deltaY = parsed.actionArg.toLowerCase().includes("up") ? -500 : 500;
           this.addLog("action", `Scrolling page (${deltaY > 0 ? "down" : "up"})`);
           await executeCDPActionOnTab(this.tabId, "scroll", { deltaY });
-          await delay(600);
+          await delay(200);
+        } else if (parsed.actionType === "SELECT") {
+          const targetId = parsed.targetId;
+          const optVal = parsed.actionArg;
+          this.addLog("action", `Selecting dropdown option "${optVal}" on ${targetId}...`);
+          try {
+            await executeCDPActionOnTab(this.tabId, "select_option", {
+              targetId,
+              value: optVal
+            });
+            this.addLog("success", `Selected option "${optVal}" on ${targetId}`);
+          } catch (selErr) {
+            this.addLog("warn", `Direct select option error (${selErr.message}), falling back to coordinate click`);
+            const coords = await this.resolveTargetCoordinates(targetId);
+            if (coords?.success) {
+              await executeCDPActionOnTab(this.tabId, "click", { x: coords.x, y: coords.y });
+            }
+          }
+          await delay(180);
         } else if (parsed.actionType === "CLICK" || parsed.actionType === "TYPE") {
           const targetId = parsed.targetId;
+
+          // Dropdown loop prevention: If clicking on a select element, auto-divert to SELECT_OPTION if value known or pick first viable option
+          if (parsed.actionType === "CLICK" && (targetId.includes("select_") || targetId.startsWith("[select"))) {
+            this.addLog("info", `Target ${targetId} is a native <select> menu. Using framework-safe option selector to avoid popup trap.`);
+            try {
+              await executeCDPActionOnTab(this.tabId, "select_option", {
+                targetId,
+                value: parsed.actionArg || ""
+              });
+              await delay(180);
+              this.state.currentStep++;
+              await this.persistState();
+              continue;
+            } catch (selErr) {
+              console.warn("Select fallback to coordinate click:", selErr.message);
+            }
+          }
+
           this.addLog("action", `Resolving target ${targetId}...`);
 
-          // Call content script with scrollIntoView and 200ms settling
+          // Call content script with anti-blur target centering
           const coords = await this.resolveTargetCoordinates(targetId);
           if (!coords || !coords.success) {
             this.addLog("warn", `Could not resolve coordinates for ${targetId}: ${coords?.error || "Element missing"}`);
@@ -838,7 +998,7 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
               });
             }
           }
-          await delay(700);
+          await delay(160);
         }
 
         this.state.currentStep++;
@@ -850,7 +1010,7 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
         }
 
         await this.persistState();
-        await delay(500);
+        await delay(120);
       } catch (loopErr) {
         if (signal.aborted) break;
         console.error("[AutonomousAgentEngine] Loop error:", loopErr);
@@ -930,6 +1090,12 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
         } else if (/^SCROLL/i.test(rawAction)) {
           actionType = "SCROLL";
           actionArg = rawAction.replace(/^SCROLL\s*/i, "").trim() || "down";
+        } else if (/^SELECT/i.test(rawAction)) {
+          actionType = "SELECT";
+          const match = rawAction.match(/\[([a-zA-Z0-9_\-]+)\]/);
+          targetId = match ? match[0] : "";
+          const textMatch = rawAction.match(/["'](.*?)["']/);
+          actionArg = textMatch ? textMatch[1] : rawAction.replace(/^SELECT\s*(\[[^\]]+\])?/i, "").trim();
         } else if (/^CLICK/i.test(rawAction)) {
           actionType = "CLICK";
           const match = rawAction.match(/\[([a-zA-Z0-9_\-]+)\]/);
@@ -1126,9 +1292,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // Multimodal Vision Screenshot Capture
+  if (message.type === "CAPTURE_VISION_SCREENSHOT") {
+    captureTabScreenshot(message.tabId)
+      .then((dataUrl) => sendResponse({ success: true, dataUrl }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   return false;
 });
+
+async function captureTabScreenshot(tabId) {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.tabs.captureVisibleTab(null, { format: "jpeg", quality: 80 }, (dataUrl) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else if (!dataUrl) {
+          reject(new Error("Empty screenshot returned from captureVisibleTab"));
+        } else {
+          resolve(dataUrl);
+        }
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
 
 function delay(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
+

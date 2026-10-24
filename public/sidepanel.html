@@ -16,6 +16,7 @@
       <canvas id="galaxyCanvas" class="galaxy-canvas"></canvas>
       <div class="rr-starlight-scrim"></div>
     </div>
+    <div class="horizon-break" aria-hidden="true"></div>
 
     <!-- Minimal Header Pushed Right Up to Top Edge -->
     <header class="header">
@@ -295,41 +296,44 @@
       </div>
 
       <!-- Rounded Composer Box with Choreographic Conic Border -->
-      <div id="composerBox" class="composer-box">
-        <!-- Ultra-thin choreographic conic gradient - midnight with cyan blue hint, no off glow -->
-        <div class="choreo-conic-border" aria-hidden="true">
-          <div class="choreo-conic-inner"></div>
-        </div>
-
-        <form id="chatForm" class="composer-form">
-          <textarea 
-            id="promptInput" 
-            class="composer-textarea" 
-            placeholder="A fresh space for your next thought" 
-            rows="1" 
-            maxlength="8000"
-          ></textarea>
-
-          <!-- Bottom Row: Slash Shortcut & Send Button -->
-          <div class="composer-bottom-row">
-            <button type="button" id="toggleSlashBtn" class="slash-btn" title="Toggle slash commands menu (/)">
-              /
-            </button>
-            <div class="send-wrapper">
-              <button type="submit" id="sendBtn" class="send-btn" title="Send" aria-label="Send">
-                <svg id="sendIconSvg" class="angled-arrow-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                  <line x1="7" y1="17" x2="17" y2="7"></line>
-                  <polyline points="7 7 17 7 17 17"></polyline>
-                </svg>
-                <svg id="stopIconSquare" class="ecg-flow-svg hidden" viewBox="0 0 24 24" width="16" height="16">
-                  <g class="animate-ecg-flow">
-                    <path d="M 0 12 L 4 12 Q 5.5 11 7 12 L 8.5 12.8 L 10 5.5 L 12 16.5 Q 14.5 10.5 17 12 L 24 12 L 28 12 Q 29.5 11 31 12 L 32.5 12.8 L 34 5.5 L 36 16.5 Q 38.5 10.5 41 12 L 48 12 L 52 12 Q 53.5 11 55 12 L 56.5 12.8 L 58 5.5 L 60 16.5 Q 62.5 10.5 65 12 L 72 12" fill="none" stroke="#ffffff" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
-                  </g>
-                </svg>
-              </button>
-            </div>
+      <div class="composer-box-wrapper">
+        <div class="composer-backlight" aria-hidden="true"></div>
+        <div id="composerBox" class="composer-box">
+          <!-- Ultra-thin choreographic conic gradient - midnight with cyan blue hint, no off glow -->
+          <div class="choreo-conic-border" aria-hidden="true">
+            <div class="choreo-conic-inner"></div>
           </div>
-        </form>
+
+          <form id="chatForm" class="composer-form">
+            <textarea 
+              id="promptInput" 
+              class="composer-textarea" 
+              placeholder="A fresh space for your next thought" 
+              rows="1" 
+              maxlength="8000"
+            ></textarea>
+
+            <!-- Bottom Row: Slash Shortcut & Send Button -->
+            <div class="composer-bottom-row">
+              <button type="button" id="toggleSlashBtn" class="slash-btn" title="Toggle slash commands menu (/)">
+                /
+              </button>
+              <div class="send-wrapper">
+                <button type="submit" id="sendBtn" class="send-btn" title="Send" aria-label="Send">
+                  <svg id="sendIconSvg" class="angled-arrow-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="7" y1="17" x2="17" y2="7"></line>
+                    <polyline points="7 7 17 7 17 17"></polyline>
+                  </svg>
+                  <svg id="stopIconSquare" class="ecg-flow-svg hidden" viewBox="0 0 24 24" width="16" height="16">
+                    <g class="animate-ecg-flow">
+                      <path d="M 0 12 L 4 12 Q 5.5 11 7 12 L 8.5 12.8 L 10 5.5 L 12 16.5 Q 14.5 10.5 17 12 L 24 12 L 28 12 Q 29.5 11 31 12 L 32.5 12.8 L 34 5.5 L 36 16.5 Q 38.5 10.5 41 12 L 48 12 L 52 12 Q 53.5 11 55 12 L 56.5 12.8 L 58 5.5 L 60 16.5 Q 62.5 10.5 65 12 L 72 12" fill="none" stroke="#ffffff" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"></path>
+                    </g>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
       </div>
 
       <!-- Reserved slot for future small subtext below input box -->

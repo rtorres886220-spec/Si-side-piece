@@ -349,9 +349,9 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
   }, [interactiveParallax, nebulaIntensity, isReducedMotion]);
 
   // Smooth multi-stop ease gradient mask ensuring the globe dissolves gracefully
-  // towards the vertical midpoint into the chat area with zero hard cutoffs.
+  // and breaks up the cool blue look strictly below the globe into pure obsidian #07080b.
   const progressiveFadeMask =
-    "linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 36%, rgba(0,0,0,0.92) 50%, rgba(0,0,0,0.72) 64%, rgba(0,0,0,0.40) 78%, rgba(0,0,0,0.16) 88%, rgba(0,0,0,0.03) 96%, rgba(0,0,0,0) 100%)";
+    "linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 32%, rgba(0,0,0,0.95) 42%, rgba(0,0,0,0.55) 52%, rgba(0,0,0,0.18) 64%, rgba(0,0,0,0) 76%, rgba(0,0,0,0) 100%)";
 
   return (
     <div
@@ -373,12 +373,12 @@ export const GalaxyStarSystem: React.FC<GalaxyStarSystemProps> = ({
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-950/40 via-slate-900/20 to-transparent" />
       )}
 
-      {/* Atmospheric Contrast Scrim smoothly blending into background color #07080b */}
+      {/* Atmospheric Contrast Scrim smoothly breaking up cool blue below the globe into pure obsidian #07080b */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
           background:
-            "linear-gradient(to bottom, rgba(7, 8, 11, 0.15) 0%, rgba(7, 8, 11, 0.02) 30%, rgba(7, 8, 11, 0.45) 65%, rgba(7, 8, 11, 0.88) 90%, #07080b 100%)",
+            "linear-gradient(to bottom, rgba(7, 8, 11, 0.08) 0%, rgba(7, 8, 11, 0.0) 24%, rgba(7, 8, 11, 0.25) 42%, rgba(7, 8, 11, 0.88) 68%, #07080b 100%)",
         }}
       />
     </div>

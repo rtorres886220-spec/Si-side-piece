@@ -404,6 +404,8 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
   // Form Submit
   chatForm.addEventListener("submit", (e) => {
     e.preventDefault();
+    if (composerBox) composerBox.classList.remove("focused");
+    promptInput.blur();
     const text = (promptInput.value || "").trim();
     if (!text) return;
 
@@ -745,6 +747,14 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
       slashMenu.classList.toggle("hidden");
     });
   }
+
+  promptInput.addEventListener("focus", () => {
+    if (composerBox) composerBox.classList.add("focused");
+  });
+
+  promptInput.addEventListener("blur", () => {
+    if (composerBox) composerBox.classList.remove("focused");
+  });
 
   promptInput.addEventListener("input", () => {
     const val = promptInput.value;

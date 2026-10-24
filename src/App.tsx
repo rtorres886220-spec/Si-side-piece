@@ -257,6 +257,16 @@ async function handleCDPAction({ tabId, action, params }) {
         }
         throw new Error(\`FileInput element matching '\${selector}' not found\`);
       }
+      case "select_option": {
+        const { targetId, value } = params;
+        return await new Promise((resolve, reject) => {
+          chrome.tabs.sendMessage(tabId, { action: "SELECT_OPTION", targetId, value }, (res: any) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else if (!res || !res.success) reject(new Error(res?.error || "Failed to select option"));
+            else resolve(res);
+          });
+        });
+      }
       case "navigate": {
         const { url } = params;
         await sendCommand(debugTarget, "Page.enable", {});
@@ -671,6 +681,7 @@ export default function App() {
     isSuccess?: boolean;
   }>>([]);
   const [inputValue, setInputValue] = useState("");
+  const [isInputFocused, setIsInputFocused] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
   const [activeFollowUps, setActiveFollowUps] = useState<string[]>([]);
 
@@ -1860,6 +1871,8 @@ export default function App() {
 
   // Handle Prompt Submission (Supporting both Live Gemini Tool Calling & Rich Workbench Simulation)
   const handleSubmitPrompt = async (promptText: string) => {
+    setIsInputFocused(false);
+    textareaRef.current?.blur();
     if (!promptText.trim() || isBusy) return;
 
     // Check if it's a slash command first!
@@ -2757,21 +2770,33 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
           <div className="flex-1 flex justify-center items-center h-full w-full relative overflow-hidden">
             {/* Pure Sidekick Extension Panel - Native Side Panel Dimensions (Exact 400px Chrome Standard) */}
             <div className="w-[400px] max-w-full h-full flex flex-col bg-[#07080b] relative overflow-hidden border-x border-white/[0.08] shadow-[0_0_50px_rgba(0,0,0,0.85)] select-none">
-              {/* Restrained Quiet Obsidian Glow - Upper Half */}
+              {/* Attractive Luminous Celestial Glow Aura for Globe */}
               <div
-                className={`pointer-events-none absolute -top-16 left-1/2 -translate-x-1/2 w-[500px] h-[320px] rounded-full blur-[60px] transition-all duration-[1200ms] ${
+                className={`pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 w-[440px] h-[340px] rounded-full blur-[48px] transition-all duration-[1200ms] ${
                   isBusy
-                    ? "opacity-35 scale-110 translate-y-8"
-                    : "opacity-20"
+                    ? "opacity-55 scale-105"
+                    : "opacity-42"
                 }`}
                 style={{
                   background:
-                    "radial-gradient(ellipse at top, rgba(30, 41, 59, 0.28) 0%, rgba(15, 23, 42, 0.18) 45%, rgba(7, 8, 11, 0.6) 80%, transparent 100%)",
+                    "radial-gradient(circle at 50% 42%, rgba(56, 189, 248, 0.28) 0%, rgba(37, 99, 235, 0.17) 40%, rgba(254, 240, 138, 0.08) 58%, transparent 76%)",
                 }}
+                aria-hidden="true"
               />
 
               {/* Vast 3D Living Particle Globe on Upper Half Only */}
               <GalaxyStarlightCeiling />
+
+              {/* Obsidian Transition Scrim - Breaks up cool blue look strictly below the globe */}
+              <div
+                className="pointer-events-none absolute left-0 right-0 z-[2]"
+                style={{
+                  top: "43%",
+                  height: "16%",
+                  background: "linear-gradient(to bottom, rgba(7, 8, 11, 0) 0%, rgba(7, 8, 11, 0.70) 42%, rgba(7, 8, 11, 0.98) 82%, #07080b 100%)",
+                }}
+                aria-hidden="true"
+              />
 
               {/* Minimal Header - Frosted Glass Glassmorphism, Color-Free & Ultra-Transparent for Star System */}
               <header
@@ -3575,75 +3600,94 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                   </div>
                 )}
 
-                {/* Rounded Composer Box (Radius 26px) with Specular Titanium Conic Border */}
-                <div
-                  className={`relative rounded-[26px] bg-[#090b10]/85 backdrop-blur-xl p-3 border border-white/[0.07] shadow-[0_8px_32px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.05)] transition-all ${
-                    isBusy ? "ring-1 ring-white/20" : ""
-                  }`}
-                >
-                  {/* Ultra-thin choreographic conic specular border */}
-                  <div className="choreo-conic-border" aria-hidden="true">
-                    <div className="choreo-conic-inner" />
-                  </div>
+                {/* Rounded Composer Box (Radius 26px) with Black Gradient Smooth Look & Focus Backlight */}
+                <div className="relative w-full">
+                  {/* Small minimum backlight when clicking in the box to type; turns off once prompt is submitted */}
+                  <div
+                    className={`pointer-events-none absolute -inset-1 rounded-[30px] transition-opacity duration-300 ease-out ${
+                      isInputFocused
+                        ? "opacity-100 bg-gradient-to-r from-sky-400/20 via-white/[0.08] to-sky-400/20 blur-md shadow-[0_0_24px_rgba(56,189,248,0.12),0_0_10px_rgba(255,255,255,0.06)]"
+                        : "opacity-0"
+                    }`}
+                    aria-hidden="true"
+                  />
 
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (isBusy) handleStop();
-                      else handleSubmitPrompt(inputValue);
-                    }}
-                    className="flex flex-col gap-1.5 relative z-10"
+                  <div
+                    className={`relative rounded-[26px] bg-gradient-to-b from-[#13151b] via-[#0a0b0f] to-[#040507] backdrop-blur-xl p-3 border transition-all duration-300 ease-out ${
+                      isInputFocused
+                        ? "border-white/[0.18] shadow-[0_8px_32px_rgba(0,0,0,0.85),0_0_18px_rgba(56,189,248,0.08),inset_0_1px_0_rgba(255,255,255,0.12)]"
+                        : "border-white/[0.07] shadow-[0_8px_32px_rgba(0,0,0,0.6),inset_0_1px_0_rgba(255,255,255,0.05)]"
+                    } ${isBusy ? "ring-1 ring-white/20" : ""}`}
                   >
-                    <textarea
-                      ref={textareaRef}
-                      value={inputValue}
-                      onChange={handleTextareaInput}
-                      onKeyDown={(e) => {
-                        // Slash Command Menu Keyboard Navigation
-                        if (inputValue.startsWith("/")) {
-                          if (e.key === "ArrowDown") {
-                            e.preventDefault();
-                            setSelectedSlashIndex((prev) => (prev + 1) % Math.max(1, matchedSlashCommands.length));
-                            return;
-                          }
-                          if (e.key === "ArrowUp") {
-                            e.preventDefault();
-                            setSelectedSlashIndex((prev) => (prev - 1 + Math.max(1, matchedSlashCommands.length)) % Math.max(1, matchedSlashCommands.length));
-                            return;
-                          }
-                          if (e.key === "Escape") {
-                            e.preventDefault();
-                            setInputValue("");
-                            return;
-                          }
-                          if (e.key === "Tab") {
-                            e.preventDefault();
-                            if (matchedSlashCommands.length > 0) {
-                              const cmd = matchedSlashCommands[selectedSlashIndex] || matchedSlashCommands[0];
-                              handleSelectSlashCommand(cmd, false);
-                            }
-                            return;
-                          }
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            if (matchedSlashCommands.length > 0 && !inputValue.includes(" ")) {
+                    {/* Ultra-thin choreographic conic specular border */}
+                    <div className="choreo-conic-border" aria-hidden="true">
+                      <div className="choreo-conic-inner" />
+                    </div>
+
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        setIsInputFocused(false);
+                        textareaRef.current?.blur();
+                        if (isBusy) handleStop();
+                        else handleSubmitPrompt(inputValue);
+                      }}
+                      className="flex flex-col gap-1.5 relative z-10"
+                    >
+                      <textarea
+                        ref={textareaRef}
+                        value={inputValue}
+                        onChange={handleTextareaInput}
+                        onFocus={() => setIsInputFocused(true)}
+                        onBlur={() => setIsInputFocused(false)}
+                        onKeyDown={(e) => {
+                          // Slash Command Menu Keyboard Navigation
+                          if (inputValue.startsWith("/")) {
+                            if (e.key === "ArrowDown") {
                               e.preventDefault();
-                              const cmd = matchedSlashCommands[selectedSlashIndex] || matchedSlashCommands[0];
-                              handleSelectSlashCommand(cmd, true);
+                              setSelectedSlashIndex((prev) => (prev + 1) % Math.max(1, matchedSlashCommands.length));
                               return;
                             }
+                            if (e.key === "ArrowUp") {
+                              e.preventDefault();
+                              setSelectedSlashIndex((prev) => (prev - 1 + Math.max(1, matchedSlashCommands.length)) % Math.max(1, matchedSlashCommands.length));
+                              return;
+                            }
+                            if (e.key === "Escape") {
+                              e.preventDefault();
+                              setInputValue("");
+                              return;
+                            }
+                            if (e.key === "Tab") {
+                              e.preventDefault();
+                              if (matchedSlashCommands.length > 0) {
+                                const cmd = matchedSlashCommands[selectedSlashIndex] || matchedSlashCommands[0];
+                                handleSelectSlashCommand(cmd, false);
+                              }
+                              return;
+                            }
+                            if (e.key === "Enter" && !e.shiftKey) {
+                              if (matchedSlashCommands.length > 0 && !inputValue.includes(" ")) {
+                                e.preventDefault();
+                                const cmd = matchedSlashCommands[selectedSlashIndex] || matchedSlashCommands[0];
+                                handleSelectSlashCommand(cmd, true);
+                                return;
+                              }
+                            }
                           }
-                        }
 
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          if (isBusy) handleStop();
-                          else handleSubmitPrompt(inputValue);
-                        }
-                      }}
-                      placeholder="A fresh space for your next thought"
-                      rows={1}
-                      className="w-full bg-transparent border-none outline-none font-sans text-[13.5px] font-thin text-[#F2F3F5] placeholder-[#858C9A] resize-none leading-[1.85] tracking-[0.045em] px-1"
-                    />
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            setIsInputFocused(false);
+                            textareaRef.current?.blur();
+                            if (isBusy) handleStop();
+                            else handleSubmitPrompt(inputValue);
+                          }
+                        }}
+                        placeholder="A fresh space for your next thought"
+                        rows={1}
+                        className="w-full bg-transparent border-none outline-none font-sans text-[13.5px] font-thin text-[#F2F3F5] placeholder-[#858C9A] resize-none leading-[1.85] tracking-[0.045em] px-1"
+                      />
 
                     {/* Clean Minimal Bottom Row: Send / Stop Button Right-Aligned */}
                     <div className="flex items-center justify-end pt-0.5">
@@ -3691,6 +3735,7 @@ Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automati
                     </div>
                   </form>
                 </div>
+              </div>
 
                 {/* Reserved slot for small subtext */}
                 <div className="mt-1.5 px-2 w-full flex items-center justify-center text-center min-h-[14px]">

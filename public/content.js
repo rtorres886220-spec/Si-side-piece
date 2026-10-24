@@ -56,6 +56,59 @@
       return true; // Keep channel open for async response
     }
 
+    // Direct Native Select Option Resolution (React & Framework Safe)
+    if (message.action === "SELECT_OPTION" || message.type === "SELECT_OPTION") {
+      try {
+        const targetId = message.elementId || message.targetId || message.id || message.selector;
+        let selectEl = null;
+        if (targetId) {
+          selectEl = sidekickElementMap.get(targetId) || sidekickElementMap.get(`[${targetId}]`);
+          if (!selectEl) {
+            const rawId = String(targetId).replace(/^\[|\]$/g, "");
+            selectEl = document.querySelector(`[data-sidekick-id="${CSS.escape(rawId)}"]`);
+          }
+          if (!selectEl && (typeof targetId === "string") && (targetId.startsWith("#") || targetId.startsWith("."))) {
+            try { selectEl = document.querySelector(targetId); } catch {}
+          }
+        }
+        if (selectEl && selectEl.tagName !== "SELECT") {
+          selectEl = selectEl.querySelector("select") || selectEl.closest("select");
+        }
+        if (!selectEl) {
+          selectEl = document.querySelector("select");
+        }
+        if (selectEl) {
+          const val = message.value || message.option_value || message.text || message.option;
+          const res = selectNativeOption(selectEl, val);
+          sendResponse(res);
+        } else {
+          sendResponse({ success: false, error: `Select element '${targetId}' not found in DOM` });
+        }
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
+      return false;
+    }
+
+    // System-Native Visible Cursor Controls
+    if (message.action === "UPDATE_CURSOR_POSITION" || message.type === "UPDATE_CURSOR_POSITION") {
+      updateVisibleCursor(message.x, message.y, message.durationMs || 100);
+      sendResponse({ success: true });
+      return false;
+    }
+
+    if (message.action === "SHOW_CLICK_PULSE" || message.type === "SHOW_CLICK_PULSE") {
+      triggerClickPulse(message.x, message.y);
+      sendResponse({ success: true });
+      return false;
+    }
+
+    if (message.action === "SHOW_SCROLL_INDICATOR" || message.type === "SHOW_SCROLL_INDICATOR") {
+      triggerScrollIndicator(message.x, message.y, message.direction);
+      sendResponse({ success: true });
+      return false;
+    }
+
     // A5/A6/A12: Inspect element at specific viewport coordinates for human gate & safety checks
     if (message.action === "inspectPoint" && message.x !== undefined && message.y !== undefined) {
       try {
@@ -365,6 +418,238 @@
     return null;
   }
 
+  // =========================================================================
+  // AUTHENTIC SYSTEM-NATIVE VISIBLE CURSOR OVERLAY
+  // Tracks automation position, click ripples, and scroll vectors
+  // =========================================================================
+  let cursorOverlayRoot = null;
+  let cursorPointerEl = null;
+  let cursorRippleEl = null;
+  let cursorScrollBadgeEl = null;
+  let currentCursorX = 100;
+  let currentCursorY = 100;
+
+  function ensureVisibleCursorOverlay() {
+    if (typeof document === "undefined") return null;
+    if (cursorOverlayRoot && document.contains(cursorOverlayRoot)) {
+      return cursorOverlayRoot;
+    }
+    const existing = document.getElementById("sidekick-cursor-overlay");
+    if (existing) {
+      cursorOverlayRoot = existing;
+      cursorPointerEl = existing.querySelector(".sidekick-cursor-pointer");
+      cursorRippleEl = existing.querySelector(".sidekick-cursor-ripple");
+      cursorScrollBadgeEl = existing.querySelector(".sidekick-scroll-badge");
+      return cursorOverlayRoot;
+    }
+
+    const overlay = document.createElement("div");
+    overlay.id = "sidekick-cursor-overlay";
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none !important;
+      z-index: 2147483647 !important;
+      overflow: hidden;
+      margin: 0;
+      padding: 0;
+      border: none;
+    `;
+
+    // Standard OS Desktop Arrow Pointer
+    const pointer = document.createElement("div");
+    pointer.className = "sidekick-cursor-pointer";
+    pointer.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 24px;
+      height: 24px;
+      transform: translate3d(${currentCursorX}px, ${currentCursorY}px, 0);
+      transition: transform 0.08s cubic-bezier(0.2, 0.8, 0.4, 1);
+      pointer-events: none;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
+      will-change: transform;
+    `;
+    pointer.innerHTML = `
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M4 3L17.5 16.5L11.5 17L8.5 22L5.5 21L8.5 16L4 12V3Z" fill="#ffffff" stroke="#111111" stroke-width="1.6" stroke-linejoin="round"/>
+      </svg>
+    `;
+
+    // Micro-ripple pulse
+    const ripple = document.createElement("div");
+    ripple.className = "sidekick-cursor-ripple";
+    ripple.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 28px;
+      height: 28px;
+      margin-top: -14px;
+      margin-left: -14px;
+      border-radius: 50%;
+      border: 2px solid rgba(255, 255, 255, 0.95);
+      background: rgba(255, 255, 255, 0.25);
+      pointer-events: none;
+      transform: translate3d(${currentCursorX}px, ${currentCursorY}px, 0) scale(0);
+      opacity: 0;
+      transition: transform 0.25s ease-out, opacity 0.25s ease-out;
+    `;
+
+    // Scroll Direction Badge
+    const scrollBadge = document.createElement("div");
+    scrollBadge.className = "sidekick-scroll-badge";
+    scrollBadge.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform: translate3d(${currentCursorX + 18}px, ${currentCursorY + 12}px, 0);
+      background: rgba(15, 17, 23, 0.92);
+      color: #f1f5f9;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease, transform 0.15s ease;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+      white-space: nowrap;
+    `;
+
+    overlay.appendChild(ripple);
+    overlay.appendChild(pointer);
+    overlay.appendChild(scrollBadge);
+
+    const targetRoot = document.body || document.documentElement;
+    if (targetRoot) {
+      targetRoot.appendChild(overlay);
+    }
+
+    cursorOverlayRoot = overlay;
+    cursorPointerEl = pointer;
+    cursorRippleEl = ripple;
+    cursorScrollBadgeEl = scrollBadge;
+    return overlay;
+  }
+
+  function updateVisibleCursor(x, y, durationMs = 90) {
+    ensureVisibleCursorOverlay();
+    currentCursorX = Math.round(x);
+    currentCursorY = Math.round(y);
+    if (cursorPointerEl) {
+      cursorPointerEl.style.transition = `transform ${Math.max(40, durationMs)}ms cubic-bezier(0.2, 0.8, 0.4, 1)`;
+      cursorPointerEl.style.transform = `translate3d(${currentCursorX}px, ${currentCursorY}px, 0)`;
+    }
+  }
+
+  function triggerClickPulse(x, y) {
+    ensureVisibleCursorOverlay();
+    const px = x !== undefined ? Math.round(x) : currentCursorX;
+    const py = y !== undefined ? Math.round(y) : currentCursorY;
+    if (cursorRippleEl) {
+      cursorRippleEl.style.transition = "none";
+      cursorRippleEl.style.transform = `translate3d(${px}px, ${py}px, 0) scale(0.3)`;
+      cursorRippleEl.style.opacity = "0.95";
+      void cursorRippleEl.offsetWidth; // Force reflow
+      cursorRippleEl.style.transition = "transform 0.26s cubic-bezier(0.1, 0.9, 0.3, 1), opacity 0.26s ease-out";
+      cursorRippleEl.style.transform = `translate3d(${px}px, ${py}px, 0) scale(1.6)`;
+      cursorRippleEl.style.opacity = "0";
+    }
+  }
+
+  let scrollBadgeTimer = null;
+  function triggerScrollIndicator(x, y, direction = "down") {
+    ensureVisibleCursorOverlay();
+    updateVisibleCursor(x, y, 100);
+    if (cursorScrollBadgeEl) {
+      cursorScrollBadgeEl.innerText = direction === "down" ? `↓ Scrolling down` : `↑ Scrolling up`;
+      cursorScrollBadgeEl.style.transform = `translate3d(${x + 18}px, ${y + 12}px, 0)`;
+      cursorScrollBadgeEl.style.opacity = "1";
+      if (scrollBadgeTimer) clearTimeout(scrollBadgeTimer);
+      scrollBadgeTimer = setTimeout(() => {
+        if (cursorScrollBadgeEl) cursorScrollBadgeEl.style.opacity = "0";
+      }, 750);
+    }
+  }
+
+  // =========================================================================
+  // DUAL-STRATEGY NATIVE SELECT OPTION RESOLVER (React / Framework Safe)
+  // Sets select value without opening native OS popup window
+  // =========================================================================
+  function selectNativeOption(selectEl, valueOrText) {
+    if (!selectEl) return { success: false, error: "Select element not found." };
+    if (selectEl.tagName !== "SELECT") {
+      const innerSelect = selectEl.querySelector("select");
+      if (innerSelect) selectEl = innerSelect;
+      else return { success: false, error: "Target is not a select element." };
+    }
+    const query = String(valueOrText || "").trim().toLowerCase();
+    const options = Array.from(selectEl.options || []);
+    if (options.length === 0) {
+      return { success: false, error: "Select element has no options." };
+    }
+
+    // Exact value -> Exact text -> Substring text -> Substring value -> Index
+    let matchedOption = options.find((o) => (o.value || "").trim().toLowerCase() === query);
+    if (!matchedOption) {
+      matchedOption = options.find((o) => (o.text || o.innerText || "").trim().toLowerCase() === query);
+    }
+    if (!matchedOption && query.length >= 2) {
+      matchedOption = options.find((o) => (o.text || o.innerText || "").toLowerCase().includes(query));
+    }
+    if (!matchedOption && query.length >= 2) {
+      matchedOption = options.find((o) => (o.value || "").toLowerCase().includes(query));
+    }
+    if (!matchedOption) {
+      const num = parseInt(query, 10);
+      if (!isNaN(num) && num >= 0 && num < options.length) {
+        matchedOption = options[num];
+      }
+    }
+
+    if (!matchedOption) {
+      return { success: false, error: `Option '${valueOrText}' could not be found in select.` };
+    }
+
+    // Call native HTMLSelectElement.prototype value setter to trigger React synthetic events
+    const proto = (typeof window !== "undefined" && window.HTMLSelectElement?.prototype) || selectEl.constructor?.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto || {}, "value")?.set;
+    if (setter) {
+      setter.call(selectEl, matchedOption.value);
+    } else {
+      selectEl.value = matchedOption.value;
+    }
+    matchedOption.selected = true;
+
+    selectEl.dispatchEvent(new Event("input", { bubbles: true }));
+    selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // Animate cursor to select location
+    const rect = selectEl.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      const cx = Math.round(rect.left + rect.width / 2);
+      const cy = Math.round(rect.top + rect.height / 2);
+      updateVisibleCursor(cx, cy, 90);
+      triggerClickPulse(cx, cy);
+    }
+
+    return {
+      success: true,
+      selected: true,
+      value: selectEl.value,
+      text: (matchedOption.text || matchedOption.innerText || "").trim(),
+      verified: selectEl.value === matchedOption.value
+    };
+  }
+
   function stripAndExtractDOM() {
     sidekickElementMap.clear();
     const interactiveList = [];
@@ -395,6 +680,17 @@
       ).trim().replace(/\s+/g, " ").slice(0, 80);
 
       const rect = el.getBoundingClientRect();
+      let selectOptions = null;
+      let selectSelectedText = "";
+      if (el.tagName.toLowerCase() === "select" && el.options) {
+        selectOptions = Array.from(el.options).map((opt) => {
+          const t = (opt.text || opt.innerText || "").trim();
+          const v = (opt.value || "").trim();
+          if (opt.selected) selectSelectedText = t || v;
+          return { value: v, text: t };
+        });
+      }
+
       interactiveList.push({
         id: tagId,
         kind,
@@ -402,6 +698,8 @@
         type: el.type || "",
         text: label,
         value: (el.value || "").slice(0, 50),
+        options: selectOptions,
+        selectedText: selectSelectedText,
         checked: Boolean(el.checked || el.getAttribute("aria-checked") === "true"),
         disabled: Boolean(el.disabled || el.getAttribute("aria-disabled") === "true"),
         x: Math.round(rect.left + rect.width / 2),
@@ -423,7 +721,13 @@
     const elementsSummary = interactiveList
       .map((item) => {
         let desc = `${item.id} ${item.kind.toUpperCase()}: "${item.text}"`;
-        if (item.value) desc += ` (value: "${item.value}")`;
+        if (item.options && item.options.length > 0) {
+          const optPreview = item.options.slice(0, 10).map((o) => `"${o.text || o.value}"`).join(", ");
+          desc += ` [Available Options: ${optPreview}${item.options.length > 10 ? `, ... (+${item.options.length - 10} more)` : ""}]`;
+          if (item.selectedText) desc += ` [Current: "${item.selectedText}"]`;
+        } else if (item.value) {
+          desc += ` (value: "${item.value}")`;
+        }
         if (item.checked) desc += ` [CHECKED]`;
         if (item.disabled) desc += ` [DISABLED]`;
         return desc;
@@ -481,22 +785,39 @@
       return { success: false, error: "Security Exception: Element is a sensitive payment or credential input." };
     }
 
-    // 1. Scroll element into center view
-    try {
-      el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-    } catch {
-      el.scrollIntoView(true);
+    // 1. Smart Viewport Centering (Anti-Blur for open dropdowns & popovers)
+    const initialRect = el.getBoundingClientRect();
+    const inViewport = initialRect.top >= 20 && initialRect.left >= 10 &&
+                       initialRect.bottom <= (window.innerHeight || document.documentElement.clientHeight) - 20 &&
+                       initialRect.right <= (window.innerWidth || document.documentElement.clientWidth) - 10;
+
+    const isInsideDropdown = Boolean(el.closest && el.closest('[role="listbox"], [role="menu"], .dropdown-menu, .select-options'));
+
+    if (!inViewport) {
+      if (isInsideDropdown) {
+        // Scroll only nearest scrollable container to prevent blur dismissal
+        try {
+          el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+        } catch {}
+      } else {
+        try {
+          el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+        } catch {
+          el.scrollIntoView(true);
+        }
+      }
+      // Wait for layout settling only if scrolled
+      await new Promise((resolve) => setTimeout(resolve, 80));
     }
 
-    // 2. Wait 200ms for browser paint / layout settling (Critical CDP fix)
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    // 3. Compute live center coordinates
+    // 2. Compute live center coordinates
     const rect = el.getBoundingClientRect();
     const centerX = Math.round(rect.left + rect.width / 2);
     const centerY = Math.round(rect.top + rect.height / 2);
 
+    // Update visible cursor position
     try {
+      updateVisibleCursor(centerX, centerY, 80);
       showActionIndicator(centerX, centerY, cleanId);
     } catch {}
 
@@ -1383,6 +1704,11 @@
    * Visual Action Indicator (Gives immediate feedback when agent interacts)
    */
   function showActionIndicator(x, y, label) {
+    try {
+      updateVisibleCursor(x, y, 70);
+      triggerClickPulse(x, y);
+    } catch {}
+
     const dot = document.createElement("div");
     dot.className = "sidekick-action-dot";
     dot.style.position = "fixed";
@@ -3374,12 +3700,15 @@
       if (action === "select_option" || tag === "select") {
         const select = tag === "select" ? el : el.closest("select");
         if (select) {
-          if (value !== undefined) {
-            select.value = value;
-          }
-          select.dispatchEvent(new Event("change", { bubbles: true }));
-          select.dispatchEvent(new Event("input", { bubbles: true }));
-          return { success: true, verified: select.value === value, value: select.value };
+          const valOrText = value !== undefined ? value : (text || params.label);
+          const res = selectNativeOption(select, valOrText);
+          return {
+            success: res.success,
+            verified: res.verified !== false,
+            value: res.value,
+            text: res.text,
+            action: "select_option"
+          };
         }
       }
 

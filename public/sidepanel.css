@@ -165,18 +165,18 @@ strong, b, .font-semibold, .font-medium {
   box-sizing: border-box;
 }
 
-/* Restrained Quiet Obsidian Glow - Upper Half */
+/* Attractive Luminous Celestial Glow Aura for Globe */
 .ambient-glow {
   position: absolute;
-  top: -40px;
+  top: -30px;
   left: 50%;
   transform: translateX(-50%);
   width: 100%;
-  max-width: 480px;
-  height: 320px;
-  background: radial-gradient(ellipse at top, rgba(30, 41, 59, 0.28) 0%, rgba(15, 23, 42, 0.18) 45%, rgba(7, 8, 11, 0.6) 80%, transparent 100%);
-  filter: blur(60px);
-  opacity: 0.2;
+  max-width: 440px;
+  height: 340px;
+  background: radial-gradient(circle at 50% 42%, rgba(56, 189, 248, 0.28) 0%, rgba(37, 99, 235, 0.17) 40%, rgba(254, 240, 138, 0.08) 58%, transparent 76%);
+  filter: blur(48px);
+  opacity: 0.42;
   pointer-events: none;
   z-index: 0;
   overflow: hidden;
@@ -184,8 +184,8 @@ strong, b, .font-semibold, .font-medium {
 }
 
 .sidekick-panel.busy .ambient-glow {
-  opacity: 0.35;
-  transform: translateX(-50%) translateY(30px) scale(1.1);
+  opacity: 0.55;
+  transform: translateX(-50%) translateY(20px) scale(1.05);
 }
 
 /* Vast 4K 3D Living Cosmos System - Strictly Constrained to Upper 50% */
@@ -200,15 +200,27 @@ strong, b, .font-semibold, .font-medium {
   pointer-events: none;
   overflow: hidden;
   z-index: 1;
-  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 36%, rgba(0,0,0,0.92) 50%, rgba(0,0,0,0.72) 64%, rgba(0,0,0,0.40) 78%, rgba(0,0,0,0.16) 88%, rgba(0,0,0,0.03) 96%, rgba(0,0,0,0) 100%);
-  mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 36%, rgba(0,0,0,0.92) 50%, rgba(0,0,0,0.72) 64%, rgba(0,0,0,0.40) 78%, rgba(0,0,0,0.16) 88%, rgba(0,0,0,0.03) 96%, rgba(0,0,0,0) 100%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 32%, rgba(0,0,0,0.95) 42%, rgba(0,0,0,0.55) 52%, rgba(0,0,0,0.18) 64%, rgba(0,0,0,0) 76%, rgba(0,0,0,0) 100%);
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,1) 32%, rgba(0,0,0,0.95) 42%, rgba(0,0,0,0.55) 52%, rgba(0,0,0,0.18) 64%, rgba(0,0,0,0) 76%, rgba(0,0,0,0) 100%);
 }
 
 .rr-starlight-scrim {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(to bottom, rgba(7, 8, 11, 0.15) 0%, rgba(7, 8, 11, 0.02) 30%, rgba(7, 8, 11, 0.45) 65%, rgba(7, 8, 11, 0.88) 90%, #07080b 100%);
+  background: linear-gradient(to bottom, rgba(7, 8, 11, 0.08) 0%, rgba(7, 8, 11, 0.0) 24%, rgba(7, 8, 11, 0.25) 42%, rgba(7, 8, 11, 0.88) 68%, #07080b 100%);
+}
+
+/* Obsidian Transition Scrim - Breaks up cool blue look strictly below the globe */
+.horizon-break {
+  position: absolute;
+  top: 43%;
+  left: 0;
+  right: 0;
+  height: 16%;
+  background: linear-gradient(to bottom, rgba(7, 8, 11, 0) 0%, rgba(7, 8, 11, 0.70) 42%, rgba(7, 8, 11, 0.98) 82%, #07080b 100%);
+  pointer-events: none;
+  z-index: 2;
 }
 
 .galaxy-canvas {
@@ -1172,19 +1184,48 @@ strong, b, .font-semibold, .font-medium {
   font-weight: 200;
 }
 
-/* Rounded Composer Container (Radius 26px) */
+.composer-box-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.composer-backlight {
+  position: absolute;
+  inset: -4px;
+  border-radius: 30px;
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.20) 0%, rgba(255, 255, 255, 0.08) 50%, rgba(56, 189, 248, 0.20) 100%);
+  filter: blur(12px);
+  box-shadow: 0 0 24px rgba(56, 189, 248, 0.12), 0 0 10px rgba(255, 255, 255, 0.06);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease-out;
+}
+
+.composer-box.focused + .composer-backlight,
+.composer-box:focus-within + .composer-backlight {
+  opacity: 1;
+}
+
+/* Rounded Composer Container (Radius 26px) with Black Gradient Smooth Look */
 .composer-box {
   position: relative;
-  background: var(--field);
+  background: linear-gradient(180deg, #13151b 0%, #0a0b0f 50%, #040507 100%);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-radius: 26px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   padding: 10px 14px 8px;
   width: 100%;
   box-sizing: border-box;
   overflow: hidden;
+  transition: all 0.3s ease-out;
+}
+
+.composer-box.focused,
+.composer-box:focus-within {
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.85), 0 0 18px rgba(56, 189, 248, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 /* Specular Titanium Conic Gradient Border:

@@ -71,7 +71,10 @@
         const valStr = el.value ? ` [value: "${sanitizeElementLabel(el.value).slice(0, 30)}"]` : "";
         const checkedStr = el.checked ? ` [checked]` : "";
         const groupStr = el.group ? ` [group: "${sanitizeElementLabel(el.group).slice(0, 40)}"]` : "";
-        return `[#${el.id}] ${el.role.toUpperCase()}: "${cleanLabel}"${groupStr}${valStr}${checkedStr}`;
+        const optionsStr = (el.options && Array.isArray(el.options) && el.options.length > 0)
+          ? ` [options: ${el.options.slice(0, 8).map(o => `"${sanitizeElementLabel(o.text || o.value)}"`).join(", ")}]`
+          : "";
+        return `[#${el.id}] ${el.role.toUpperCase()}: "${cleanLabel}"${groupStr}${valStr}${checkedStr}${optionsStr}`;
       }).join("\n");
 
       let continuousSection = "";
@@ -104,19 +107,22 @@ CRITICAL RULES:
 1. Target elements using their [#ID] integer (e.g. 12).
 2. Supported actions:
    - "click": clicks the element with integer target_id
+   - "select_option": selects a dropdown option from a <select> element with target_id (specify "value" or "option_text")
    - "type": types text into the input with integer target_id (specify "text")
    - "scroll": scrolls the viewport ("down" or "up")
    - "navigate": navigates the current tab to a URL ("url")
    - "open_tab": opens a new tab inside the managed Tab Group ("url")
    - "none": if the element is absent or request cannot be performed on this page, return action "none" with an explanation.
-3. If the user asks to open a new tab or visit a new site in a new tab, use action "open_tab".
-4. If the user asks to search the web or internet (e.g. "search internet for 2008 Acura tl for sale", "google X", "search for X"), use action "navigate" with url "https://www.google.com/search?q=..." (or "open_tab" if requested in a new tab).
-5. If the required element is not listed in the viewport, return action "none" with a clear explanation.
+3. For dropdown menus (role: SELECT or COMBOBOX), ALWAYS prefer "select_option" with the chosen option text or value. This guarantees first-try accuracy without getting stuck in open menus.
+4. If the user asks to open a new tab or visit a new site in a new tab, use action "open_tab".
+5. If the user asks to search the web or internet (e.g. "search internet for 2008 Acura tl for sale", "google X", "search for X"), use action "navigate" with url "https://www.google.com/search?q=..." (or "open_tab" if requested in a new tab).
+6. If the required element is not listed in the viewport, return action "none" with a clear explanation.
 
 Respond with ONLY valid JSON:
 {
-  "action": "click" | "type" | "scroll" | "navigate" | "open_tab" | "none",
+  "action": "click" | "select_option" | "type" | "scroll" | "navigate" | "open_tab" | "none",
   "target_id": 12,
+  "value": "option text or value if action is select_option",
   "text": "text to type if action is type",
   "direction": "down" | "up",
   "url": "destination URL if action is navigate or open_tab",
@@ -202,7 +208,9 @@ USER COMMAND: "${promptText}"`;
         rawAction = String(rawAction).toLowerCase().trim();
 
         // Map synonym action types
-        if (["click_element", "tap", "press", "button"].includes(rawAction)) {
+        if (["select", "select_option", "choose_option", "dropdown_select", "pick_option"].includes(rawAction)) {
+          rawAction = "select_option";
+        } else if (["click_element", "tap", "press", "button"].includes(rawAction)) {
           rawAction = "click";
         } else if (["type_text", "fill", "input", "enter", "write", "enter_text"].includes(rawAction)) {
           rawAction = "type";
@@ -246,6 +254,8 @@ USER COMMAND: "${promptText}"`;
             }
           } else if (json.url) {
             rawAction = "navigate";
+          } else if ((json.value || json.option_value || json.option_text) && targetId !== null) {
+            rawAction = "select_option";
           } else if (json.text && targetId !== null) {
             rawAction = "type";
           } else if (targetId !== null) {
@@ -259,6 +269,7 @@ USER COMMAND: "${promptText}"`;
 
         json.action = rawAction || "none";
         json.target_id = targetId;
+        json.value = json.value || json.option_value || json.option_text || "";
         json.explanation = json.explanation || json.reason || json.message || "";
         json.situational_thought = json.situational_thought || json.thought || json.explanation || "";
         json.is_task_complete = Boolean(json.is_task_complete);

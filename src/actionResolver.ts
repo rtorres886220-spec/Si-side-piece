@@ -30,6 +30,7 @@ export interface InteractiveElementCandidate {
   checked?: boolean;
   selected?: boolean;
   value?: string;
+  options?: Array<{ value: string; text: string; selected?: boolean }>;
   isIntercepted?: boolean;
   interceptedBy?: string;
 }
@@ -283,11 +284,28 @@ export function resolveActionTarget(
       }
     }
 
+    // Option text match bonus for select elements
+    if (el.options && Array.isArray(el.options)) {
+      for (const opt of el.options) {
+        for (const rawTerm of targetTerms) {
+          const term = cleanTerm(rawTerm);
+          if (term.length >= 2) {
+            const optScore = computeSimilarity(opt.text || opt.value, term);
+            if (optScore > 0.6) {
+              maxScore = Math.max(maxScore, optScore + 0.15);
+            }
+          }
+        }
+      }
+    }
+
     // Role bonus for specific action types
     if (actionTypes.has("type") && (el.role.includes("input") || el.role.includes("text"))) {
       maxScore += 0.05;
     } else if (actionTypes.has("click") && (el.role.includes("button") || el.role.includes("link") || el.role.includes("radio") || el.role.includes("checkbox"))) {
       maxScore += 0.02;
+    } else if ((actionTypes.has("select") || actionTypes.has("select_option") || actionTypes.has("click")) && (el.role.includes("select") || el.role.includes("combobox") || el.role.includes("dropdown"))) {
+      maxScore += 0.08;
     }
 
     if (maxScore > 0.35) {
