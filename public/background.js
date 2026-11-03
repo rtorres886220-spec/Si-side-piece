@@ -1095,7 +1095,8 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
               targetId,
               value: optVal
             });
-            this.addLog("success", `Selected option "${optVal}" on ${targetId}`);
+            this.lastActionVerification = { success: false, outcome: "selection_unverified", reason: `Selection action was dispatched for "${optVal}" but the selected value was not independently verified.` };
+            this.addLog("warn", `Selection dispatched for "${optVal}" on ${targetId}; selected state is not yet verified.`);
           } catch (selErr) {
             this.addLog("warn", `Direct select option error (${selErr.message}), falling back to coordinate click`);
             const coords = await this.resolveTargetCoordinates(targetId);
@@ -1129,7 +1130,8 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
           // Call content script with anti-blur target centering
           const coords = await this.resolveTargetCoordinates(targetId);
           if (!coords || !coords.success) {
-            this.addLog("warn", `Could not resolve coordinates for ${targetId}: ${coords?.error || "Element missing"}`);
+            this.lastActionVerification = { success: false, outcome: "target_resolution_failed", reason: coords?.error || "Element missing; target was not resolved." };
+            this.addLog("warn", `Could not resolve coordinates for ${targetId}: ${this.lastActionVerification.reason}`);
           } else {
             if (coords.isOccluded) {
               this.addLog("warn", `Target ${targetId} is occluded by ${coords.occludedBy || "overlay"}. Physical click may be intercepted by modal.`);
@@ -1180,6 +1182,8 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
                 targetId,
                 frameId: coords.frameId || 0
               });
+              this.lastActionVerification = { success: false, outcome: "typing_unverified", reason: "Text input was dispatched but the resulting field value was not independently verified." };
+              this.addLog("warn", `Text input dispatched to ${targetId}; value is not yet verified.`);
             }
           }
           await delay(160);
