@@ -1064,14 +1064,14 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
         // Step 6: Execute the decided Action
         if (parsed.actionType === "FINISH") {
           if (this.lastActionVerification && this.lastActionVerification.success === false) {
-            this.addLog("warn", `Rejected FINISH: previous browser action was not verified (${this.lastActionVerification.reason || this.lastActionVerification.outcome || "unknown outcome"}). Re-inspecting the live page instead of reporting success.`);
-            this.state.currentThought = "The previous action is not verified. Inspecting the current page before deciding whether the objective is complete.";
-            this.state.currentStep++;
+            this.state.status = "NEEDS_VERIFICATION";
+            this.state.resultSummary = "The agent stopped because its last browser action could not be verified. Inspect the page and resume; no success is claimed."; 
+            this.addLog("warn", `Rejected FINISH: previous browser action was not verified (${this.lastActionVerification.reason || this.lastActionVerification.outcome || "unknown outcome"}). Stopping as incomplete rather than claiming success.`);
             await this.persistState();
-            continue;
+            break;
           }
           this.state.status = "COMPLETED";
-          this.state.resultSummary = parsed.actionArg || "Task objective completed successfully.";
+          this.state.resultSummary = parsed.actionArg || "Task objective completed successfully."; 
           this.addLog("success", `Completed: ${this.state.resultSummary}`);
           await this.persistState();
           break;
