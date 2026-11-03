@@ -2382,13 +2382,13 @@
     }
 
     if (docMutationVersion > preState.mutationVersion) {
-      return { success: true, outcome: "dom_mutated", reason: `DOM mutated (${preState.mutationVersion} -> ${docMutationVersion}).` };
+      return { success: false, outcome: "dom_mutated_unconfirmed", reason: `The DOM changed (${preState.mutationVersion} -> ${docMutationVersion}), but no target-specific or meaningful postcondition was verified.` };
     }
 
     return {
       success: false,
       outcome: "no_op",
-      reason: "Action completed event dispatch, but page state was completely unchanged (no DOM mutation, no navigation, no modal)"
+      reason: "Action event was dispatched, but no meaningful page-state change was verified."
     };
   }
 
