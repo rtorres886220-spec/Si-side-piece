@@ -487,7 +487,10 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
             }
           }
         } catch (reverifyErr) {
-          console.debug("[Pre-Click] Re-verification notice:", reverifyErr.message);
+          console.debug("[Pre-Click] Re-verification failed:", reverifyErr.message);
+          if (targetSelector) {
+            return { clicked: false, verified: false, outcome: "revalidation_error", reason: "Live target revalidation threw an error; refusing to click." };
+          }
         }
 
         const prevPos = lastMousePositions.get(tabId) || {
