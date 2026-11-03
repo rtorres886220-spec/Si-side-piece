@@ -2163,13 +2163,29 @@
   }
 
   /**
+   * Resolve a live target from either a CSS selector or synthetic [button_1] ID.
+   * Ambiguous CSS selectors deliberately return null rather than selecting arbitrarily.
+   */
+  function resolveVerificationElement(selector) {
+    if (!selector) return null;
+    try {
+      const matches = document.querySelectorAll(selector);
+      if (matches.length === 1) return matches[0];
+      if (matches.length > 1) return null;
+    } catch {}
+    const cleanId = String(selector).replace(/^\\[|\\]$/g, "");
+    const mapped = sidekickElementMap.get("[" + cleanId + "]") || sidekickElementMap.get(cleanId);
+    if (mapped && mapped.isConnected) return mapped;
+    let byDataId = [];
+    try { byDataId = document.querySelectorAll("[data-sidekick-id=\"" + CSS.escape(cleanId) + "\"]"); } catch {}
+    return byDataId.length === 1 ? byDataId[0] : null;
+  }
+
+  /**
    * Captures a comprehensive pre-action state snapshot for truthful post-action verification.
    */
   function capturePreStateSnapshot(selector) {
-    let el = null;
-    if (selector) {
-      try { el = document.querySelector(selector); } catch {}
-    }
+    const el = resolveVerificationElement(selector);
     const openModals = document.querySelectorAll(
       '[role="dialog"], [role="alertdialog"], dialog[open], .modal:not(.hidden), .popup:not(.hidden), .overlay:not(.hidden)'
     );
@@ -2195,10 +2211,7 @@
    * Catches dead clicks, intercepted clicks, and reports truthful execution status.
    */
   function verifyPostActionOutcome(cdpAction, selector, preState, expectedPostcondition) {
-    let el = null;
-    if (selector) {
-      try { el = document.querySelector(selector); } catch {}
-    }
+    const el = resolveVerificationElement(selector);
 
     // Overlay interception check
     if (el) {
@@ -2369,13 +2382,13 @@
     }
 
     if (docMutationVersion > preState.mutationVersion) {
-      return { success: true, outcome: "dom_mutated", reason: `DOM mutated (${preState.mutationVersion} -> ${docMutationVersion}).` };
+      return { success: false, outcome: "dom_mutated_unconfirmed", reason: `The DOM changed (${preState.mutationVersion} -> ${docMutationVersion}), but no target-specific or meaningful postcondition was verified.` };
     }
 
     return {
       success: false,
       outcome: "no_op",
-      reason: "Action completed event dispatch, but page state was completely unchanged (no DOM mutation, no navigation, no modal)"
+      reason: "Action event was dispatched, but no meaningful page-state change was verified."
     };
   }
 
