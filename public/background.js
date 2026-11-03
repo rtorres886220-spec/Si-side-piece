@@ -422,6 +422,21 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
           return await dispatchDOMFallback(tabId, action, params);
         }
 
+        const targetSelector = params.selector || params.targetId || "";
+        let preState = null;
+        if (targetSelector) {
+          preState = await new Promise((resolve) => {
+            const frameId = params.frameId !== undefined ? params.frameId : 0;
+            chrome.tabs.sendMessage(tabId, { action: "capturePreState", selector: targetSelector }, frameId ? { frameId } : {}, (res) => {
+              if (chrome.runtime.lastError || !res || !res.success) resolve(null);
+              else resolve(res.state || null);
+            });
+          });
+          if (!preState) {
+            return { clicked: false, verified: false, reason: "Pre-action state unavailable; refusing an unverified click.", outcome: "prestate_unavailable" };
+          }
+        }
+
         let targetX = Math.round(x);
         let targetY = Math.round(y);
 
@@ -442,6 +457,14 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
               else resolve(res.coords);
             });
           });
+
+          if (targetSelector && !reverifyResp) {
+            return { clicked: false, verified: false, reason: "Live target revalidation failed; refusing to click stale coordinates.", outcome: "stale_target" };
+          }
+
+          if (targetSelector && reverifyResp && reverifyResp.verified !== true) {
+            return { clicked: false, verified: false, reason: reverifyResp.reason || "Live target could not be verified.", outcome: reverifyResp.ambiguous ? "ambiguous_target" : "stale_target" };
+          }
 
           if (reverifyResp) {
             // Check if element is occluded by overlay/backdrop
@@ -531,7 +554,23 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
           }
           throw releaseErr;
         }
-        return { clicked: true, x: targetX, y: targetY };
+        if (!targetSelector) {
+          return { clicked: true, verified: false, x: targetX, y: targetY, outcome: "unverified", reason: "No stable target identity was supplied for post-click verification." };
+        }
+
+        // Dispatching mouse events is not proof of success; verify the live page state.
+        await delay(250);
+        const verification = await new Promise((resolve) => {
+          const frameId = params.frameId !== undefined ? params.frameId : 0;
+          chrome.tabs.sendMessage(tabId, { action: "verifyPostState", cdpAction: "click", selector: targetSelector, preState }, frameId ? { frameId } : {}, (res) => {
+            if (chrome.runtime.lastError || !res || !res.success || !res.result) {
+              resolve({ success: false, outcome: "verification_unavailable", reason: chrome.runtime.lastError?.message || "Post-click verification did not return a result." });
+            } else {
+              resolve(res.result);
+            }
+          });
+        });
+        return { clicked: true, verified: Boolean(verification.success), verification, x: targetX, y: targetY };
       }
 
       case "type": {
@@ -808,6 +847,7 @@ class AutonomousAgentEngine {
     this.isNavigating = false;
     this.abortController = null;
     this.frameElementRegistry = new Map();
+    this.lastActionVerification = null;
     this.state = {
       status: "IDLE", // IDLE, RUNNING, PAUSED_429, WAITING_APPROVAL, COMPLETED, STOPPED, ERROR
       objective: "",
@@ -837,6 +877,7 @@ class AutonomousAgentEngine {
 
     this.abortController = new AbortController();
     this.frameElementRegistry.clear();
+    this.lastActionVerification = null;
     startLoopKeepAlive();
 
     // Determine target tab and automatically group into "Si" (ice white / silver)
@@ -1022,6 +1063,13 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
 
         // Step 6: Execute the decided Action
         if (parsed.actionType === "FINISH") {
+          if (this.lastActionVerification && this.lastActionVerification.success === false) {
+            this.addLog("warn", `Rejected FINISH: previous browser action was not verified (${this.lastActionVerification.reason || this.lastActionVerification.outcome || "unknown outcome"}). Re-inspecting the live page instead of reporting success.`);
+            this.state.currentThought = "The previous action is not verified. Inspecting the current page before deciding whether the objective is complete.";
+            this.state.currentStep++;
+            await this.persistState();
+            continue;
+          }
           this.state.status = "COMPLETED";
           this.state.resultSummary = parsed.actionArg || "Task objective completed successfully.";
           this.addLog("success", `Completed: ${this.state.resultSummary}`);
@@ -1109,6 +1157,16 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
                 targetId,
                 frameId: coords.frameId || 0
               });
+              this.lastActionVerification = {
+                success: Boolean(clickResult && clickResult.verified),
+                outcome: clickResult?.verification?.outcome || clickResult?.outcome || (clickResult?.occluded ? "intercepted" : "unverified"),
+                reason: clickResult?.verification?.reason || clickResult?.reason || clickResult?.verification?.outcome || "Click result was not verified."
+              };
+              if (!clickResult?.verified) {
+                this.addLog("warn", `Click not verified for ${targetId}: ${this.lastActionVerification.reason}. The agent must re-inspect before retrying.`);
+              } else {
+                this.addLog("success", `Click outcome verified for ${targetId}: ${this.lastActionVerification.outcome}`);
+              }
               if (clickResult && clickResult.occluded) {
                 this.addLog("warn", `Target ${targetId} is occluded by ${clickResult.occludedBy || "overlay"}. Physical click prevented.`);
                 this.state.currentThought = `Target is occluded by ${clickResult.occludedBy || "modal backdrop"}. Redirecting attention to dismiss modal...`;
@@ -1129,8 +1187,8 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
 
         this.state.currentStep++;
         if (this.state.currentStep > this.state.maxSteps) {
-          this.state.status = "COMPLETED";
-          this.state.resultSummary = "Reached safety limit of 50 steps.";
+          this.state.status = "STEP_LIMIT_REACHED";
+          this.state.resultSummary = "Stopped at the 50-step safety limit before verified completion.";
           await this.persistState();
           break;
         }
