@@ -128,7 +128,7 @@ export function verifyElementFreshness(
   // 3. Label/role mutation check
   const normOld = (candidate.label || "").toLowerCase().trim();
   const normNew = (matched.label || "").toLowerCase().trim();
-  if (normOld && normNew && normOld !== normNew && !normNew.includes(normOld) && !normNew.includes(normOld)) {
+  if (normOld && normNew && normOld !== normNew && !normNew.includes(normOld) && !normOld.includes(normNew)) {
     return {
       isFresh: false,
       driftPx: Math.round(drift),
@@ -227,6 +227,8 @@ export function resolveActionTarget(
 
   // Filter out payment widgets and out-of-bounds elements
   const safeElements = elements.filter((el) => {
+    // Disabled controls are not actionable targets.
+    if (el.disabled) return false;
     if (isElementRestricted(el)) return false;
     if (el.x < 0 || el.y < 0 || el.x > viewportBounds.width || el.y > viewportBounds.height) {
       return false;
