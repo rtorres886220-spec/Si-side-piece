@@ -116,7 +116,7 @@ CRITICAL RULES:
 3. For dropdown menus (role: SELECT or COMBOBOX), ALWAYS prefer "select_option" with the chosen option text or value. This guarantees first-try accuracy without getting stuck in open menus.
 4. If the user asks to open a new tab or visit a new site in a new tab, use action "open_tab".
 5. If the user asks to search the web or internet (e.g. "search internet for 2008 Acura tl for sale", "google X", "search for X"), use action "navigate" with url "https://www.google.com/search?q=..." (or "open_tab" if requested in a new tab).
-6. If the required element is not listed in the viewport, return action "none" with a clear explanation.
+6. If the required element is not listed in the current viewport candidates and there may be more content on the page, return action "scroll" with direction "down" to discover off-screen elements. Only return action "none" if the overall goal is completely fulfilled or impossible.
 
 Respond with ONLY valid JSON:
 {
@@ -162,7 +162,7 @@ USER COMMAND: "${promptText}"`;
         systemInstruction: { parts: [{ text: systemInstruction }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.5,
+          temperature: 0.1,
           responseMimeType: "application/json",
           thinkingConfig: {
             thinkingLevel,
@@ -404,7 +404,7 @@ USER QUESTION: "${promptText}"`;
         systemInstruction: { parts: [{ text: systemInstruction }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.5,
+          temperature: 0.2,
           responseMimeType: "application/json",
           thinkingConfig: {
             thinkingLevel,

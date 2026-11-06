@@ -56,21 +56,19 @@
       return true; // Keep channel open for async response
     }
 
+    // Dynamic Page Settle Detector (Waits for DOM mutation silence)
+    if (message.action === "WAIT_FOR_PAGE_SETTLED" || message.type === "WAIT_FOR_PAGE_SETTLED") {
+      waitForPageSettled(message.timeoutMs || 2000)
+        .then((res) => sendResponse({ success: true, ...res }))
+        .catch((err) => sendResponse({ success: false, error: err.message }));
+      return true;
+    }
+
     // Direct Native Select Option Resolution (React & Framework Safe)
     if (message.action === "SELECT_OPTION" || message.type === "SELECT_OPTION") {
       try {
         const targetId = message.elementId || message.targetId || message.id || message.selector;
-        let selectEl = null;
-        if (targetId) {
-          selectEl = sidekickElementMap.get(targetId) || sidekickElementMap.get(`[${targetId}]`);
-          if (!selectEl) {
-            const rawId = String(targetId).replace(/^\[|\]$/g, "");
-            selectEl = document.querySelector(`[data-sidekick-id="${CSS.escape(rawId)}"]`);
-          }
-          if (!selectEl && (typeof targetId === "string") && (targetId.startsWith("#") || targetId.startsWith("."))) {
-            try { selectEl = document.querySelector(targetId); } catch {}
-          }
-        }
+        let selectEl = resolveTargetElement(targetId);
         if (selectEl && selectEl.tagName !== "SELECT") {
           selectEl = selectEl.querySelector("select") || selectEl.closest("select");
         }
@@ -340,6 +338,185 @@
   // DOM STRIPPER, SHADOW DOM RESOLVER & JIT COORDINATE LOCATOR FOR AUTONOMOUS AGENT
   // =========================================================================
   const sidekickElementMap = new Map();
+  const sidekickFingerprints = new Map();
+
+  function getUniqueSelectorPath(el) {
+    if (!el || el.nodeType !== 1) return "";
+    if (el.id && !/^[0-9]/.test(el.id)) {
+      try {
+        const sel = `#${CSS.escape(el.id)}`;
+        if (document.querySelectorAll(sel).length === 1) return sel;
+      } catch {}
+    }
+    if (el.name) {
+      try {
+        const sel = `${el.tagName.toLowerCase()}[name="${CSS.escape(el.name)}"]`;
+        if (document.querySelectorAll(sel).length === 1) return sel;
+      } catch {}
+    }
+    const ariaLabel = el.getAttribute("aria-label");
+    if (ariaLabel && ariaLabel.length < 50) {
+      try {
+        const sel = `${el.tagName.toLowerCase()}[aria-label="${CSS.escape(ariaLabel)}"]`;
+        if (document.querySelectorAll(sel).length === 1) return sel;
+      } catch {}
+    }
+    const parts = [];
+    let curr = el;
+    let depth = 0;
+    while (curr && curr.nodeType === 1 && depth < 5 && curr !== document.body && curr !== document.documentElement) {
+      let tag = curr.tagName.toLowerCase();
+      let part = tag;
+      if (curr.id && !/^[0-9]/.test(curr.id)) {
+        part = `#${CSS.escape(curr.id)}`;
+        parts.unshift(part);
+        break;
+      }
+      let parent = curr.parentElement;
+      if (parent) {
+        let siblings = Array.from(parent.children).filter(c => c.tagName === curr.tagName);
+        if (siblings.length > 1) {
+          let idx = siblings.indexOf(curr) + 1;
+          part += `:nth-of-type(${idx})`;
+        }
+      }
+      parts.unshift(part);
+      curr = parent;
+      depth++;
+    }
+    return parts.join(" > ");
+  }
+
+  function resolveTargetElement(targetId, hintCoords) {
+    if (!targetId && !hintCoords) return null;
+    let cleanId = targetId ? String(targetId).trim() : "";
+    let normalizedKey = cleanId;
+    if (!cleanId.startsWith("[") && cleanId.includes("_")) {
+      normalizedKey = `[${cleanId}]`;
+    }
+    const rawId = cleanId.replace(/^\[/, "").replace(/\]$/, "");
+
+    // 1. In-memory map (if attached and still connected)
+    let el = sidekickElementMap.get(normalizedKey) || sidekickElementMap.get(cleanId);
+    if (el && el.isConnected) return el;
+
+    // 2. data-sidekick-id in live DOM
+    if (rawId) {
+      el = document.querySelector(`[data-sidekick-id="${CSS.escape(rawId)}"]`);
+      if (el && el.isConnected) {
+        sidekickElementMap.set(normalizedKey, el);
+        sidekickElementMap.set(cleanId, el);
+        return el;
+      }
+    }
+
+    // 3. Try standard CSS selector if targetId looks like one
+    if (cleanId.startsWith("#") || cleanId.startsWith(".") || (cleanId.startsWith("[") && cleanId.includes("="))) {
+      try {
+        el = document.querySelector(cleanId);
+        if (el && el.isConnected) return el;
+      } catch {}
+    }
+
+    // 4. Fingerprint matching (React / Vue re-render recovery)
+    const fp = sidekickFingerprints.get(rawId) || sidekickFingerprints.get(normalizedKey) || sidekickFingerprints.get(cleanId);
+    if (fp) {
+      // 4a. Match by unique selectorPath
+      if (fp.selectorPath) {
+        try {
+          const match = document.querySelector(fp.selectorPath);
+          if (match && match.isConnected && isElementStrippedVisible(match)) {
+            match.setAttribute("data-sidekick-id", rawId);
+            sidekickElementMap.set(normalizedKey, match);
+            sidekickElementMap.set(cleanId, match);
+            return match;
+          }
+        } catch {}
+      }
+
+      // 4b. Match by semantic attributes + normalized text similarity
+      if (fp.normalizedText) {
+        const candidates = document.querySelectorAll(fp.tag || "button, a, input, select, [role]");
+        for (const cand of candidates) {
+          if (!cand.isConnected || !isElementStrippedVisible(cand)) continue;
+          const candText = (cand.getAttribute("aria-label") || cand.innerText || cand.textContent || cand.value || "").trim().toLowerCase();
+          if (candText === fp.normalizedText || (fp.normalizedText.length > 5 && (candText.includes(fp.normalizedText) || fp.normalizedText.includes(candText)))) {
+            cand.setAttribute("data-sidekick-id", rawId);
+            sidekickElementMap.set(normalizedKey, cand);
+            sidekickElementMap.set(cleanId, cand);
+            return cand;
+          }
+        }
+      }
+
+      // 4c. Match by relative spatial coordinate
+      if (fp.relativeCoords) {
+        const vw = window.innerWidth || 1280;
+        const vh = window.innerHeight || 800;
+        const targetX = Math.round(fp.relativeCoords.xPct * vw);
+        const targetY = Math.round(fp.relativeCoords.yPct * vh);
+        const atPoint = document.elementFromPoint(targetX, targetY);
+        if (atPoint && atPoint.isConnected && isElementStrippedVisible(atPoint)) {
+          const interactive = atPoint.closest("button, a, input, select, [role='button'], [tabindex]") || atPoint;
+          interactive.setAttribute("data-sidekick-id", rawId);
+          sidekickElementMap.set(normalizedKey, interactive);
+          sidekickElementMap.set(cleanId, interactive);
+          return interactive;
+        }
+      }
+    }
+
+    // 5. Hint coordinates fallback
+    if (hintCoords && typeof hintCoords.x === "number" && typeof hintCoords.y === "number") {
+      const atPoint = document.elementFromPoint(hintCoords.x, hintCoords.y);
+      if (atPoint && atPoint.isConnected) {
+        const interactive = atPoint.closest("button, a, input, select, [role='button'], [tabindex]") || atPoint;
+        return interactive;
+      }
+    }
+
+    return null;
+  }
+
+  function waitForPageSettled(timeoutMs = 2000) {
+    return new Promise((resolve) => {
+      const startTime = performance.now();
+      let lastMutationTime = performance.now();
+      let timer = null;
+      let checkInterval = null;
+
+      const observer = new MutationObserver(() => {
+        lastMutationTime = performance.now();
+      });
+
+      try {
+        observer.observe(document.body || document.documentElement, {
+          childList: true,
+          subtree: true,
+          attributes: true
+        });
+      } catch {}
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        if (checkInterval) clearInterval(checkInterval);
+        try { observer.disconnect(); } catch {}
+      };
+
+      timer = setTimeout(() => {
+        cleanup();
+        resolve({ settled: true, reason: "timeout", elapsedMs: Math.round(performance.now() - startTime) });
+      }, timeoutMs);
+
+      checkInterval = setInterval(() => {
+        const now = performance.now();
+        if (now - lastMutationTime >= 120) {
+          cleanup();
+          resolve({ settled: true, reason: "dom_quiescent", elapsedMs: Math.round(now - startTime) });
+        }
+      }, 35);
+    });
+  }
 
   function walkAllNodes(rootNode, callback) {
     if (!rootNode) return;
@@ -757,6 +934,7 @@
 
   function stripAndExtractDOM() {
     sidekickElementMap.clear();
+    sidekickFingerprints.clear();
     const interactiveList = [];
     const tagCounts = {};
 
@@ -823,6 +1001,30 @@
       ).trim().replace(/\s+/g, " ").slice(0, 80);
 
       const rect = el.__sidekick_assoc_rect__ || el.getBoundingClientRect();
+      const cx = Math.round(rect.left + rect.width / 2);
+      const cy = Math.round(rect.top + rect.height / 2);
+      const cw = Math.round(rect.width);
+      const ch = Math.round(rect.height);
+
+      const selectorPath = getUniqueSelectorPath(el);
+      const fp = {
+        id: tagId,
+        cleanId,
+        tag: el.tagName.toLowerCase(),
+        type: el.type || "",
+        role: el.getAttribute("role") || el.tagName.toLowerCase(),
+        normalizedText: label.toLowerCase(),
+        selectorPath,
+        relativeCoords: {
+          xPct: Math.round((cx / viewportW) * 1000) / 1000,
+          yPct: Math.round((cy / viewportH) * 1000) / 1000,
+          w: cw,
+          h: ch
+        }
+      };
+      sidekickFingerprints.set(cleanId, fp);
+      sidekickFingerprints.set(tagId, fp);
+
       let selectOptions = null;
       let selectSelectedText = "";
       if (el.tagName.toLowerCase() === "select" && el.options) {
@@ -836,11 +1038,6 @@
 
       const inActiveModal = activeModal ? (activeModal.contains(el) || el === activeModal) : false;
       const isBehindModal = activeModal ? !inActiveModal : false;
-
-      const cx = Math.round(rect.left + rect.width / 2);
-      const cy = Math.round(rect.top + rect.height / 2);
-      const cw = Math.round(rect.width);
-      const ch = Math.round(rect.height);
       const spatialAnchor = computeSpatialAnchor(cx, cy, cw, ch);
 
       interactiveList.push({
@@ -945,33 +1142,7 @@
       return { success: false, error: "Missing element identifier." };
     }
 
-    let cleanId = String(targetId).trim();
-    let normalizedKey = cleanId;
-    if (!cleanId.startsWith("[") && cleanId.includes("_")) {
-      normalizedKey = `[${cleanId}]`;
-    }
-
-    let el = sidekickElementMap.get(normalizedKey) || sidekickElementMap.get(cleanId);
-
-    if (!el) {
-      const rawId = cleanId.replace(/^\[/, "").replace(/\]$/, "");
-      el = document.querySelector(`[data-sidekick-id="${CSS.escape(rawId)}"]`);
-    }
-
-    if (!el && (cleanId.startsWith("#") || cleanId.startsWith("."))) {
-      try {
-        el = document.querySelector(cleanId);
-      } catch {}
-    }
-
-    if (!el) {
-      const rawId = cleanId.replace(/^\[/, "").replace(/\]$/, "");
-      walkAllNodes(document.body || document.documentElement, (node) => {
-        if (!el && node.getAttribute && node.getAttribute("data-sidekick-id") === rawId) {
-          el = node;
-        }
-      });
-    }
+    let el = resolveTargetElement(targetId);
 
     if (!el) {
       return { success: false, error: `Target element '${targetId}' was not found in the DOM.` };
@@ -2054,22 +2225,8 @@
     }
     if (selector) {
       try {
-        let matched = null;
-        try { matched = document.querySelectorAll(selector); } catch {}
-        if (!matched || matched.length === 0) {
-          const cleanId = String(selector).replace(/^\[|\]$/g, "");
-          const elFromMap = sidekickElementMap.get(`[${cleanId}]`) || sidekickElementMap.get(cleanId);
-          if (elFromMap && elFromMap.isConnected) {
-            matched = [elFromMap];
-          } else {
-            matched = document.querySelectorAll(`[data-sidekick-id="${CSS.escape(cleanId)}"]`);
-          }
-        }
-        if (matched.length > 1) {
-          return { x: fallbackX, y: fallbackY, verified: false, ambiguous: true, reason: `Target selector matched ${matched.length} elements (ambiguous target)` };
-        }
-        const el = matched[0];
-        if (!el.isConnected) {
+        const el = resolveTargetElement(selector, { x: fallbackX, y: fallbackY });
+        if (!el || !el.isConnected) {
           return { x: fallbackX, y: fallbackY, verified: false, stale: true, reason: "Target element is disconnected from active document (stale reference)" };
         }
         if (isPaymentWidgetOrSensitiveField(el)) {
@@ -2385,30 +2542,12 @@
    */
   function executeDOMFallback(cdpAction, params) {
     params = params || {};
-    let targetEl = null;
-    if (params.selector) {
+    let targetEl = resolveTargetElement(params.selector || params.targetId, { x: params.x, y: params.y });
+    if (!targetEl && params.selector) {
       try {
         let matched = Array.from(document.querySelectorAll(params.selector));
-        if (matched.length > 1 && (params.element_description || params.label)) {
-          const descClean = (params.element_description || params.label || "").toLowerCase().trim();
-          const filtered = matched.filter((m) => {
-            const txt = (m.innerText || m.textContent || m.getAttribute("aria-label") || m.value || "").toLowerCase().trim();
-            return txt === descClean || txt.includes(descClean) || descClean.includes(txt);
-          });
-          if (filtered.length === 1) {
-            matched = filtered;
-          }
-        }
-        if (matched.length === 0) {
-          throw new Error(`Target element not found in active DOM for selector: "${params.selector}"`);
-        }
-        if (matched.length > 1) {
-          throw new Error(`Ambiguous target: Selector "${params.selector}" matched ${matched.length} elements. Specific group or label required.`);
-        }
-        targetEl = matched[0];
-      } catch (err) {
-        throw err;
-      }
+        if (matched.length > 0) targetEl = matched[0];
+      } catch {}
     }
     if (!targetEl && params.x !== undefined && params.y !== undefined && !isNaN(params.x) && !isNaN(params.y)) {
       targetEl = document.elementFromPoint(params.x, params.y);
@@ -2436,6 +2575,9 @@
         const preCheckedAssocInp = assocInp && assocInp.type === "checkbox" ? assocInp.checked : null;
         const preAriaChecked = targetEl.getAttribute("aria-checked");
 
+        try { targetEl.dispatchEvent(new PointerEvent("pointerover", evtInit)); } catch {}
+        try { targetEl.dispatchEvent(new PointerEvent("pointerenter", evtInit)); } catch {}
+        try { targetEl.dispatchEvent(new MouseEvent("mouseover", evtInit)); } catch {}
         try { targetEl.dispatchEvent(new PointerEvent("pointerdown", evtInit)); } catch {}
         try { targetEl.dispatchEvent(new MouseEvent("mousedown", evtInit)); } catch {}
         if (typeof targetEl.focus === "function") targetEl.focus();

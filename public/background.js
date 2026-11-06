@@ -830,6 +830,19 @@ class AutonomousAgentEngine {
     broadcastToSidepanel({ type: "AGENT_STATE_UPDATED", state: this.state });
   }
 
+  async restoreStateFromSession() {
+    try {
+      const res = await chrome.storage.session.get("sidekickAgentState");
+      if (res && res.sidekickAgentState && this.state.status === "IDLE") {
+        this.state = {
+          ...this.state,
+          ...res.sidekickAgentState
+        };
+        console.log("[AutonomousAgentEngine] Successfully restored durable agent state from session storage:", this.state.status);
+      }
+    } catch {}
+  }
+
   async start(prompt) {
     if (this.state.status === "RUNNING") {
       this.stop("Starting new task");
@@ -1447,6 +1460,7 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
 }
 
 const activeAgentEngine = new AutonomousAgentEngine();
+activeAgentEngine.restoreStateFromSession();
 
 // ============================================================================
 // 7. MESSAGE ROUTING DISPATCHER
@@ -1477,7 +1491,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "GET_AGENT_STATE") {
-    sendResponse({ success: true, state: activeAgentEngine.state });
+    chrome.storage.session.get("sidekickAgentState").then((res) => {
+      const state = (res && res.sidekickAgentState) || activeAgentEngine.state;
+      sendResponse({ success: true, state });
+    }).catch(() => {
+      sendResponse({ success: true, state: activeAgentEngine.state });
+    });
+    return true;
+  }
+
+  if (message.type === "WAIT_FOR_PAGE_SETTLED") {
+    const targetTabId = message.tabId || activeAgentEngine.tabId;
+    if (targetTabId) {
+      chrome.tabs.sendMessage(targetTabId, { action: "WAIT_FOR_PAGE_SETTLED", timeoutMs: message.timeoutMs }, (res) => {
+        sendResponse(res || { success: true, settled: true });
+      });
+      return true;
+    }
+    sendResponse({ success: true, settled: true });
     return false;
   }
 

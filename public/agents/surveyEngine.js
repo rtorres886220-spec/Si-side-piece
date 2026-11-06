@@ -60,19 +60,25 @@
     /(?:please\s+select|select|choose|click|mark)\s+['"]?([^'"]+?)['"]?\s+(?:to\s+(?:show|prove|confirm|demonstrate|verify)\s+(?:you\s+are|that\s+you\s+are)\s+(?:reading|paying\s+attention|human|not\s+a\s+robot|a\s+real\s+person))/i,
     /(?:for\s+quality\s+(?:control|assurance)|to\s+ensure\s+quality|for\s+verification)[,\s]+(?:please\s+)?(?:select|choose|click|mark)\s+['"]?([^'"]+?)['"]?/i,
     /(?:to\s+(?:show|prove|confirm|demonstrate|verify)\s+(?:you\s+are|that\s+you\s+are)\s+(?:reading|paying\s+attention|human))[,\s]+(?:please\s+)?(?:select|choose|click|mark)\s+['"]?([^'"]+?)['"]?/i,
-    /(?:this\s+is\s+an?\s+attention\s+(?:check|filter))[,\s]+(?:please\s+)?(?:select|choose|click|mark)\s+['"]?([^'"]+?)['"]?/i,
+    /(?:this\s+is\s+an?\s+attention\s+(?:check|filter|trap))[,\s]+(?:please\s+)?(?:select|choose|click|mark)\s+['"]?([^'"]+?)['"]?/i,
+    /(?:as\s+an?\s+attention\s+check)[,\s]+(?:please\s+)?(?:select|choose|click|mark)\s+['"]?([^'"]+?)['"]?/i,
+    /(?:select|choose|click|mark)\s+['"]?([^'"]+?)['"]?\s+(?:as\s+(?:your\s+)?answer\s+to\s+this\s+question)/i,
+    /(?:ignore\s+this\s+question\s+and\s+(?:select|choose|click|mark))\s+['"]?([^'"]+?)['"]?/i,
     /(?:select|choose|click|mark)\s+(?:the\s+)?(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|last)\s+(?:option|choice|button|radio|checkbox)/i,
     /(?:please\s+)?(?:do\s+not|don't)\s+(?:select|choose|check|click)\s+(?:any|any\s+of\s+the)\s+(?:options?|choices?|answers?)/i,
     /(?:leave|keep)\s+(?:this\s+question|all\s+options)\s+(?:blank|empty|unselected)/i,
     /(?:type|enter)\s+(?:the\s+word|the\s+phrase|the\s+letters?)\s+['"]?([a-zA-Z0-9_-]+)['"]?/i,
+    /(?:enter|type)\s+(?:the\s+number)\s+['"]?([0-9]+)['"]?/i,
+    /(?:rate\s+this\s+item\s+as\s+['"]?([^'"]+?)['"]?\s+to\s+demonstrate)/i
   ];
 
   // Foil / Impossible answer options (fictional brands, impossible activities) injected to disqualify automated bots
   const FOIL_ITEM_PATTERNS = [
     /\b(?:time\s*travel(?:ed)?|teleport(?:ed)?|traveled?\s+to\s+(?:mars|pluto|moon|space|venus|jupiter|saturn))\b/i,
-    /\b(?:own(?:ed)?\s+a\s+(?:dinosaur|unicorn|extraterrestrial|nuclear\s+submarine))\b/i,
-    /\b(?:purchased?\s+(?:a\s+space\s*shuttle|a\s+stealth\s+bomber|an\s+aircraft\s+carrier))\b/i,
-    /\b(?:fakebrand|fictionalbrand|bogusbrand|fictitious\s+brand)\b/i
+    /\b(?:own(?:ed)?\s+a\s+(?:dinosaur|unicorn|extraterrestrial|nuclear\s+submarine|alien))\b/i,
+    /\b(?:purchased?\s+(?:a\s+space\s*shuttle|a\s+stealth\s+bomber|an\s+aircraft\s+carrier|a\s+flying\s+car))\b/i,
+    /\b(?:fakebrand|fictionalbrand|bogusbrand|fictitious\s+brand|madeupbrand)\b/i,
+    /\b(?:perpetual\s+motion|anti-gravity\s+device|invisibility\s+cloak)\b/i
   ];
 
   // Unified, Non-Contradictory Persona Profile for Survey Junkie & Partner Routers
@@ -129,7 +135,7 @@
       this.userPreferences = options.userPreferences || {};
       this.historySignatures = [];
       this.executionRecord = [];
-      this.consequentialSubmitConfirmed = options.allowAutoSubmit !== undefined ? Boolean(options.allowAutoSubmit) : true;
+      this.consequentialSubmitConfirmed = options.allowAutoSubmit === true;
       this.hasSubmitted = false;
       this.unresolvedQuestions = new Set();
       this.recentMatrixChoices = [];
@@ -1868,6 +1874,10 @@
         signal = null,
         maxSteps = 100,
       } = callbacks;
+
+      if (callbacks.allowAutoSubmit !== undefined) {
+        this.consequentialSubmitConfirmed = Boolean(callbacks.allowAutoSubmit);
+      }
 
       let loopCount = 0;
 

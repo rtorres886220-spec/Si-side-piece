@@ -412,9 +412,21 @@
         }
 
         if (workerPayload.action === "none") {
+          // Zero-Stall Exploration: Auto-scroll viewport to discover off-screen elements before giving up
+          if ((cognitiveLedger.scrollExplorations || 0) < 3) {
+            cognitiveLedger.scrollExplorations = (cognitiveLedger.scrollExplorations || 0) + 1;
+            onProgress(`No actionable target visible in current viewport. Scrolling down to discover elements (${cognitiveLedger.scrollExplorations}/3)…`, "Viewport Explorer", 2);
+            onVerificationUpdate(`[Exploration] Scrolling viewport down to discover off-screen interactive controls.`);
+            if (executeAction) {
+              await executeAction("scroll", { action: "scroll", direction: "down", distance: 500 });
+            }
+            await new Promise((r) => setTimeout(r, 450));
+            pageContext = await getPageContextFn();
+            continue;
+          }
           controllerState = "STALLED";
           cognitiveLedger.state = "STALLED";
-          const reason = workerPayload.explanation || "No actionable element found in current viewport.";
+          const reason = workerPayload.explanation || "No actionable element found after active viewport exploration.";
           onVerificationUpdate(`Action paused: ${reason}`);
           return {
             type: "action_stalled",
@@ -460,8 +472,19 @@
               reason: "Action invariants successfully repaired by Critic."
             };
           } else {
-            onVerificationUpdate(`Action repair failed: ${gateResult.reason}`);
-            break;
+            consecutiveFailures++;
+            onVerificationUpdate(`Critic repair failed: ${gateResult.reason}. Retrying with updated diagnostic feedback…`);
+            cognitiveLedger.domDelta = `Action failed safety gate: ${gateResult.reason}. Select an alternative visible target or scroll.`;
+            if (consecutiveFailures < safetyBudget.maxConsecutiveFailures) {
+              if (executeAction) {
+                await executeAction("scroll", { action: "scroll", direction: "down", distance: 350 });
+              }
+              await new Promise((r) => setTimeout(r, 400));
+              pageContext = await getPageContextFn();
+              continue;
+            } else {
+              break;
+            }
           }
         }
 
@@ -487,6 +510,7 @@
           consecutiveFailures++;
         } else {
           consecutiveFailures = 0;
+          cognitiveLedger.scrollExplorations = 0;
         }
 
         // Record into compact action log
@@ -504,7 +528,12 @@
 
         // Verification pause for live DOM mutation / network responses
         controllerState = "WAITING_FOR_PAGE";
-        await new Promise((r) => setTimeout(r, postActionDelay));
+        if (callbacks.waitForSettledFn) {
+          try {
+            await callbacks.waitForSettledFn();
+          } catch {}
+        }
+        await new Promise((r) => setTimeout(r, Math.max(300, postActionDelay)));
         if (signal?.aborted) {
           controllerState = "STOPPED_BY_USER";
           break;

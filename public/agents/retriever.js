@@ -102,16 +102,18 @@
           }
         }
       } else {
-        // FALLBACK: Use full page text across all sections within char budget
+        // BOUNDED FALLBACK: Never dump whole unranked document into prompt. Select top 3 sections capped at 1,200 chars each.
         usedFallback = true;
-        for (const sec of sections) {
-          retrievedChunks.push(`[Section: ${sec.heading}]\n${sec.fullText}`);
+        const candidateSections = sections.slice(0, 3);
+        for (const sec of candidateSections) {
+          retrievedChunks.push(`[Section: ${sec.heading}]\n${sec.fullText.slice(0, 1200)}`);
         }
       }
 
       let combined = retrievedChunks.join("\n\n");
-      if (combined.length > maxChars) {
-        combined = combined.slice(0, maxChars) + "\n\n[... Remaining page text truncated to stay within budget]";
+      const boundedMaxChars = Math.min(maxChars, 4000);
+      if (combined.length > boundedMaxChars) {
+        combined = combined.slice(0, boundedMaxChars) + "\n\n[... Remaining page text truncated to stay within budget]";
       }
 
       return {

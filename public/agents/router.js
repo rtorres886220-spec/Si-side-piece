@@ -91,7 +91,7 @@ USER PROMPT: "${promptText}"`;
         systemInstruction: { parts: [{ text: systemInstruction }] },
         contents: [{ role: "user", parts: [{ text: userContent }] }],
         generationConfig: {
-          temperature: 0.5,
+          temperature: 0.0,
           responseMimeType: "application/json",
           thinkingConfig: {
             thinkingLevel,
