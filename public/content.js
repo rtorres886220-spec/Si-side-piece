@@ -568,6 +568,13 @@
     if (!label && el.previousElementSibling && (el.previousElementSibling.tagName || "").toLowerCase() === "label") {
       label = el.previousElementSibling;
     }
+    if (!label && typeof el.closest === "function") {
+      const card = el.closest("[role='radio'], [role='checkbox'], [role='option'], .custom-control, .card, [class*='option'], [class*='choice'], [class*='answer'], li");
+      if (card) {
+        const cr = card.getBoundingClientRect();
+        if (cr.width > 0 && cr.height > 0) label = card;
+      }
+    }
     return label;
   }
 
@@ -1370,6 +1377,7 @@
         const isHit = topEl === targetElForClick || topEl === el ||
                       targetElForClick.contains(topEl) || topEl.contains(targetElForClick) ||
                       el.contains(topEl) || topEl.contains(el) ||
+                      topEl.tagName === "IFRAME" ||
                       (targetElForClick.closest && topEl.closest &&
                        targetElForClick.closest("button, a, label, [role='button'], [role='tab'], li, [role='option'], .card") ===
                        topEl.closest("button, a, label, [role='button'], [role='tab'], li, [role='option'], .card"));
@@ -2435,11 +2443,17 @@
           return { x: fallbackX, y: fallbackY, verified: false, blocked: true, reason: "Payment widget lockout" };
         }
 
-        // Scroll element into view smoothly and securely
-        if (typeof el.scrollIntoView === "function") {
-          try {
-            el.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
-          } catch {}
+        // Only scroll into view if target is outside visible viewport
+        // and NOT inside an active open dropdown/listbox/combobox/select
+        const isInsideOpenMenu = Boolean(el.closest && el.closest("[role='listbox'], [role='menu'], [role='combobox'], select, .dropdown-menu, [aria-expanded='true']"));
+        if (!isInsideOpenMenu) {
+          const preRect = el.getBoundingClientRect();
+          const isOffscreen = preRect.bottom < 0 || preRect.top > (window.innerHeight || 800) || preRect.right < 0 || preRect.left > (window.innerWidth || 1280);
+          if (isOffscreen && typeof el.scrollIntoView === "function") {
+            try {
+              el.scrollIntoView({ behavior: "instant", block: "center", inline: "center" });
+            } catch {}
+          }
         }
 
         const style = window.getComputedStyle(el);
@@ -2450,7 +2464,7 @@
         let rect = el.getBoundingClientRect();
         let targetElForCoords = el;
 
-        // If target is offscreen, zero-dimension, pointer-events none, or opacity:0 input, locate its associated label
+        // If target is offscreen, zero-dimension, pointer-events none, or opacity:0 input, locate its associated label or card container
         const isOffscreenOrStyledInput = rect.width <= 0 || rect.height <= 0 || style.opacity === "0" ||
           style.pointerEvents === "none" || rect.left < 0 || rect.top < 0 || rect.bottom <= 0;
 
@@ -2460,7 +2474,7 @@
             try { assocLabel = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); } catch {}
           }
           if (!assocLabel && typeof el.closest === "function") {
-            assocLabel = el.closest("label");
+            assocLabel = el.closest("label, [role='radio'], [role='checkbox'], [role='option'], .custom-control, .card, [class*='option'], [class*='choice'], [class*='answer'], li");
           }
           if (!assocLabel && el.parentElement) {
             assocLabel = el.parentElement.querySelector("label");
@@ -2502,6 +2516,7 @@
             let isHit = topEl === targetElForCoords || topEl === el ||
                         targetElForCoords.contains(topEl) || topEl.contains(targetElForCoords) ||
                         el.contains(topEl) || topEl.contains(el) ||
+                        topEl.tagName === "IFRAME" ||
                         (targetElForCoords.closest && topEl.closest &&
                          targetElForCoords.closest("button, a, label, [role='button'], [role='tab'], li, [role='option'], .card") ===
                          topEl.closest("button, a, label, [role='button'], [role='tab'], li, [role='option'], .card"));
@@ -2796,7 +2811,7 @@
         if (isPaymentWidgetOrSensitiveField(targetEl)) {
           throw new Error("Security Exception: Interaction with checkout or payment widget is blocked.");
         }
-        targetEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        targetEl.scrollIntoView({ behavior: "instant", block: "center" });
         if (typeof targetEl.focus === "function") targetEl.focus();
 
         // Dispatch full trusted event sequence (pointerdown, mousedown, focus, pointerup, mouseup, click)

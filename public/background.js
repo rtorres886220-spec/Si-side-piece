@@ -26,9 +26,11 @@ if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
 
 const KEEP_ALIVE_ALARM = "sidekick-keep-alive-alarm";
 
-// Register periodic keep-alive alarm
-chrome.alarms.get(KEEP_ALARM => {
-  chrome.alarms.create(KEEP_ALIVE_ALARM, { periodInMinutes: 0.4 });
+// Register periodic keep-alive alarm (MV3 compliant)
+chrome.alarms.get(KEEP_ALIVE_ALARM, (alarm) => {
+  if (!alarm) {
+    chrome.alarms.create(KEEP_ALIVE_ALARM, { periodInMinutes: 1.0 });
+  }
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -675,8 +677,10 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
 }
 
 async function dispatchDOMFallback(tabId, action, params) {
+  const frameId = params?.frameId || 0;
+  const sendOptions = frameId !== 0 ? { frameId } : {};
   return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, { action: "executeDOMAction", cdpAction: action, params }, (res) => {
+    chrome.tabs.sendMessage(tabId, { action: "executeDOMAction", cdpAction: action, params }, sendOptions, (res) => {
       const err = chrome.runtime.lastError;
       if (err) reject(new Error(err.message));
       else if (!res || !res.success) reject(new Error(res?.error || "DOM fallback failed"));
@@ -970,6 +974,7 @@ class AutonomousAgentEngine {
     this.abortController = new AbortController();
     this.frameElementRegistry.clear();
     this.actionHistory = [];
+    this.lastActionFailure = null;
     startLoopKeepAlive();
 
     // Determine target tab and automatically group into "Si" (ice white / silver)
@@ -1114,10 +1119,18 @@ ACTION: <single command from allowed actions>`;
           ? this.actionHistory.slice(-4).map(h => `Step ${h.step}: ${h.actionType} on ${h.targetId} -> Outcome: ${h.outcome}`).join("\n")
           : "None (Initial step)";
 
+        let failureFeedbackStr = "";
+        if (this.lastActionFailure) {
+          failureFeedbackStr = `\nCRITICAL - PREVIOUS ACTION FAILURE FEEDBACK:
+[!] Your previous action in Step ${this.lastActionFailure.step} (${this.lastActionFailure.actionType} on ${this.lastActionFailure.targetId}) FAILED.
+REASON: ${this.lastActionFailure.reason}
+MANDATORY DIRECTIVE: Do NOT repeat the exact same action. If an overlay or modal dialog is blocking the page, identify the button inside the modal (e.g. "Accept", "Close", "Continue", "Ok") and click it. If the target element was missing or unclickable, choose a different element or SCROLL.\n`;
+        }
+
         const userPrompt = `USER OBJECTIVE: ${this.state.objective}
 CURRENT STEP: ${this.state.currentStep} of ${this.state.maxSteps}
 PAGE TITLE: ${domData?.title || "Untitled"}
-PAGE URL: ${domData?.url || ""}
+PAGE URL: ${domData?.url || ""}${failureFeedbackStr}
 ${domData?.hasActiveModal ? "NOTICE: Active modal dialog layer detected in DOM! Prioritize front modal controls.\n" : ""}
 RECENT ACTION HISTORY & OUTCOMES:
 ${recentHistoryStr}
@@ -1161,10 +1174,57 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
         this.addLog("thought", parsed.thought || "Decision reached");
 
         // Step 6: Execute the decided Action
+        if (parsed.actionType === "UNKNOWN") {
+          this.addLog("warn", "Model output did not match a standard ACTION: format. Attempting recovery...");
+          const rawUnbolded = responseText.replace(/\*\*/g, "");
+          const matchClick = rawUnbolded.match(/CLICK\s*(\[[a-zA-Z0-9_\-]+\])/i);
+          const matchType = rawUnbolded.match(/TYPE\s*(\[[a-zA-Z0-9_\-]+\])\s*["']([^"']+)["']/i);
+          const matchSelect = rawUnbolded.match(/SELECT\s*(\[[a-zA-Z0-9_\-]+\])\s*["']([^"']+)["']/i);
+          const matchScroll = rawUnbolded.match(/SCROLL\s*(down|up)/i);
+          const matchNav = rawUnbolded.match(/NAVIGATE\s*(https?:\/\/[^\s\n"']+)/i);
+          const matchFinish = rawUnbolded.match(/FINISH\s*["']([^"']+)["']/i);
+
+          if (matchClick) {
+            parsed.actionType = "CLICK";
+            parsed.targetId = matchClick[1];
+          } else if (matchType) {
+            parsed.actionType = "TYPE";
+            parsed.targetId = matchType[1];
+            parsed.textToType = matchType[2];
+            parsed.pressEnter = /\[ENTER\]/i.test(rawUnbolded) || /ENTER/i.test(rawUnbolded);
+          } else if (matchSelect) {
+            parsed.actionType = "SELECT";
+            parsed.targetId = matchSelect[1];
+            parsed.actionArg = matchSelect[2];
+          } else if (matchScroll) {
+            parsed.actionType = "SCROLL";
+            parsed.actionArg = matchScroll[1];
+          } else if (matchNav) {
+            parsed.actionType = "NAVIGATE";
+            parsed.actionArg = matchNav[1];
+          } else if (matchFinish && this.state.currentStep > 1) {
+            parsed.actionType = "FINISH";
+            parsed.actionArg = matchFinish[1];
+          } else {
+            this.lastActionFailure = {
+              step: this.state.currentStep,
+              actionType: "UNKNOWN_COMMAND",
+              targetId: "NONE",
+              reason: "Your output was missing an ACTION command. You MUST include a line in the format: 'ACTION: CLICK [tag_id]' or 'ACTION: TYPE [tag_id] \"text\"' or 'ACTION: SCROLL down' or 'ACTION: FINISH \"summary\"'."
+            };
+            this.addLog("warn", `Could not parse valid action. Retrying step with strict formatting instruction...`);
+            this.state.currentStep++;
+            await this.persistState();
+            await delay(250);
+            continue;
+          }
+        }
+
         if (parsed.actionType === "FINISH") {
           this.state.status = "COMPLETED";
           this.state.resultSummary = parsed.actionArg || "Task objective completed successfully.";
           this.addLog("success", `Completed: ${this.state.resultSummary}`);
+          this.lastActionFailure = null;
           await this.persistState();
           break;
         }
@@ -1174,11 +1234,13 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
           await executeCDPActionOnTab(this.tabId, "navigate", { url: parsed.actionArg });
           await this.waitForNavigation(this.tabId);
           this.recordActionOutcome("NAVIGATE", parsed.actionArg, "PAGE_NAVIGATED");
+          this.lastActionFailure = null;
         } else if (parsed.actionType === "SCROLL") {
           const deltaY = parsed.actionArg.toLowerCase().includes("up") ? -500 : 500;
           this.addLog("action", `Scrolling page (${deltaY > 0 ? "down" : "up"})`);
           await executeCDPActionOnTab(this.tabId, "scroll", { deltaY });
           this.recordActionOutcome("SCROLL", parsed.actionArg, "VIEWPORT_SCROLLED");
+          this.lastActionFailure = null;
           await delay(200);
         } else if (parsed.actionType === "SELECT") {
           const targetId = parsed.targetId;
@@ -1191,14 +1253,22 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
             });
             this.addLog("success", `Selected option "${optVal}" on ${targetId}`);
             this.recordActionOutcome("SELECT", targetId, `SELECTED_${optVal}`);
+            this.lastActionFailure = null;
           } catch (selErr) {
             this.addLog("warn", `Direct select option error (${selErr.message}), falling back to coordinate click`);
             const coords = await this.resolveTargetCoordinates(targetId);
             if (coords?.success) {
-              await executeCDPActionOnTab(this.tabId, "click", { x: coords.x, y: coords.y });
+              await executeCDPActionOnTab(this.tabId, "click", { x: coords.x, y: coords.y, frameId: coords.frameId || 0 });
               this.recordActionOutcome("SELECT", targetId, "CLICK_FALLBACK");
+              this.lastActionFailure = null;
             } else {
               this.recordActionOutcome("SELECT", targetId, "FAILED");
+              this.lastActionFailure = {
+                step: this.state.currentStep,
+                actionType: "SELECT",
+                targetId,
+                reason: `Failed to select option on ${targetId}: ${selErr.message}`
+              };
             }
           }
           await delay(180);
@@ -1214,6 +1284,7 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
                 value: parsed.actionArg || ""
               });
               this.recordActionOutcome("SELECT_OPTION", targetId, "DIRECT_OPTION_SELECTED");
+              this.lastActionFailure = null;
               await delay(180);
               this.state.currentStep++;
               await this.persistState();
@@ -1230,9 +1301,21 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
           if (!coords || !coords.success) {
             this.addLog("warn", `Could not resolve coordinates for ${targetId}: ${coords?.error || "Element missing"}`);
             this.recordActionOutcome(parsed.actionType, targetId, `MISSING_COORDINATES_${coords?.error || "NOT_FOUND"}`);
+            this.lastActionFailure = {
+              step: this.state.currentStep,
+              actionType: parsed.actionType,
+              targetId,
+              reason: `Target ${targetId} could not be resolved in the page DOM (${coords?.error || "Element missing or scrolled out of view"}). Choose a visible target from INTERACTIVE ELEMENTS or SCROLL.`
+            };
           } else {
             if (coords.isOccluded) {
               this.addLog("warn", `Target ${targetId} is occluded by ${coords.occludedBy || "overlay"}. Physical click may be intercepted by modal.`);
+              this.lastActionFailure = {
+                step: this.state.currentStep,
+                actionType: parsed.actionType,
+                targetId,
+                reason: `Target ${targetId} is occluded by ${coords.occludedBy || "overlay/modal"}. Dismiss the modal dialog first or click the button inside the modal.`
+              };
             }
 
             // Consequential Action Safety Gate Check
@@ -1251,11 +1334,11 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
             }
 
             if (parsed.actionType === "CLICK") {
-              // Capture pre-state snapshot to verify post-click DOM mutation
+              // Capture pre-state snapshot to verify post-click DOM mutation (with explicit frameId)
               let preState = null;
               try {
                 preState = await new Promise((res) => {
-                  chrome.tabs.sendMessage(this.tabId, { action: "capturePreState", selector: targetId }, (r) => res(r?.state || null));
+                  chrome.tabs.sendMessage(this.tabId, { action: "capturePreState", selector: targetId }, { frameId: coords.frameId || 0 }, (r) => res(r?.state || null));
                 });
               } catch {}
 
@@ -1270,8 +1353,14 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
                 this.addLog("warn", `Target ${targetId} is occluded by ${clickResult.occludedBy || "overlay"}. Physical click prevented.`);
                 this.state.currentThought = `Target is occluded by ${clickResult.occludedBy || "modal backdrop"}. Redirecting attention to dismiss modal...`;
                 this.recordActionOutcome("CLICK", targetId, `OCCLUDED_BY_${clickResult.occludedBy || "OVERLAY"}`);
+                this.lastActionFailure = {
+                  step: this.state.currentStep,
+                  actionType: "CLICK",
+                  targetId,
+                  reason: `Target ${targetId} was occluded by ${clickResult.occludedBy || "modal backdrop"}. Click the button inside the modal dialog to dismiss it first.`
+                };
               } else {
-                // Post-state mutation verification: Did the click actually register?
+                // Post-state mutation verification: Did the click actually register? (with explicit frameId)
                 await delay(200);
                 let postVerification = null;
                 try {
@@ -1282,22 +1371,30 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
                       selector: targetId,
                       preState,
                       expectedPostcondition: null
-                    }, (r) => res(r?.result || null));
+                    }, { frameId: coords.frameId || 0 }, (r) => res(r?.result || null));
                   });
                 } catch {}
 
                 if (postVerification && postVerification.mutated === false) {
                   this.addLog("warn", `CDP click on ${targetId} resulted in 0 DOM mutations. Triggering authentic DOM fallback dispatch...`);
                   try {
-                    await dispatchDOMFallback(this.tabId, "click", { targetId, x: coords.x, y: coords.y });
+                    await dispatchDOMFallback(this.tabId, "click", { targetId, x: coords.x, y: coords.y, frameId: coords.frameId || 0 });
                     this.addLog("info", `DOM fallback click dispatched successfully on ${targetId}.`);
                     this.recordActionOutcome("CLICK", targetId, "DOM_FALLBACK_DISPATCHED");
+                    this.lastActionFailure = null;
                   } catch (domErr) {
                     this.addLog("warn", `DOM fallback notice: ${domErr.message}`);
                     this.recordActionOutcome("CLICK", targetId, "CLICK_NO_MUTATION");
+                    this.lastActionFailure = {
+                      step: this.state.currentStep,
+                      actionType: "CLICK",
+                      targetId,
+                      reason: `Click on ${targetId} produced no state mutations (${domErr.message}). Check if the element is disabled, requires another field filled, or is non-clickable.`
+                    };
                   }
                 } else {
                   this.recordActionOutcome("CLICK", targetId, "SUCCESS_MUTATION_VERIFIED");
+                  this.lastActionFailure = null;
                 }
               }
             } else if (parsed.actionType === "TYPE") {
@@ -1310,6 +1407,7 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
                 frameId: coords.frameId || 0
               });
               this.recordActionOutcome("TYPE", targetId, `TYPED_${(parsed.textToType || "").slice(0, 15)}`);
+              this.lastActionFailure = null;
             }
           }
           await delay(160);
@@ -1387,10 +1485,28 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
       if (subframes.length > 0) {
         let combinedElements = [...(topData.interactiveElements || [])];
         let subframeTexts = [];
+        // Filter out 0x0 or 1x1 tracking pixels from topIframes
+        const visibleTopIframes = topIframes.filter((ifr) => ifr.rect && ifr.rect.width >= 30 && ifr.rect.height >= 30);
 
         for (let i = 0; i < subframes.length; i++) {
           const sf = subframes[i];
-          const matchedIframe = topIframes[i] || topIframes.find((ifr) => ifr.src && sf.url && (sf.url.includes(ifr.src) || ifr.src.includes(sf.url))) || { rect: { left: 0, top: 0, width: 800, height: 600 } };
+          // 1. First try exact URL match
+          let matchedIframe = visibleTopIframes.find((ifr) => ifr.src && sf.url && ifr.src === sf.url);
+          // 2. Next try partial URL / pathname match
+          if (!matchedIframe) {
+            matchedIframe = visibleTopIframes.find((ifr) => ifr.src && sf.url && (sf.url.includes(ifr.src) || ifr.src.includes(sf.url)));
+          }
+          // 3. Next try matching origins if valid
+          if (!matchedIframe && sf.url && sf.url.startsWith("http")) {
+            try {
+              const sfOrigin = new URL(sf.url).origin;
+              matchedIframe = visibleTopIframes.find((ifr) => ifr.src && ifr.src.startsWith("http") && new URL(ifr.src).origin === sfOrigin);
+            } catch {}
+          }
+          // 4. Fallback to visible iframe by matching index or largest visible iframe
+          if (!matchedIframe) {
+            matchedIframe = visibleTopIframes[i] || visibleTopIframes[0] || topIframes[i] || { rect: { left: 0, top: 0, width: 800, height: 600 } };
+          }
           const frameOffset = matchedIframe.rect || { left: 0, top: 0, width: 800, height: 600 };
 
           try {
@@ -1466,7 +1582,11 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
 
   async resolveTargetCoordinates(targetId) {
     const reg = this.frameElementRegistry.get(targetId);
-    const targetFrameId = reg ? reg.frameId : 0;
+    let targetFrameId = reg ? reg.frameId : 0;
+    if (!targetFrameId && targetId) {
+      const fMatch = targetId.match(/^\[f(\d+)_/);
+      if (fMatch) targetFrameId = parseInt(fMatch[1], 10);
+    }
     const sendId = reg ? reg.origId : targetId;
     const sendOptions = targetFrameId !== 0 ? { frameId: targetFrameId } : {};
 
@@ -1485,6 +1605,11 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
                   if (chrome.runtime.lastError) {
                     resolve({ success: false, error: chrome.runtime.lastError.message });
                   } else {
+                    if (retryRes && reg && reg.iframeOffset) {
+                      retryRes.x = Math.round(reg.iframeOffset.left + retryRes.x);
+                      retryRes.y = Math.round(reg.iframeOffset.top + retryRes.y);
+                    }
+                    if (retryRes) retryRes.frameId = targetFrameId;
                     resolve(retryRes || { success: false, error: "No response from re-injected content script" });
                   }
                 });
@@ -1499,8 +1624,8 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
           if (reg && reg.iframeOffset) {
             res.x = Math.round(reg.iframeOffset.left + res.x);
             res.y = Math.round(reg.iframeOffset.top + res.y);
-            res.frameId = targetFrameId;
           }
+          res.frameId = targetFrameId;
           resolve(res);
         }
       });
@@ -1512,22 +1637,35 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
     let visualCheck = "";
     let thought = "";
     let checklist = [];
-    let actionType = "FINISH";
+    let actionType = "UNKNOWN"; // Safe default: NEVER default to FINISH!
     let actionArg = "";
     let targetId = "";
     let textToType = "";
     let pressEnter = false;
 
-    for (const line of lines) {
-      if (line.startsWith("VISUAL_CHECK:")) {
-        visualCheck = line.replace(/^VISUAL_CHECK:\s*/i, "").trim();
-      } else if (line.startsWith("THOUGHT:")) {
-        thought = line.replace(/^THOUGHT:\s*/i, "").trim();
-      } else if (line.startsWith("CHECKLIST:")) {
-        const raw = line.replace(/^CHECKLIST:\s*/i, "").trim();
+    // Helper to extract clean targetId from strings like [button_1], **[button_1]**, etc.
+    const extractTarget = (str) => {
+      const m = str.match(/\[([a-zA-Z0-9_\-]+)\]/);
+      return m ? `[${m[1]}]` : "";
+    };
+
+    for (let rawLine of lines) {
+      if (!rawLine) continue;
+      // Strip leading markdown bullets/numbers/asterisks
+      const strippedLine = rawLine.replace(/^[*_#\s\->\d.]+/g, "").trim();
+      // Remove double asterisks/underscores for tag matching
+      const cleanLine = strippedLine.replace(/\*\*/g, "").replace(/__/g, "").trim();
+
+      if (/^VISUAL_CHECK\s*:/i.test(cleanLine)) {
+        visualCheck = cleanLine.replace(/^VISUAL_CHECK\s*:\s*/i, "").trim();
+      } else if (/^THOUGHT\s*:/i.test(cleanLine)) {
+        thought = cleanLine.replace(/^THOUGHT\s*:\s*/i, "").trim();
+      } else if (/^CHECKLIST\s*:/i.test(cleanLine)) {
+        const raw = cleanLine.replace(/^CHECKLIST\s*:\s*/i, "").trim();
         checklist = raw.split(",").map(c => c.trim()).filter(Boolean);
-      } else if (line.startsWith("ACTION:")) {
-        const rawAction = line.replace(/^ACTION:\s*/i, "").trim();
+      } else if (/^ACTION\s*:/i.test(cleanLine)) {
+        const rawAction = cleanLine.replace(/^ACTION\s*:\s*/i, "").trim();
+
         if (/^FINISH/i.test(rawAction)) {
           actionType = "FINISH";
           actionArg = rawAction.replace(/^FINISH\s*/i, "").replace(/^["']|["']$/g, "").trim();
@@ -1539,21 +1677,56 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
           actionArg = rawAction.replace(/^SCROLL\s*/i, "").trim() || "down";
         } else if (/^SELECT/i.test(rawAction)) {
           actionType = "SELECT";
-          const match = rawAction.match(/\[([a-zA-Z0-9_\-]+)\]/);
-          targetId = match ? match[0] : "";
+          targetId = extractTarget(rawAction);
           const textMatch = rawAction.match(/["'](.*?)["']/);
           actionArg = textMatch ? textMatch[1] : rawAction.replace(/^SELECT\s*(\[[^\]]+\])?/i, "").trim();
         } else if (/^CLICK/i.test(rawAction)) {
           actionType = "CLICK";
-          const match = rawAction.match(/\[([a-zA-Z0-9_\-]+)\]/);
-          targetId = match ? match[0] : rawAction.replace(/^CLICK\s*/i, "").trim();
+          targetId = extractTarget(rawAction) || rawAction.replace(/^CLICK\s*/i, "").trim();
+          if (targetId && !targetId.startsWith("[")) targetId = `[${targetId.replace(/^\[+|\]+$/g, "")}]`;
         } else if (/^TYPE/i.test(rawAction)) {
           actionType = "TYPE";
-          const match = rawAction.match(/\[([a-zA-Z0-9_\-]+)\]/);
-          targetId = match ? match[0] : "";
+          targetId = extractTarget(rawAction);
           const textMatch = rawAction.match(/["'](.*?)["']/);
           textToType = textMatch ? textMatch[1] : "";
-          pressEnter = /\[ENTER\]/i.test(rawAction);
+          pressEnter = /\[ENTER\]/i.test(rawAction) || /ENTER/i.test(rawAction);
+        }
+      }
+    }
+
+    // Secondary fallback: If actionType is still UNKNOWN, scan text for markdown bolded actions
+    if (actionType === "UNKNOWN") {
+      const fullText = text.replace(/\*\*/g, "");
+      const actionMatch = fullText.match(/ACTION\s*:\s*(CLICK|TYPE|SELECT|SCROLL|NAVIGATE|FINISH)\s*(.*?)(?:\n|$)/i);
+      if (actionMatch) {
+        const cmd = actionMatch[1].toUpperCase();
+        const rest = (actionMatch[2] || "").trim();
+        if (cmd === "CLICK") {
+          actionType = "CLICK";
+          const m = rest.match(/\[([a-zA-Z0-9_\-]+)\]/);
+          targetId = m ? `[${m[1]}]` : rest;
+        } else if (cmd === "TYPE") {
+          actionType = "TYPE";
+          const m = rest.match(/\[([a-zA-Z0-9_\-]+)\]/);
+          targetId = m ? `[${m[1]}]` : "";
+          const tm = rest.match(/["'](.*?)["']/);
+          textToType = tm ? tm[1] : "";
+          pressEnter = /\[ENTER\]/i.test(rest) || /ENTER/i.test(rest);
+        } else if (cmd === "SCROLL") {
+          actionType = "SCROLL";
+          actionArg = /up/i.test(rest) ? "up" : "down";
+        } else if (cmd === "SELECT") {
+          actionType = "SELECT";
+          const m = rest.match(/\[([a-zA-Z0-9_\-]+)\]/);
+          targetId = m ? `[${m[1]}]` : "";
+          const tm = rest.match(/["'](.*?)["']/);
+          actionArg = tm ? tm[1] : rest;
+        } else if (cmd === "NAVIGATE") {
+          actionType = "NAVIGATE";
+          actionArg = rest;
+        } else if (cmd === "FINISH") {
+          actionType = "FINISH";
+          actionArg = rest.replace(/^["']|["']$/g, "");
         }
       }
     }

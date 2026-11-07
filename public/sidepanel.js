@@ -316,6 +316,7 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
   let liveTimerInterval = null;
   let cosmosEngineInstance = null;
   let isThrottlingActive = false;
+  let lastHandledTerminalKey = "";
 
   // ==========================================================================
   // 1. KEEP-ALIVE PORT CONNECTION
@@ -445,28 +446,38 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
       }
     }
 
-    // If completed or error, render final message bubble if not already present
+    // If completed or error, render final message bubble or card if not already rendered for this run
     if (state.status === "COMPLETED" && state.resultSummary) {
-      appendAssistantMessage(state.resultSummary, state.currentStep);
-    } else if (state.status === "ERROR" && state.error) {
-      const err = state.error;
-      if (err.includes("CONFIG_ERROR") || err.includes("Gemini API Key")) {
-        appendDiagnosticCard(
-          "Gemini API Key Missing",
-          "Autonomous browsing requires a Google AI Studio Gemini API key to run client-side in the Chrome extension.",
-          "Configure API Key",
-          () => handleDoctorAction("OPEN_SETTINGS_KEY")
-        );
-      } else if (err.includes("SECURITY_RESTRICTION") || err.includes("Security Exception") || err.includes("internal browser pages") || err.includes("Web Store")) {
-        appendDiagnosticCard(
-          "Target Webpage Inaccessible",
-          err,
-          "Open Test Webpage (Wikipedia)",
-          () => handleDoctorAction("OPEN_TEST_PAGE")
-        );
-      } else {
-        appendAssistantMessage(`Error: ${state.error}`, state.currentStep, true);
+      const termKey = `COMPLETED_${state.startTime || 0}_${state.currentStep || 0}`;
+      if (lastHandledTerminalKey !== termKey) {
+        lastHandledTerminalKey = termKey;
+        appendAssistantMessage(state.resultSummary, state.currentStep || 999);
       }
+    } else if (state.status === "ERROR" && state.error) {
+      const termKey = `ERROR_${state.startTime || 0}_${state.currentStep || 0}_${state.error}`;
+      if (lastHandledTerminalKey !== termKey) {
+        lastHandledTerminalKey = termKey;
+        const err = state.error;
+        if (err.includes("CONFIG_ERROR") || err.includes("Gemini API Key")) {
+          appendDiagnosticCard(
+            "Gemini API Key Missing",
+            "Autonomous browsing requires a Google AI Studio Gemini API key to run client-side in the Chrome extension.",
+            "Configure API Key",
+            () => handleDoctorAction("OPEN_SETTINGS_KEY")
+          );
+        } else if (err.includes("SECURITY_RESTRICTION") || err.includes("Security Exception") || err.includes("internal browser pages") || err.includes("Web Store")) {
+          appendDiagnosticCard(
+            "Target Webpage Inaccessible",
+            err,
+            "Open Test Webpage (Wikipedia)",
+            () => handleDoctorAction("OPEN_TEST_PAGE")
+          );
+        } else {
+          appendAssistantMessage(`Error: ${state.error}`, state.currentStep || 999, true);
+        }
+      }
+    } else if (state.status === "RUNNING") {
+      lastHandledTerminalKey = "";
     }
   }
 
@@ -522,7 +533,10 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
 
   function appendDiagnosticCard(title, description, actionText, onActionClick, isWarn = false) {
     if (emptyState) emptyState.classList.add("hidden");
+    const existing = messagesList.querySelector(`[data-diag-title="${escapeHtml(title)}"]`);
+    if (existing) return;
     const card = document.createElement("div");
+    card.setAttribute("data-diag-title", escapeHtml(title));
     card.className = `diagnostic-card ${isWarn ? "warn" : ""}`;
     card.innerHTML = `
       <div class="diagnostic-card-header">

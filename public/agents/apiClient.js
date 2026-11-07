@@ -8,7 +8,7 @@
 (function () {
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
   const PRIMARY_MODEL = "gemini-3.5-flash-lite";
-  const TEMPORARY_FALLBACK_MODEL = "gemini-2.5-flash";
+  const TEMPORARY_FALLBACK_MODEL = "gemini-3.5-flash-lite";
 
   class SidekickApiClient {
     constructor(apiKey, defaultModel = PRIMARY_MODEL, proxyBaseUrl = "") {
