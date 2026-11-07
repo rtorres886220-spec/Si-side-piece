@@ -134,6 +134,7 @@ export async function validateAndPackExtension(options: {
     "apiClient.js",
     "coordinator.js",
     "critic.js",
+    "doctor.js",
     "gate.js",
     "retriever.js",
     "router.js",

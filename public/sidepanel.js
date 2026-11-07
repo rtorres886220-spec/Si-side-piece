@@ -10,6 +10,95 @@
  * 5. Strict MV3 Compliance - Zero eval(), zero new Function()
  */
 
+// Fallback chrome mock for web preview environment
+if (typeof chrome === "undefined" || !chrome.runtime) {
+  const mockStorageStore = new Map();
+  window.chrome = {
+    runtime: {
+      connect: () => ({ onMessage: { addListener: () => {} }, onDisconnect: { addListener: () => {} }, postMessage: () => {} }),
+      onMessage: { addListener: () => {} },
+      sendMessage: (msg, cb) => {
+        if (msg?.type === "START_AGENT_LOOP") {
+          const key = mockStorageStore.get("gemini_sidekick_api_key") || (typeof localStorage !== "undefined" ? localStorage.getItem("gemini_sidekick_api_key") : null);
+          if (!key) {
+            if (cb) cb({
+              success: false,
+              error: "CONFIG_ERROR: No Gemini API Key configured. Please set your API key in System Doctor [🩺] or Settings [⚙].",
+              issue: "MISSING_KEY"
+            });
+            return;
+          }
+        }
+        if (cb) cb({ success: true, state: null });
+      },
+      id: "mock-sidekick-id"
+    },
+    storage: {
+      local: {
+        get: (keys, cb) => {
+          const res = {};
+          const keyList = Array.isArray(keys) ? keys : (typeof keys === "string" ? [keys] : Object.keys(keys || {}));
+          keyList.forEach((k) => { res[k] = mockStorageStore.get(k) || (typeof localStorage !== "undefined" ? localStorage.getItem(k) : null); });
+          if (cb) cb(res);
+          return Promise.resolve(res);
+        },
+        set: (items, cb) => {
+          Object.entries(items || {}).forEach(([k, v]) => {
+            mockStorageStore.set(k, v);
+            if (typeof localStorage !== "undefined") localStorage.setItem(k, String(v));
+          });
+          if (cb) cb();
+          return Promise.resolve();
+        },
+        remove: (keys, cb) => {
+          (Array.isArray(keys) ? keys : [keys]).forEach((k) => {
+            mockStorageStore.delete(k);
+            if (typeof localStorage !== "undefined") localStorage.removeItem(k);
+          });
+          if (cb) cb();
+          return Promise.resolve();
+        }
+      },
+      session: {
+        get: (_k, cb) => { if (cb) cb({}); return Promise.resolve({}); },
+        set: (_items, cb) => { if (cb) cb(); return Promise.resolve(); },
+        onChanged: { addListener: () => {} }
+      }
+    },
+    tabs: {
+      query: (_q, cb) => {
+        const dummyTab = [{ id: 1, title: "Google", url: "https://www.google.com" }];
+        if (cb) cb(dummyTab);
+        return Promise.resolve(dummyTab);
+      },
+      create: (opts, cb) => {
+        const tab = { id: 2, title: "New Tab", url: opts.url || "about:blank" };
+        if (cb) cb(tab);
+        return Promise.resolve(tab);
+      },
+      update: (_id, _opts, cb) => { if (cb) cb({}); return Promise.resolve({}); },
+      sendMessage: (_tabId, msg, _opts, cb) => {
+        const callback = typeof _opts === "function" ? _opts : cb;
+        if (msg?.action === "PING") {
+          if (callback) callback({ status: "PONG", version: "1.1.3" });
+        } else if (callback) {
+          callback({ success: true });
+        }
+        return Promise.resolve({ status: "PONG" });
+      },
+      onActivated: { addListener: () => {} },
+      onUpdated: { addListener: () => {} }
+    },
+    scripting: {
+      executeScript: () => Promise.resolve([])
+    },
+    debugger: {
+      attach: (_t, _v, cb) => { if (cb) cb(); },
+      detach: (_t, cb) => { if (cb) cb(); }
+    }
+  };
+}
+
 // Storage Keys
 const STORAGE_KEY_API_KEY = "gemini_sidekick_api_key";
 const STORAGE_KEY_MODEL = "gemini_sidekick_model";
@@ -200,6 +289,28 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
   // Toast
   const toastNotification = document.getElementById("toastNotification");
 
+  // Preflight Banner & Doctor Elements
+  const preflightAlertBanner = document.getElementById("preflightAlertBanner");
+  const preflightBannerText = document.getElementById("preflightBannerText");
+  const preflightActionBtn = document.getElementById("preflightActionBtn");
+  const preflightDoctorBtn = document.getElementById("preflightDoctorBtn");
+
+  const doctorBtn = document.getElementById("doctorBtn");
+  const doctorBadgeDot = document.getElementById("doctorBadgeDot");
+  const doctorDrawer = document.getElementById("doctorDrawer");
+  const closeDoctorBtn = document.getElementById("closeDoctorBtn");
+  const doctorOverallBadge = document.getElementById("doctorOverallBadge");
+  const doctorSummaryHeadline = document.getElementById("doctorSummaryHeadline");
+  const doctorSummarySub = document.getElementById("doctorSummarySub");
+  const doctorChecksList = document.getElementById("doctorChecksList");
+  const doctorAutoFixBtn = document.getElementById("doctorAutoFixBtn");
+  const doctorRunTestBtn = document.getElementById("doctorRunTestBtn");
+  const doctorQuickKeySection = document.getElementById("doctorQuickKeySection");
+  const doctorKeyInput = document.getElementById("doctorKeyInput");
+  const doctorSaveKeyBtn = document.getElementById("doctorSaveKeyBtn");
+
+  let activePreflightReport = null;
+
   // Local State
   let currentAgentState = null;
   let liveTimerInterval = null;
@@ -338,7 +449,24 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
     if (state.status === "COMPLETED" && state.resultSummary) {
       appendAssistantMessage(state.resultSummary, state.currentStep);
     } else if (state.status === "ERROR" && state.error) {
-      appendAssistantMessage(`Error: ${state.error}`, state.currentStep, true);
+      const err = state.error;
+      if (err.includes("CONFIG_ERROR") || err.includes("Gemini API Key")) {
+        appendDiagnosticCard(
+          "Gemini API Key Missing",
+          "Autonomous browsing requires a Google AI Studio Gemini API key to run client-side in the Chrome extension.",
+          "Configure API Key",
+          () => handleDoctorAction("OPEN_SETTINGS_KEY")
+        );
+      } else if (err.includes("SECURITY_RESTRICTION") || err.includes("Security Exception") || err.includes("internal browser pages") || err.includes("Web Store")) {
+        appendDiagnosticCard(
+          "Target Webpage Inaccessible",
+          err,
+          "Open Test Webpage (Wikipedia)",
+          () => handleDoctorAction("OPEN_TEST_PAGE")
+        );
+      } else {
+        appendAssistantMessage(`Error: ${state.error}`, state.currentStep, true);
+      }
     }
   }
 
@@ -392,6 +520,37 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
     scrollToBottom();
   }
 
+  function appendDiagnosticCard(title, description, actionText, onActionClick, isWarn = false) {
+    if (emptyState) emptyState.classList.add("hidden");
+    const card = document.createElement("div");
+    card.className = `diagnostic-card ${isWarn ? "warn" : ""}`;
+    card.innerHTML = `
+      <div class="diagnostic-card-header">
+        <span class="diagnostic-card-badge">🩺 Doctor Diagnostic</span>
+      </div>
+      <div class="diagnostic-card-title">${escapeHtml(title)}</div>
+      <div class="diagnostic-card-desc">${escapeHtml(description)}</div>
+      <div class="diagnostic-card-actions">
+        ${actionText ? `<button type="button" class="diagnostic-card-btn primary">${escapeHtml(actionText)}</button>` : ""}
+        <button type="button" class="diagnostic-card-btn secondary">Open Doctor</button>
+      </div>
+    `;
+
+    const primaryBtn = card.querySelector(".diagnostic-card-btn.primary");
+    if (primaryBtn && typeof onActionClick === "function") {
+      primaryBtn.addEventListener("click", onActionClick);
+    }
+    const secondaryBtn = card.querySelector(".diagnostic-card-btn.secondary");
+    if (secondaryBtn) {
+      secondaryBtn.addEventListener("click", () => {
+        openDoctorDrawer();
+      });
+    }
+
+    messagesList.appendChild(card);
+    scrollToBottom();
+  }
+
   function scrollToBottom() {
     if (threadContainer) {
       threadContainer.scrollTop = threadContainer.scrollHeight;
@@ -420,7 +579,40 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
     promptInput.style.height = "auto";
 
     chrome.runtime.sendMessage({ type: "START_AGENT_LOOP", prompt: text }, (res) => {
-      if (res?.state) renderAgentState(res.state);
+      if (res?.state) {
+        renderAgentState(res.state);
+      } else if (res?.error) {
+        const errMsg = res.error;
+        if (errMsg.includes("CONFIG_ERROR") || errMsg.includes("Gemini API Key") || res?.issue === "MISSING_KEY") {
+          appendDiagnosticCard(
+            "Gemini API Key Missing",
+            "Autonomous browser agents require a Google AI Studio API key to run client-side in the extension.",
+            "Configure API Key",
+            () => handleDoctorAction("OPEN_SETTINGS_KEY")
+          );
+        } else if (errMsg.includes("SECURITY_RESTRICTION") || errMsg.includes("internal browser pages") || errMsg.includes("Web Store")) {
+          appendDiagnosticCard(
+            "Target Webpage Inaccessible",
+            errMsg,
+            "Open Test Webpage (Wikipedia)",
+            () => handleDoctorAction("OPEN_TEST_PAGE")
+          );
+        } else {
+          appendDiagnosticCard(
+            "Agent Paused",
+            errMsg,
+            "Run System Doctor",
+            () => openDoctorDrawer()
+          );
+        }
+      } else if (!res?.state) {
+        appendDiagnosticCard(
+          "System Preflight Notice",
+          "No active browser agent state received. Check your Gemini API key and active tab permissions in System Doctor.",
+          "Open System Doctor",
+          () => openDoctorDrawer()
+        );
+      }
     });
   });
 
@@ -509,6 +701,7 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
         setTimeout(() => { saveStatus.textContent = ""; }, 2000);
       }
       if (typeof showToast === 'function') showToast("Settings verified and updated successfully");
+      runPreflight();
     } catch (err) {
       if (saveStatus) saveStatus.textContent = `Error: ${sanitizeKeyFromError(err.message)}`;
     } finally {
@@ -565,6 +758,251 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
   // Help Modal
   if (helpBtn) helpBtn.addEventListener("click", () => helpModal.classList.toggle("hidden"));
   if (closeHelpModalBtn) closeHelpModalBtn.addEventListener("click", () => helpModal.classList.add("hidden"));
+
+  // ==========================================================================
+  // SYSTEM DOCTOR & PREFLIGHT CONTROLLER
+  // ==========================================================================
+  function openDoctorDrawer() {
+    if (doctorDrawer) {
+      doctorDrawer.classList.remove("hidden");
+      if (settingsDrawer) settingsDrawer.classList.add("hidden");
+      if (historyDrawer) historyDrawer.classList.add("hidden");
+      runPreflight();
+    }
+  }
+
+  function closeDoctorDrawer() {
+    if (doctorDrawer) doctorDrawer.classList.add("hidden");
+  }
+
+  if (doctorBtn) {
+    doctorBtn.addEventListener("click", () => {
+      if (doctorDrawer.classList.contains("hidden")) {
+        openDoctorDrawer();
+      } else {
+        closeDoctorDrawer();
+      }
+    });
+  }
+  if (closeDoctorBtn) closeDoctorBtn.addEventListener("click", closeDoctorDrawer);
+  if (preflightDoctorBtn) preflightDoctorBtn.addEventListener("click", openDoctorDrawer);
+
+  if (doctorRunTestBtn) {
+    doctorRunTestBtn.addEventListener("click", () => {
+      runPreflight();
+      showToast("Diagnostic tests re-run");
+    });
+  }
+
+  if (doctorAutoFixBtn) {
+    doctorAutoFixBtn.addEventListener("click", async () => {
+      if (typeof globalThis.SidekickDoctor !== "undefined") {
+        doctorAutoFixBtn.disabled = true;
+        doctorAutoFixBtn.textContent = "⚡ Fixing…";
+        try {
+          const res = await globalThis.SidekickDoctor.autoFixAll();
+          showToast(res.actionsTaken.length > 0 ? res.actionsTaken.join(" • ") : "No automatic fixes required.");
+          renderDoctorReport(res.updatedPreflight);
+        } catch (e) {
+          showToast(`Fix error: ${e.message}`);
+        } finally {
+          doctorAutoFixBtn.disabled = false;
+          doctorAutoFixBtn.textContent = "⚡ Auto-Fix All Issues";
+        }
+      }
+    });
+  }
+
+  if (doctorSaveKeyBtn && doctorKeyInput) {
+    doctorSaveKeyBtn.addEventListener("click", async () => {
+      const key = doctorKeyInput.value.trim();
+      if (!key) {
+        showToast("Please enter an API key");
+        return;
+      }
+      doctorSaveKeyBtn.disabled = true;
+      doctorSaveKeyBtn.textContent = "Testing…";
+      try {
+        const verify = await verifyApiKey(key, DEFAULT_MODEL);
+        if (!verify.valid) {
+          showToast(`Verification failed: ${verify.error || 'Invalid key'}`);
+          return;
+        }
+        await chrome.storage.local.set({ [STORAGE_KEY_API_KEY]: key });
+        state.apiKey = key;
+        if (apiKeyInput) apiKeyInput.value = key;
+        showToast("Gemini key verified & connected!");
+        if (doctorQuickKeySection) doctorQuickKeySection.classList.add("hidden");
+        runPreflight();
+      } catch (e) {
+        showToast(`Save error: ${e.message}`);
+      } finally {
+        doctorSaveKeyBtn.disabled = false;
+        doctorSaveKeyBtn.textContent = "Connect";
+      }
+    });
+  }
+
+  async function handleDoctorAction(actionId, checkData = {}) {
+    if (actionId === "OPEN_SETTINGS_KEY") {
+      closeDoctorDrawer();
+      if (settingsDrawer) {
+        loadSettings();
+        settingsDrawer.classList.remove("hidden");
+      }
+      if (apiKeyInput) {
+        apiKeyInput.focus();
+        apiKeyInput.select();
+      }
+    } else if (actionId === "OPEN_TEST_PAGE") {
+      const url = checkData.suggestedUrl || "https://en.wikipedia.org/wiki/Artificial_intelligence";
+      if (chrome.tabs && chrome.tabs.create) {
+        await chrome.tabs.create({ url, active: true });
+        showToast("Opened test webpage: Wikipedia");
+        setTimeout(() => runPreflight(), 1000);
+      }
+    } else if (actionId === "AUTO_INJECT_SCRIPT") {
+      if (typeof globalThis.SidekickDoctor !== "undefined") {
+        try {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (tab && tab.id) {
+            await globalThis.SidekickDoctor.autoInjectContentScript(tab.id);
+            showToast("Content script auto-injected successfully");
+            runPreflight();
+          }
+        } catch (e) {
+          showToast(`Injection failed: ${e.message}`);
+        }
+      }
+    } else if (actionId === "OPEN_AI_STUDIO_QUOTA") {
+      if (chrome.tabs && chrome.tabs.create) {
+        chrome.tabs.create({ url: "https://aistudio.google.com/app/apikey" });
+      }
+    } else if (actionId === "TEST_API_KEY") {
+      runPreflight();
+    }
+  }
+
+  async function runPreflight(options = {}) {
+    if (typeof globalThis.SidekickDoctor === "undefined") {
+      return null;
+    }
+
+    try {
+      const report = await globalThis.SidekickDoctor.runFullPreflight(options);
+      activePreflightReport = report;
+
+      // 1. Update Preflight Banner
+      if (preflightAlertBanner) {
+        if (report && !report.ready) {
+          preflightAlertBanner.classList.remove("hidden");
+          const failingCheck = report.checks.find(c => c.status === "FAIL") || report.checks.find(c => c.status === "WARN");
+          if (failingCheck) {
+            if (preflightBannerText) preflightBannerText.textContent = failingCheck.message;
+            if (failingCheck.status === "FAIL") {
+              preflightAlertBanner.classList.add("fail");
+            } else {
+              preflightAlertBanner.classList.remove("fail");
+            }
+            if (preflightActionBtn) {
+              if (failingCheck.actionText) {
+                preflightActionBtn.textContent = failingCheck.actionText;
+                preflightActionBtn.onclick = () => handleDoctorAction(failingCheck.actionId, failingCheck);
+                preflightActionBtn.classList.remove("hidden");
+              } else {
+                preflightActionBtn.classList.add("hidden");
+              }
+            }
+          }
+        } else {
+          preflightAlertBanner.classList.add("hidden");
+        }
+      }
+
+      // 2. Update Doctor Header Badge Dot
+      if (doctorBadgeDot) {
+        if (report && !report.ready) {
+          doctorBadgeDot.classList.remove("hidden");
+          if (report.failCount > 0) {
+            doctorBadgeDot.classList.add("fail");
+          } else {
+            doctorBadgeDot.classList.remove("fail");
+          }
+        } else {
+          doctorBadgeDot.classList.add("hidden");
+        }
+      }
+
+      // 3. Update Doctor Drawer
+      renderDoctorReport(report);
+      return report;
+    } catch (e) {
+      console.warn("Preflight error:", e);
+      return null;
+    }
+  }
+
+  function renderDoctorReport(report) {
+    if (!report) return;
+
+    if (doctorOverallBadge) {
+      doctorOverallBadge.className = `doctor-status-badge ${report.ready ? "pass" : (report.failCount > 0 ? "fail" : "warn")}`;
+      doctorOverallBadge.textContent = report.ready ? "Healthy ✓" : `${report.failCount + report.warnCount} Issues`;
+    }
+
+    if (doctorSummaryHeadline) {
+      doctorSummaryHeadline.textContent = report.summary;
+    }
+
+    if (doctorSummarySub) {
+      const ts = new Date(report.timestamp).toLocaleTimeString();
+      doctorSummarySub.textContent = `Audited at ${ts} (${report.passCount} passed, ${report.failCount} failed, ${report.warnCount} warnings)`;
+    }
+
+    if (doctorChecksList && Array.isArray(report.checks)) {
+      doctorChecksList.innerHTML = "";
+      report.checks.forEach(check => {
+        const item = document.createElement("div");
+        const statusLower = (check.status || "info").toLowerCase();
+        item.className = `doctor-check-item ${statusLower}`;
+
+        let actionHtml = "";
+        if (check.actionText && check.actionId) {
+          actionHtml = `
+            <div class="doctor-check-action-row">
+              <button type="button" class="doctor-item-action-btn" data-action="${check.actionId}">${escapeHtml(check.actionText)}</button>
+            </div>
+          `;
+        }
+
+        item.innerHTML = `
+          <div class="doctor-check-header">
+            <span class="doctor-check-title">${escapeHtml(check.title)}</span>
+            <span class="doctor-check-status-pill">${check.status}</span>
+          </div>
+          <div class="doctor-check-msg">${escapeHtml(check.message)}</div>
+          ${actionHtml}
+        `;
+
+        const btn = item.querySelector(".doctor-item-action-btn");
+        if (btn) {
+          btn.addEventListener("click", () => handleDoctorAction(check.actionId, check));
+        }
+
+        doctorChecksList.appendChild(item);
+      });
+    }
+
+    // Show quick key box if key is missing
+    const keyCheck = report.checks.find(c => c.id === "api_key");
+    if (doctorQuickKeySection) {
+      if (keyCheck && !keyCheck.valid) {
+        doctorQuickKeySection.classList.remove("hidden");
+      } else {
+        doctorQuickKeySection.classList.add("hidden");
+      }
+    }
+  }
 
   // Tab Groups Bar & Strict Workgroup Isolation
   const bannerAddTabBtn = document.getElementById("bannerAddTabBtn");
@@ -748,6 +1186,13 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
     });
   }
 
+  promptInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      chatForm.dispatchEvent(new Event("submit"));
+    }
+  });
+
   promptInput.addEventListener("focus", () => {
     if (composerBox) composerBox.classList.add("focused");
   });
@@ -800,6 +1245,38 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
       }
       if (msg.type === "TAB_GROUP_STATE_UPDATED" && msg.state) {
         updateTabGroupUI(msg.state);
+      }
+      if (msg.type === "DOCTOR_ALERT") {
+        runPreflight();
+        if (msg.issue === "MISSING_KEY") {
+          appendDiagnosticCard(
+            "Gemini API Key Required",
+            msg.message || "Autonomous browser actions require a Google AI Studio Gemini API key.",
+            "Configure API Key",
+            () => handleDoctorAction("OPEN_SETTINGS_KEY")
+          );
+        } else if (msg.issue === "RESTRICTED_TAB") {
+          appendDiagnosticCard(
+            "Page Restricted by Chrome",
+            msg.message || "Chrome blocks extensions from automating internal pages.",
+            "Open Test Webpage (Wikipedia)",
+            () => handleDoctorAction("OPEN_TEST_PAGE")
+          );
+        }
+      }
+    });
+  }
+
+  // Active tab listeners for live preflight monitoring
+  if (chrome?.tabs?.onActivated) {
+    chrome.tabs.onActivated.addListener(() => {
+      runPreflight();
+    });
+  }
+  if (chrome?.tabs?.onUpdated) {
+    chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+      if (changeInfo.status === "complete" || changeInfo.url) {
+        runPreflight();
       }
     });
   }
@@ -990,6 +1467,7 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
   });
 
   loadSettings();
+  setTimeout(() => runPreflight(), 100);
 })();
 
 if (typeof module !== 'undefined' && module.exports) {

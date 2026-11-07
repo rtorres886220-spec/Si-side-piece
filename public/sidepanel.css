@@ -569,7 +569,9 @@ strong, b, .font-semibold, .font-medium {
   border-radius: 14px;
   padding: 16px 18px;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4), 0 0 0 1px var(--soft);
-  z-index: 30;
+  z-index: 50;
+  max-height: calc(100% - 64px);
+  overflow-y: auto;
   animation: drawerIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -3059,5 +3061,429 @@ body.ai-active-throttling .galaxy-canvas,
 .diagnostic-send-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ==========================================================================
+   DOCTOR HUD & PREFLIGHT DIAGNOSTICS STYLING
+   ========================================================================== */
+
+/* Doctor Header Button with Pulse Badge */
+.doctor-header-btn {
+  position: relative;
+}
+
+.doctor-badge-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 6px #f59e0b;
+  animation: doctorDotPulse 2s infinite ease-in-out;
+}
+
+.doctor-badge-dot.fail {
+  background: #ef4444;
+  box-shadow: 0 0 6px #ef4444;
+}
+
+@keyframes doctorDotPulse {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.25); }
+}
+
+/* Preflight Alert Banner */
+.preflight-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(245, 158, 11, 0.12);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.28);
+  font-size: 11.5px;
+  color: #fbbf24;
+  z-index: 25;
+  animation: preflightFadeIn 0.2s ease-out;
+}
+
+.preflight-banner.fail {
+  background: rgba(239, 68, 68, 0.12);
+  border-bottom-color: rgba(239, 68, 68, 0.28);
+  color: #fca5a5;
+}
+
+@keyframes preflightFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.preflight-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+}
+
+.preflight-icon {
+  flex-shrink: 0;
+}
+
+.preflight-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.02em;
+}
+
+.preflight-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.preflight-btn {
+  font-size: 10.5px;
+  font-weight: 400;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.preflight-btn.primary {
+  background: rgba(245, 158, 11, 0.22);
+  color: #fef3c7;
+  border-color: rgba(245, 158, 11, 0.4);
+}
+
+.preflight-banner.fail .preflight-btn.primary {
+  background: rgba(239, 68, 68, 0.22);
+  color: #fee2e2;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.preflight-btn.primary:hover {
+  background: rgba(245, 158, 11, 0.35);
+}
+
+.preflight-banner.fail .preflight-btn.primary:hover {
+  background: rgba(239, 68, 68, 0.35);
+}
+
+.preflight-btn.secondary {
+  background: rgba(255, 255, 255, 0.05);
+  color: #cbd5e1;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.preflight-btn.secondary:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+/* Doctor Drawer Styles */
+.doctor-drawer-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.doctor-status-badge {
+  font-size: 9.5px;
+  font-weight: 500;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-family: var(--font-mono);
+}
+
+.doctor-status-badge.checking {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.doctor-status-badge.pass {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.doctor-status-badge.warn {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.doctor-status-badge.fail {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.doctor-summary-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.doctor-headline {
+  font-size: 12px;
+  font-weight: 300;
+  color: #e2e8f0;
+  line-height: 1.4;
+  margin-bottom: 2px;
+}
+
+.doctor-subline {
+  font-size: 10.5px;
+  color: #64748b;
+  font-family: var(--font-mono);
+}
+
+.doctor-checks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.doctor-check-item {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: border-color 0.15s ease;
+}
+
+.doctor-check-item.pass {
+  border-left: 2.5px solid #22c55e;
+}
+
+.doctor-check-item.warn {
+  border-left: 2.5px solid #f59e0b;
+}
+
+.doctor-check-item.fail {
+  border-left: 2.5px solid #ef4444;
+}
+
+.doctor-check-item.info {
+  border-left: 2.5px solid #38bdf8;
+}
+
+.doctor-check-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.doctor-check-title {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: #cbd5e1;
+}
+
+.doctor-check-status-pill {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.doctor-check-item.pass .doctor-check-status-pill {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.doctor-check-item.warn .doctor-check-status-pill {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+.doctor-check-item.fail .doctor-check-status-pill {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.doctor-check-item.info .doctor-check-status-pill {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+}
+
+.doctor-check-msg {
+  font-size: 10.5px;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+
+.doctor-check-action-row {
+  margin-top: 4px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.doctor-item-action-btn {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  font-size: 10.5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.doctor-item-action-btn:hover {
+  background: rgba(56, 189, 248, 0.22);
+}
+
+.doctor-actions-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.doctor-primary-btn {
+  flex: 1;
+  background: rgba(56, 189, 248, 0.18) !important;
+  color: #38bdf8 !important;
+  border-color: rgba(56, 189, 248, 0.4) !important;
+}
+
+.doctor-primary-btn:hover {
+  background: rgba(56, 189, 248, 0.3) !important;
+}
+
+.doctor-secondary-btn {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: #e2e8f0 !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+}
+
+.doctor-secondary-btn:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+.doctor-key-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 10px;
+}
+
+/* ==========================================================================
+   DIAGNOSTIC ERROR CARD (In Thread)
+   ========================================================================== */
+.diagnostic-card {
+  margin: 10px 0;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: diagCardIn 0.25s ease-out;
+}
+
+.diagnostic-card.warn {
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+@keyframes diagCardIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.diagnostic-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.diagnostic-card-badge {
+  font-size: 9.5px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.diagnostic-card.warn .diagnostic-card-badge {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+}
+
+.diagnostic-card-title {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: #f1f5f9;
+  line-height: 1.35;
+}
+
+.diagnostic-card-desc {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.diagnostic-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.diagnostic-card-btn {
+  font-size: 11px;
+  font-weight: 400;
+  padding: 5px 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+
+.diagnostic-card-btn.primary {
+  background: #38bdf8;
+  color: #0f172a;
+}
+
+.diagnostic-card-btn.primary:hover {
+  background: #7dd3fc;
+}
+
+.diagnostic-card-btn.secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.diagnostic-card-btn.secondary:hover {
+  background: rgba(255, 255, 255, 0.14);
 }
 

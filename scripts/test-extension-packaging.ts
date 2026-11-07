@@ -51,6 +51,7 @@ async function runPackagingTestSuite() {
     "apiClient.js",
     "coordinator.js",
     "critic.js",
+    "doctor.js",
     "gate.js",
     "retriever.js",
     "router.js",

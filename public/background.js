@@ -757,22 +757,39 @@ class BackgroundGeminiClient {
             const errText = await res.text().catch(() => res.statusText);
             throw new Error(`Gemini API error (${res.status}): ${errText}`);
           } else {
-            // Server proxy route
+            // Server proxy route with fail-fast detection
             const endpoint = `${proxyUrl}/api/gemini`;
-            const res = await fetch(endpoint, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                promptText: prompt,
-                model,
-                screenshotDataUrl: config.screenshotDataUrl || undefined,
-                rawPayload: {
-                  prompt,
+            const proxyController = new AbortController();
+            const proxyTimeout = setTimeout(() => proxyController.abort(), 3500);
+
+            let res;
+            try {
+              res = await fetch(endpoint, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  promptText: prompt,
+                  model,
                   screenshotDataUrl: config.screenshotDataUrl || undefined,
-                  systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined
-                }
-              })
-            });
+                  rawPayload: {
+                    prompt,
+                    screenshotDataUrl: config.screenshotDataUrl || undefined,
+                    systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined
+                  }
+                }),
+                signal: proxyController.signal
+              });
+              clearTimeout(proxyTimeout);
+            } catch (proxyFetchErr) {
+              clearTimeout(proxyTimeout);
+              // Localhost server is offline (standard in unpacked extension)
+              broadcastToSidepanel({
+                type: "DOCTOR_ALERT",
+                issue: "MISSING_KEY",
+                message: "Gemini API Key is not configured. Please open Sidekick Settings (or Doctor) and enter your Google AI Studio API key to enable autonomous browsing."
+              });
+              throw new Error("CONFIG_ERROR: Gemini API Key is not configured. Please open Sidekick Settings (or Doctor) and enter your Google AI Studio API key to enable autonomous browsing.");
+            }
 
             if (res.ok) {
               const data = await res.json();
@@ -1328,7 +1345,26 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
     return new Promise((resolve) => {
       chrome.tabs.sendMessage(this.tabId, { action: "GET_ELEMENT_COORDINATES", targetId: sendId }, sendOptions, (res) => {
         if (chrome.runtime.lastError) {
-          resolve({ success: false, error: chrome.runtime.lastError.message });
+          const lastErr = chrome.runtime.lastError.message || "";
+          if (lastErr.includes("Receiving end does not exist") || lastErr.includes("Could not establish connection")) {
+            console.log("[AutonomousAgentEngine] Content script dropped. Auto-re-injecting and retrying...");
+            chrome.scripting.executeScript({
+              target: { tabId: this.tabId, allFrames: true },
+              files: ["content.js"]
+            }).then(() => {
+              delay(300).then(() => {
+                chrome.tabs.sendMessage(this.tabId, { action: "GET_ELEMENT_COORDINATES", targetId: sendId }, sendOptions, (retryRes) => {
+                  if (chrome.runtime.lastError) {
+                    resolve({ success: false, error: chrome.runtime.lastError.message });
+                  } else {
+                    resolve(retryRes || { success: false, error: "No response from re-injected content script" });
+                  }
+                });
+              });
+            }).catch(() => resolve({ success: false, error: lastErr }));
+            return;
+          }
+          resolve({ success: false, error: lastErr });
         } else if (!res || !res.success) {
           resolve(res || { success: false, error: "No response from content script" });
         } else {
@@ -1520,7 +1556,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "START_AGENT_LOOP") {
     activeAgentEngine.start(message.prompt)
       .then(() => sendResponse({ success: true, state: activeAgentEngine.state }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
+      .catch((err) => {
+        const errMsg = err?.message || "Failed to start agent loop";
+        const issue = errMsg.includes("CONFIG_ERROR") || errMsg.includes("API Key")
+          ? "MISSING_KEY"
+          : (errMsg.includes("Security Exception") || errMsg.includes("internal browser pages") || errMsg.includes("Web Store")
+            ? "RESTRICTED_TAB"
+            : "GENERAL_ERROR");
+        broadcastToSidepanel({
+          type: "DOCTOR_ALERT",
+          issue,
+          message: errMsg
+        });
+        sendResponse({ success: false, error: errMsg, issue });
+      });
     return true;
   }
 

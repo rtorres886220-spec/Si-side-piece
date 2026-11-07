@@ -52,6 +52,13 @@
           </svg>
         </button>
 
+        <button id="doctorBtn" class="icon-btn doctor-header-btn" title="System Doctor & Diagnostics" aria-label="System Doctor">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+          </svg>
+          <span id="doctorBadgeDot" class="doctor-badge-dot hidden" aria-hidden="true"></span>
+        </button>
+
         <button id="emergencyStopBtn" class="emergency-stop-header-btn hidden" title="Emergency Stop Loop [Esc]" type="button">
           <span class="stop-dot"></span>
           <span>Stop [Esc]</span>
@@ -132,6 +139,22 @@
       </div>
     </div>
 
+    <!-- Preflight Alert Banner: Immediate visual notification of missing key or restricted page -->
+    <div id="preflightAlertBanner" class="preflight-banner hidden">
+      <div class="preflight-banner-content">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" class="preflight-icon">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+        <span id="preflightBannerText" class="preflight-text">Action required to enable autonomous browsing.</span>
+      </div>
+      <div class="preflight-banner-actions">
+        <button id="preflightActionBtn" class="preflight-btn primary" type="button">Resolve Issue</button>
+        <button id="preflightDoctorBtn" class="preflight-btn secondary" type="button">🩺 Doctor</button>
+      </div>
+    </div>
+
     <!-- History Drawer (Minimal overlay) -->
     <section id="historyDrawer" class="drawer hidden">
       <div class="drawer-header">
@@ -194,6 +217,46 @@
         <div class="drawer-actions">
           <button id="saveSettingsBtn" class="action-btn">Save</button>
           <span id="saveStatus" class="save-indicator"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Doctor Drawer (Standalone Preflight & Self-Healing Hub) -->
+    <section id="doctorDrawer" class="drawer hidden">
+      <div class="drawer-header">
+        <div class="doctor-drawer-title-wrap">
+          <span class="drawer-title">🩺 System Doctor</span>
+          <span id="doctorOverallBadge" class="doctor-status-badge checking">Checking…</span>
+        </div>
+        <button id="closeDoctorBtn" class="drawer-close" aria-label="Close Doctor">&times;</button>
+      </div>
+      <div class="drawer-body">
+        <div class="doctor-summary-box">
+          <div id="doctorSummaryHeadline" class="doctor-headline">Evaluating browser and agent subsystems…</div>
+          <div id="doctorSummarySub" class="doctor-subline">All diagnostics run locally with zero server dependency.</div>
+        </div>
+
+        <div class="doctor-checks-list" id="doctorChecksList">
+          <!-- Dynamically populated 5 diagnostic checks -->
+        </div>
+
+        <div class="doctor-actions-row">
+          <button id="doctorAutoFixBtn" class="action-btn doctor-primary-btn" type="button">
+            ⚡ Auto-Fix All Issues
+          </button>
+          <button id="doctorRunTestBtn" class="action-btn doctor-secondary-btn" type="button">
+            🔄 Retest System
+          </button>
+        </div>
+
+        <!-- Quick 1-Click Key Input inside Doctor Drawer -->
+        <div id="doctorQuickKeySection" class="doctor-key-box hidden">
+          <div class="field-label">Quick Gemini API Key Setup</div>
+          <div class="input-row">
+            <input type="password" id="doctorKeyInput" class="flat-input" placeholder="AIzaSy..." spellcheck="false" autocomplete="off" />
+            <button id="doctorSaveKeyBtn" class="mini-btn primary" type="button">Connect</button>
+          </div>
+          <span class="field-caption">Keys are stored strictly in local Chrome storage.</span>
         </div>
       </div>
     </section>
@@ -408,6 +471,7 @@
 
   <!-- 4K 3D Living Cosmos WebGL Engine -->
   <script src="cosmos.bundle.js"></script>
+  <script src="agents/doctor.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

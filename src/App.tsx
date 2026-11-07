@@ -2656,7 +2656,9 @@ export default function App() {
         "workers.js",
         "gate.js",
         "critic.js",
-        "coordinator.js"
+        "coordinator.js",
+        "surveyEngine.js",
+        "doctor.js"
       ];
       for (const ag of agentFiles) {
         try {
