@@ -317,6 +317,18 @@ if (chrome.debugger && chrome.debugger.onDetach) {
   });
 }
 
+// Monitor newly created tabs for autonomous child survey tab redirection
+if (chrome.tabs && chrome.tabs.onCreated) {
+  chrome.tabs.onCreated.addListener(async (newTab) => {
+    if (!activeAgentEngine || activeAgentEngine.state.status !== "RUNNING" || !newTab.id) return;
+    if (newTab.openerTabId === activeAgentEngine.tabId) {
+      console.log(`[AutonomousAgentEngine] Detected child survey tab #${newTab.id} from parent #${newTab.openerTabId}. Transferring automation session...`);
+      activeAgentEngine.addLog("info", `Detected child survey tab #${newTab.id}. Transferring automation context...`);
+      await activeAgentEngine.migrateToTab(newTab.id);
+    }
+  });
+}
+
 async function sendCDPCommand(target, method, commandParams = {}, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -462,17 +474,22 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
             // Check if element is occluded by overlay/backdrop
             if (reverifyResp.isOccluded || reverifyResp.isIntercepted || reverifyResp.blocked) {
               const blocker = reverifyResp.occludedBy || reverifyResp.interceptedBy || "modal backdrop";
-              console.warn(`[Pre-Click] Target is occluded by ${blocker}. Halting click.`);
-              return {
-                clicked: false,
-                occluded: true,
-                occludedBy: blocker,
-                reason: `Target is occluded by overlay (${blocker})`
-              };
+              console.warn(`[Pre-Click] Target appears occluded by ${blocker}. Attempting trusted synthetic DOM dispatch fallback.`);
+              try {
+                const fallbackResult = await dispatchDOMFallback(tabId, "click", params);
+                return { clicked: true, usedDOMFallback: true, fallbackResult, x: targetX, y: targetY };
+              } catch (fallbackErr) {
+                return {
+                  clicked: false,
+                  occluded: true,
+                  occludedBy: blocker,
+                  reason: `Target is occluded by overlay (${blocker}) and DOM fallback failed: ${fallbackErr.message}`
+                };
+              }
             }
 
-            // Check if element moved by > 5px due to animation/reflow
-            if (reverifyResp.verified && (Math.abs(reverifyResp.x - targetX) > 5 || Math.abs(reverifyResp.y - targetY) > 5)) {
+            // Check if element moved by > 5px due to animation/reflow (only for top-level frame to avoid iframe coordinate space corruption)
+            if (targetFrameId === 0 && reverifyResp.verified && (Math.abs(reverifyResp.x - targetX) > 5 || Math.abs(reverifyResp.y - targetY) > 5)) {
               console.log(`[Pre-Click] Element shifted from (${targetX}, ${targetY}) to (${reverifyResp.x}, ${reverifyResp.y}). Re-centering click centroid.`);
               targetX = reverifyResp.x;
               targetY = reverifyResp.y;
@@ -757,10 +774,10 @@ class BackgroundGeminiClient {
             const errText = await res.text().catch(() => res.statusText);
             throw new Error(`Gemini API error (${res.status}): ${errText}`);
           } else {
-            // Server proxy route with fail-fast detection
+            // Server proxy route with fail-fast detection (30-second budget for multimodal reasoning)
             const endpoint = `${proxyUrl}/api/gemini`;
             const proxyController = new AbortController();
-            const proxyTimeout = setTimeout(() => proxyController.abort(), 3500);
+            const proxyTimeout = setTimeout(() => proxyController.abort(), 30000);
 
             let res;
             try {
@@ -840,6 +857,7 @@ class AutonomousAgentEngine {
     this.isNavigating = false;
     this.abortController = null;
     this.frameElementRegistry = new Map();
+    this.actionHistory = [];
     this.state = {
       status: "IDLE", // IDLE, RUNNING, PAUSED_429, WAITING_APPROVAL, PAUSED_FOR_USER, COMPLETED, STOPPED, ERROR
       objective: "",
@@ -890,6 +908,60 @@ class AutonomousAgentEngine {
     this.runAgentLoop();
   }
 
+  recordActionOutcome(actionType, targetId, outcome) {
+    this.actionHistory.push({
+      step: this.state.currentStep,
+      actionType,
+      targetId,
+      outcome,
+      timestamp: Date.now()
+    });
+    if (this.actionHistory.length > 10) {
+      this.actionHistory.shift();
+    }
+  }
+
+  async migrateToTab(newTabId) {
+    if (!newTabId || newTabId === this.tabId) return;
+    console.log(`[AutonomousAgentEngine] Migrating autonomous execution from tab #${this.tabId} to child tab #${newTabId}`);
+    this.addLog("info", `Detected child survey tab #${newTabId}. Migrating execution context.`);
+
+    // Detach debugger from old tab
+    if (this.tabId && activeDebuggerTabId === this.tabId) {
+      try {
+        await chrome.debugger.detach({ tabId: this.tabId });
+        activeDebuggerTabId = null;
+      } catch {}
+    }
+
+    this.tabId = newTabId;
+    this.frameElementRegistry.clear();
+
+    // Auto-group child tab into managed group if needed
+    try {
+      await addTabToManagedGroup(newTabId);
+    } catch {}
+
+    // Attach debugger to new tab
+    try {
+      await chrome.debugger.attach({ tabId: newTabId }, "1.3");
+      activeDebuggerTabId = newTabId;
+    } catch (err) {
+      console.warn("[AutonomousAgentEngine] Debugger attach on migrated tab notice:", err?.message || err);
+    }
+
+    // Wait for completion and inject content script if needed
+    await this.waitForNavigation(newTabId, 10000);
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: newTabId, allFrames: true },
+        files: ["content.js"]
+      });
+    } catch {}
+
+    await this.persistState();
+  }
+
   async start(prompt) {
     if (this.state.status === "RUNNING") {
       this.stop("Starting new task");
@@ -897,6 +969,7 @@ class AutonomousAgentEngine {
 
     this.abortController = new AbortController();
     this.frameElementRegistry.clear();
+    this.actionHistory = [];
     startLoopKeepAlive();
 
     // Determine target tab and automatically group into "Si" (ice white / silver)
@@ -1037,11 +1110,18 @@ THOUGHT: <concise reasoning about what to do next based on both visual evidence 
 CHECKLIST: <comma-separated list of 2-4 progress checklist items>
 ACTION: <single command from allowed actions>`;
 
+        const recentHistoryStr = this.actionHistory.length > 0
+          ? this.actionHistory.slice(-4).map(h => `Step ${h.step}: ${h.actionType} on ${h.targetId} -> Outcome: ${h.outcome}`).join("\n")
+          : "None (Initial step)";
+
         const userPrompt = `USER OBJECTIVE: ${this.state.objective}
 CURRENT STEP: ${this.state.currentStep} of ${this.state.maxSteps}
 PAGE TITLE: ${domData?.title || "Untitled"}
 PAGE URL: ${domData?.url || ""}
 ${domData?.hasActiveModal ? "NOTICE: Active modal dialog layer detected in DOM! Prioritize front modal controls.\n" : ""}
+RECENT ACTION HISTORY & OUTCOMES:
+${recentHistoryStr}
+
 INTERACTIVE ELEMENTS:
 ${domData?.elementsSummary || "(No interactive elements found)"}
 
@@ -1093,10 +1173,12 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
           this.addLog("action", `Navigating to ${parsed.actionArg}`);
           await executeCDPActionOnTab(this.tabId, "navigate", { url: parsed.actionArg });
           await this.waitForNavigation(this.tabId);
+          this.recordActionOutcome("NAVIGATE", parsed.actionArg, "PAGE_NAVIGATED");
         } else if (parsed.actionType === "SCROLL") {
           const deltaY = parsed.actionArg.toLowerCase().includes("up") ? -500 : 500;
           this.addLog("action", `Scrolling page (${deltaY > 0 ? "down" : "up"})`);
           await executeCDPActionOnTab(this.tabId, "scroll", { deltaY });
+          this.recordActionOutcome("SCROLL", parsed.actionArg, "VIEWPORT_SCROLLED");
           await delay(200);
         } else if (parsed.actionType === "SELECT") {
           const targetId = parsed.targetId;
@@ -1108,11 +1190,15 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
               value: optVal
             });
             this.addLog("success", `Selected option "${optVal}" on ${targetId}`);
+            this.recordActionOutcome("SELECT", targetId, `SELECTED_${optVal}`);
           } catch (selErr) {
             this.addLog("warn", `Direct select option error (${selErr.message}), falling back to coordinate click`);
             const coords = await this.resolveTargetCoordinates(targetId);
             if (coords?.success) {
               await executeCDPActionOnTab(this.tabId, "click", { x: coords.x, y: coords.y });
+              this.recordActionOutcome("SELECT", targetId, "CLICK_FALLBACK");
+            } else {
+              this.recordActionOutcome("SELECT", targetId, "FAILED");
             }
           }
           await delay(180);
@@ -1127,6 +1213,7 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
                 targetId,
                 value: parsed.actionArg || ""
               });
+              this.recordActionOutcome("SELECT_OPTION", targetId, "DIRECT_OPTION_SELECTED");
               await delay(180);
               this.state.currentStep++;
               await this.persistState();
@@ -1142,6 +1229,7 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
           const coords = await this.resolveTargetCoordinates(targetId);
           if (!coords || !coords.success) {
             this.addLog("warn", `Could not resolve coordinates for ${targetId}: ${coords?.error || "Element missing"}`);
+            this.recordActionOutcome(parsed.actionType, targetId, `MISSING_COORDINATES_${coords?.error || "NOT_FOUND"}`);
           } else {
             if (coords.isOccluded) {
               this.addLog("warn", `Target ${targetId} is occluded by ${coords.occludedBy || "overlay"}. Physical click may be intercepted by modal.`);
@@ -1163,15 +1251,54 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
             }
 
             if (parsed.actionType === "CLICK") {
+              // Capture pre-state snapshot to verify post-click DOM mutation
+              let preState = null;
+              try {
+                preState = await new Promise((res) => {
+                  chrome.tabs.sendMessage(this.tabId, { action: "capturePreState", selector: targetId }, (r) => res(r?.state || null));
+                });
+              } catch {}
+
               const clickResult = await executeCDPActionOnTab(this.tabId, "click", {
                 x: coords.x,
                 y: coords.y,
                 targetId,
                 frameId: coords.frameId || 0
               });
+
               if (clickResult && clickResult.occluded) {
                 this.addLog("warn", `Target ${targetId} is occluded by ${clickResult.occludedBy || "overlay"}. Physical click prevented.`);
                 this.state.currentThought = `Target is occluded by ${clickResult.occludedBy || "modal backdrop"}. Redirecting attention to dismiss modal...`;
+                this.recordActionOutcome("CLICK", targetId, `OCCLUDED_BY_${clickResult.occludedBy || "OVERLAY"}`);
+              } else {
+                // Post-state mutation verification: Did the click actually register?
+                await delay(200);
+                let postVerification = null;
+                try {
+                  postVerification = await new Promise((res) => {
+                    chrome.tabs.sendMessage(this.tabId, {
+                      action: "verifyPostState",
+                      cdpAction: "click",
+                      selector: targetId,
+                      preState,
+                      expectedPostcondition: null
+                    }, (r) => res(r?.result || null));
+                  });
+                } catch {}
+
+                if (postVerification && postVerification.mutated === false) {
+                  this.addLog("warn", `CDP click on ${targetId} resulted in 0 DOM mutations. Triggering authentic DOM fallback dispatch...`);
+                  try {
+                    await dispatchDOMFallback(this.tabId, "click", { targetId, x: coords.x, y: coords.y });
+                    this.addLog("info", `DOM fallback click dispatched successfully on ${targetId}.`);
+                    this.recordActionOutcome("CLICK", targetId, "DOM_FALLBACK_DISPATCHED");
+                  } catch (domErr) {
+                    this.addLog("warn", `DOM fallback notice: ${domErr.message}`);
+                    this.recordActionOutcome("CLICK", targetId, "CLICK_NO_MUTATION");
+                  }
+                } else {
+                  this.recordActionOutcome("CLICK", targetId, "SUCCESS_MUTATION_VERIFIED");
+                }
               }
             } else if (parsed.actionType === "TYPE") {
               await executeCDPActionOnTab(this.tabId, "type", {
@@ -1182,6 +1309,7 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
                 targetId,
                 frameId: coords.frameId || 0
               });
+              this.recordActionOutcome("TYPE", targetId, `TYPED_${(parsed.textToType || "").slice(0, 15)}`);
             }
           }
           await delay(160);

@@ -20,6 +20,20 @@
   const messageHandler = (message, sender, sendResponse) => {
     const isTopFrame = typeof window !== "undefined" && window.top === window.self;
 
+    // Immediate System Doctor PING responder
+    if (message.action === "PING" || message.type === "PING") {
+      sendResponse({ status: "PONG", version: "1.1.3", timestamp: Date.now() });
+      return false;
+    }
+
+    if (message.action === "SET_CURSOR_TYPE" || message.type === "SET_CURSOR_TYPE") {
+      if (typeof setCursorType === "function") {
+        setCursorType(message.cursorType || "arrow");
+      }
+      sendResponse({ success: true });
+      return false;
+    }
+
     // Strict citation extraction restriction - never allow subframes to impersonate top page citations
     if (!isTopFrame && message.action === "extractContext") {
       sendResponse({ success: false, error: "Subframe extraction prohibited", isTopFrame: false });
@@ -699,8 +713,9 @@
   }
 
   // =========================================================================
-  // AUTHENTIC SYSTEM-NATIVE VISIBLE CURSOR OVERLAY
-  // Tracks automation position, click ripples, and scroll vectors
+  // AUTHENTIC SYSTEM-NATIVE VISIBLE PRECISION CURSOR ENGINE
+  // Mathematical (0,0) hotspot, multi-state (Arrow, Pointer Hand, I-Beam),
+  // and synchronized physical press-down actuation
   // =========================================================================
   let cursorOverlayRoot = null;
   let cursorPointerEl = null;
@@ -708,6 +723,30 @@
   let cursorScrollBadgeEl = null;
   let currentCursorX = 100;
   let currentCursorY = 100;
+  let activeCursorType = "arrow";
+
+  const OS_CURSOR_SVGS = {
+    arrow: `<svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 0L0 16L4.5 12L8.2 19.5L10.8 18.2L7.1 10.8L12.5 10.8L0 0Z" fill="#ffffff" stroke="#111111" stroke-width="1.3" stroke-linejoin="round"/>
+    </svg>`,
+    pointer: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 0C0 0 0.8 0 1 1.2L1 8.5C1 9 1.6 9.4 2.1 9.1C2.4 8.9 2.6 8.5 2.6 8L2.6 5.8C2.6 5.2 3.1 4.8 3.7 4.8C4.3 4.8 4.7 5.2 4.7 5.8L4.7 7.2C4.7 7.7 5.2 8.1 5.7 7.9C6 7.7 6.2 7.4 6.2 7L6.2 6.1C6.2 5.5 6.7 5.1 7.3 5.1C7.9 5.1 8.3 5.5 8.3 6.1L8.3 8.6C8.3 9.1 8.8 9.5 9.3 9.3C9.6 9.1 9.8 8.8 9.8 8.4L9.8 7.8C9.8 7.2 10.3 6.8 10.9 6.8C11.5 6.8 11.9 7.2 11.9 7.8L11.9 12.2C11.9 15.2 9.8 18 6.5 18C3 18 0.5 15.2 0.5 12L0.5 5C0.5 1.8 0 0 0 0Z" fill="#ffffff" stroke="#111111" stroke-width="1.3" stroke-linejoin="round"/>
+    </svg>`,
+    text: `<svg width="16" height="22" viewBox="0 0 16 22" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-left:-8px;margin-top:-11px">
+      <path d="M4 1H12M8 1V21M4 21H12" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round"/>
+      <path d="M4 1H12M8 1V21M4 21H12" stroke="#111111" stroke-width="1.1" stroke-linecap="round"/>
+    </svg>`
+  };
+
+  function setCursorType(type = "arrow") {
+    if (!OS_CURSOR_SVGS[type]) type = "arrow";
+    if (activeCursorType === type && cursorPointerEl) return;
+    activeCursorType = type;
+    ensureVisibleCursorOverlay();
+    if (cursorPointerEl) {
+      cursorPointerEl.innerHTML = OS_CURSOR_SVGS[type];
+    }
+  }
 
   function ensureVisibleCursorOverlay() {
     if (typeof document === "undefined") return null;
@@ -739,7 +778,7 @@
       border: none;
     `;
 
-    // Standard OS Desktop Arrow Pointer
+    // Authentic Precision OS Pointer
     const pointer = document.createElement("div");
     pointer.className = "sidekick-cursor-pointer";
     pointer.style.cssText = `
@@ -749,35 +788,33 @@
       width: 24px;
       height: 24px;
       transform: translate3d(${currentCursorX}px, ${currentCursorY}px, 0);
+      transform-origin: 0 0;
       transition: transform 0.08s cubic-bezier(0.2, 0.8, 0.4, 1);
       pointer-events: none;
-      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));
+      filter: drop-shadow(0 2px 5px rgba(0,0,0,0.45));
       will-change: transform;
     `;
-    pointer.innerHTML = `
-      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M4 3L17.5 16.5L11.5 17L8.5 22L5.5 21L8.5 16L4 12V3Z" fill="#ffffff" stroke="#111111" stroke-width="1.6" stroke-linejoin="round"/>
-      </svg>
-    `;
+    pointer.innerHTML = OS_CURSOR_SVGS[activeCursorType] || OS_CURSOR_SVGS.arrow;
 
-    // Micro-ripple pulse
+    // Authentic Micro-Ripple Pulse
     const ripple = document.createElement("div");
     ripple.className = "sidekick-cursor-ripple";
     ripple.style.cssText = `
       position: absolute;
       top: 0;
       left: 0;
-      width: 28px;
-      height: 28px;
-      margin-top: -14px;
-      margin-left: -14px;
+      width: 22px;
+      height: 22px;
+      margin-top: -11px;
+      margin-left: -11px;
       border-radius: 50%;
-      border: 2px solid rgba(255, 255, 255, 0.95);
-      background: rgba(255, 255, 255, 0.25);
+      border: 1.5px solid rgba(255, 255, 255, 0.9);
+      background: radial-gradient(circle, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 70%);
       pointer-events: none;
       transform: translate3d(${currentCursorX}px, ${currentCursorY}px, 0) scale(0);
       opacity: 0;
-      transition: transform 0.25s ease-out, opacity 0.25s ease-out;
+      will-change: transform, opacity;
+      transition: transform 0.22s cubic-bezier(0.1, 0.9, 0.3, 1), opacity 0.22s ease-out;
     `;
 
     // Scroll Direction Badge
@@ -787,12 +824,12 @@
       position: absolute;
       top: 0;
       left: 0;
-      transform: translate3d(${currentCursorX + 18}px, ${currentCursorY + 12}px, 0);
-      background: rgba(15, 17, 23, 0.92);
-      color: #f1f5f9;
-      border: 1px solid rgba(255, 255, 255, 0.25);
+      transform: translate3d(${currentCursorX + 16}px, ${currentCursorY + 14}px, 0);
+      background: rgba(15, 17, 23, 0.94);
+      color: #f8fafc;
+      border: 1px solid rgba(255, 255, 255, 0.2);
       padding: 3px 8px;
-      border-radius: 6px;
+      border-radius: 5px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 11px;
       font-weight: 500;
@@ -800,7 +837,7 @@
       pointer-events: none;
       opacity: 0;
       transition: opacity 0.2s ease, transform 0.15s ease;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
       white-space: nowrap;
     `;
 
@@ -820,12 +857,12 @@
     return overlay;
   }
 
-  function updateVisibleCursor(x, y, durationMs = 90) {
+  function updateVisibleCursor(x, y, durationMs = 80) {
     ensureVisibleCursorOverlay();
     currentCursorX = Math.round(x);
     currentCursorY = Math.round(y);
     if (cursorPointerEl) {
-      cursorPointerEl.style.transition = `transform ${Math.max(40, durationMs)}ms cubic-bezier(0.2, 0.8, 0.4, 1)`;
+      cursorPointerEl.style.transition = `transform ${Math.max(35, durationMs)}ms cubic-bezier(0.2, 0.8, 0.4, 1)`;
       cursorPointerEl.style.transform = `translate3d(${currentCursorX}px, ${currentCursorY}px, 0)`;
     }
   }
@@ -834,12 +871,26 @@
     ensureVisibleCursorOverlay();
     const px = x !== undefined ? Math.round(x) : currentCursorX;
     const py = y !== undefined ? Math.round(y) : currentCursorY;
+
+    // 1. Physical Press-Down Actuation
+    if (cursorPointerEl) {
+      cursorPointerEl.style.transition = "transform 0.04s ease-out";
+      cursorPointerEl.style.transform = `translate3d(${px}px, ${py}px, 0) scale(0.86)`;
+      setTimeout(() => {
+        if (cursorPointerEl) {
+          cursorPointerEl.style.transition = "transform 0.12s cubic-bezier(0.2, 0.8, 0.4, 1)";
+          cursorPointerEl.style.transform = `translate3d(${px}px, ${py}px, 0) scale(1.0)`;
+        }
+      }, 70);
+    }
+
+    // 2. Concentric Micro-Ripple Wave
     if (cursorRippleEl) {
       cursorRippleEl.style.transition = "none";
-      cursorRippleEl.style.transform = `translate3d(${px}px, ${py}px, 0) scale(0.3)`;
+      cursorRippleEl.style.transform = `translate3d(${px}px, ${py}px, 0) scale(0.25)`;
       cursorRippleEl.style.opacity = "0.95";
       void cursorRippleEl.offsetWidth; // Force reflow
-      cursorRippleEl.style.transition = "transform 0.26s cubic-bezier(0.1, 0.9, 0.3, 1), opacity 0.26s ease-out";
+      cursorRippleEl.style.transition = "transform 0.22s cubic-bezier(0.1, 0.9, 0.3, 1), opacity 0.22s ease-out";
       cursorRippleEl.style.transform = `translate3d(${px}px, ${py}px, 0) scale(1.6)`;
       cursorRippleEl.style.opacity = "0";
     }
@@ -848,10 +899,10 @@
   let scrollBadgeTimer = null;
   function triggerScrollIndicator(x, y, direction = "down") {
     ensureVisibleCursorOverlay();
-    updateVisibleCursor(x, y, 100);
+    updateVisibleCursor(x, y, 90);
     if (cursorScrollBadgeEl) {
       cursorScrollBadgeEl.innerText = direction === "down" ? `↓ Scrolling down` : `↑ Scrolling up`;
-      cursorScrollBadgeEl.style.transform = `translate3d(${x + 18}px, ${y + 12}px, 0)`;
+      cursorScrollBadgeEl.style.transform = `translate3d(${x + 16}px, ${y + 14}px, 0)`;
       cursorScrollBadgeEl.style.opacity = "1";
       if (scrollBadgeTimer) clearTimeout(scrollBadgeTimer);
       scrollBadgeTimer = setTimeout(() => {
@@ -1246,6 +1297,9 @@
       return { success: false, error: "Missing element identifier." };
     }
 
+    const cleanId = String(targetId).trim().replace(/^\[/, "").replace(/\]$/, "");
+    const normalizedTag = `[${cleanId}]`;
+
     let el = resolveTargetElement(targetId);
 
     if (!el) {
@@ -1295,18 +1349,61 @@
     const centerX = Math.round(rect.left + rect.width / 2);
     const centerY = Math.round(rect.top + rect.height / 2);
 
-    // True Hit-Test Verification (Catches modal backdrop and overlay occlusion)
+    // 3. 3-Point Crosshair Hit-Testing with Bi-Directional Ancestor Containment
     let isOccluded = false;
     let occludedBy = "";
     try {
-      const topEl = document.elementFromPoint(centerX, centerY);
-      if (topEl && topEl !== targetElForClick && topEl !== el && !targetElForClick.contains(topEl) && !topEl.contains(targetElForClick) && !el.contains(topEl)) {
+      const samplePoints = [
+        { x: centerX, y: centerY },
+        { x: Math.round(rect.left + Math.max(2, rect.width * 0.25)), y: Math.round(rect.top + Math.max(2, rect.height * 0.25)) },
+        { x: Math.round(rect.left + Math.max(4, rect.width * 0.75)), y: Math.round(rect.top + Math.max(4, rect.height * 0.75)) }
+      ];
+
+      let anyPointHitTarget = false;
+      let firstBlocker = "";
+
+      for (const pt of samplePoints) {
+        if (pt.x < 0 || pt.y < 0 || pt.x > (window.innerWidth || 1920) || pt.y > (window.innerHeight || 1080)) continue;
+        const topEl = document.elementFromPoint(pt.x, pt.y);
+        if (!topEl) continue;
+
+        const isHit = topEl === targetElForClick || topEl === el ||
+                      targetElForClick.contains(topEl) || topEl.contains(targetElForClick) ||
+                      el.contains(topEl) || topEl.contains(el) ||
+                      (targetElForClick.closest && topEl.closest &&
+                       targetElForClick.closest("button, a, label, [role='button'], [role='tab'], li, [role='option'], .card") ===
+                       topEl.closest("button, a, label, [role='button'], [role='tab'], li, [role='option'], .card"));
+
+        if (isHit) {
+          anyPointHitTarget = true;
+          break;
+        } else {
+          // If topEl has pointer-events: none, it does not block clicks
+          const cs = window.getComputedStyle(topEl);
+          if (cs && cs.pointerEvents === "none") {
+            anyPointHitTarget = true;
+            break;
+          }
+          if (!firstBlocker) {
+            firstBlocker = topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : "");
+          }
+        }
+      }
+
+      if (!anyPointHitTarget && firstBlocker) {
         isOccluded = true;
-        occludedBy = topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : "");
+        occludedBy = firstBlocker;
       }
     } catch {}
 
-    // Update visible cursor position
+    // 4. Dynamic Cursor State & Visual Tracking
+    const isInput = targetElForClick.matches?.("input:not([type='button']):not([type='submit']):not([type='radio']):not([type='checkbox']), textarea") || false;
+    const isClickable = targetElForClick.matches?.("button, a, label, [role='button'], [role='tab'], [role='option'], input[type='submit'], input[type='button']") ||
+                        (window.getComputedStyle(targetElForClick).cursor === "pointer");
+    if (typeof setCursorType === "function") {
+      setCursorType(isInput ? "text" : (isClickable ? "pointer" : "arrow"));
+    }
+
     try {
       updateVisibleCursor(centerX, centerY, 80);
       showActionIndicator(centerX, centerY, cleanId);
@@ -1321,6 +1418,7 @@
       tag: el.tagName.toLowerCase(),
       type: el.type || "",
       id: cleanId,
+      normalizedTag,
       isOccluded,
       occludedBy,
       isVisible: rect.width > 0 && rect.height > 0
@@ -2383,26 +2481,62 @@
         let liveX = Math.round(rect.left + rect.width / 2);
         let liveY = Math.round(rect.top + rect.height / 2);
 
-        // Check if pointer events are intercepted by a sticky header, dialog, or backdrop overlay
+        // Check if pointer events are intercepted using 3-point crosshair containment
         let isIntercepted = false;
         let interceptedBy = "";
         try {
-          let topEl = document.elementFromPoint(liveX, liveY);
-          if (topEl && topEl !== targetElForCoords && !targetElForCoords.contains(topEl) && !topEl.contains(targetElForCoords)) {
-            // Attempt smart sticky header clearance by scrolling down slightly if topEl is a header/nav
-            if (topEl.matches && topEl.matches("header, nav, .sticky-header, [class*='header'], [class*='nav']")) {
+          const samplePoints = [
+            { x: liveX, y: liveY },
+            { x: Math.round(rect.left + Math.max(2, rect.width * 0.25)), y: Math.round(rect.top + Math.max(2, rect.height * 0.25)) },
+            { x: Math.round(rect.left + Math.max(4, rect.width * 0.75)), y: Math.round(rect.top + Math.max(4, rect.height * 0.75)) }
+          ];
+
+          let anyPointHitTarget = false;
+          let firstBlocker = "";
+
+          for (const pt of samplePoints) {
+            if (pt.x < 0 || pt.y < 0 || pt.x > (window.innerWidth || 1920) || pt.y > (window.innerHeight || 1080)) continue;
+            let topEl = document.elementFromPoint(pt.x, pt.y);
+            if (!topEl) continue;
+
+            let isHit = topEl === targetElForCoords || topEl === el ||
+                        targetElForCoords.contains(topEl) || topEl.contains(targetElForCoords) ||
+                        el.contains(topEl) || topEl.contains(el) ||
+                        (targetElForCoords.closest && topEl.closest &&
+                         targetElForCoords.closest("button, a, label, [role='button'], [role='tab'], li, [role='option'], .card") ===
+                         topEl.closest("button, a, label, [role='button'], [role='tab'], li, [role='option'], .card"));
+
+            if (!isHit && topEl.matches && topEl.matches("header, nav, .sticky-header, [class*='header'], [class*='nav']")) {
               try {
                 window.scrollBy({ top: 100, behavior: "instant" });
                 rect = targetElForCoords.getBoundingClientRect();
                 liveX = Math.round(rect.left + rect.width / 2);
                 liveY = Math.round(rect.top + rect.height / 2);
                 topEl = document.elementFromPoint(liveX, liveY);
+                if (topEl && (topEl === targetElForCoords || targetElForCoords.contains(topEl) || topEl.contains(targetElForCoords))) {
+                  isHit = true;
+                }
               } catch {}
             }
-            if (topEl && topEl !== targetElForCoords && !targetElForCoords.contains(topEl) && !topEl.contains(targetElForCoords)) {
-              isIntercepted = true;
-              interceptedBy = topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : "");
+
+            if (isHit) {
+              anyPointHitTarget = true;
+              break;
+            } else {
+              const cs = window.getComputedStyle(topEl);
+              if (cs && cs.pointerEvents === "none") {
+                anyPointHitTarget = true;
+                break;
+              }
+              if (!firstBlocker) {
+                firstBlocker = topEl.tagName.toLowerCase() + (topEl.className ? "." + String(topEl.className).split(" ")[0] : "");
+              }
             }
+          }
+
+          if (!anyPointHitTarget && firstBlocker) {
+            isIntercepted = true;
+            interceptedBy = firstBlocker;
           }
         } catch {}
 
