@@ -8,7 +8,7 @@
 (function () {
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
   const PRIMARY_MODEL = "gemini-3.5-flash-lite";
-  const TEMPORARY_FALLBACK_MODEL = "gemini-3.5-flash-lite";
+  const TEMPORARY_FALLBACK_MODEL = "gemini-2.5-flash";
 
   class SidekickApiClient {
     constructor(apiKey, defaultModel = PRIMARY_MODEL, proxyBaseUrl = "") {
@@ -17,7 +17,7 @@
       this.proxyBaseUrl = proxyBaseUrl || "";
       this._requestQueue = Promise.resolve(); // Serializes model calls within this client
       this._lastRequestEndTime = 0;
-      this._minRequestIntervalMs = 4000; // Pacing to protect 15 RPM free tier
+      this._minRequestIntervalMs = 1200; // Adaptive burst pacing (1.2s default)
       this.onRateLimitPause = null;
     }
 
@@ -97,14 +97,14 @@
         signal = null,
         maxRetries = 3,
         initialDelayMs = 750,
-        requestTimeoutMs = 30000,
+        requestTimeoutMs = 45000,
       } = options;
 
       // Create bounded per-attempt timeout controller combined with external signal
       const createAttemptSignal = () => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
-          controller.abort(new DOMException("Request timed out after 30 seconds", "TimeoutError"));
+          controller.abort(new DOMException(`Request timed out after ${requestTimeoutMs / 1000} seconds`, "TimeoutError"));
         }, requestTimeoutMs);
 
         if (signal) {
@@ -295,15 +295,19 @@
             errorText = res.statusText || `HTTP ${status}`;
           }
 
-          // Handle 429 Rate Limit (Free tier 15 RPM limit) with strict 60s automatic pause
+          // Handle 429 Rate Limit with adaptive backoff and model failover
           if (status === 429) {
-            console.warn(`[ApiClient] 429 Rate Limit hit on ${currentModel}. Pausing for 60 seconds.`);
+            const retryHeader = res.headers ? res.headers.get("Retry-After") : null;
+            let pauseSeconds = retryHeader ? parseInt(retryHeader, 10) : (attempt === 1 ? 12 : (attempt === 2 ? 24 : 45));
+            if (isNaN(pauseSeconds) || pauseSeconds <= 0) pauseSeconds = 15;
+            pauseSeconds = Math.min(60, pauseSeconds);
+            console.warn(`[ApiClient] 429 Rate Limit hit on ${currentModel}. Pausing for ${pauseSeconds} seconds (attempt ${attempt}/${maxRetries}).`);
             const notifyPause = options.onRateLimitPause || this.onRateLimitPause;
             if (typeof notifyPause === "function") {
-              notifyPause(60, "Rate limit: Pausing for 60s");
+              notifyPause(pauseSeconds, `Rate limit: Pausing for ${pauseSeconds}s`);
             }
-            // Strict 60-second backoff with second-by-second countdown
-            for (let sec = 60; sec > 0; sec--) {
+            // Adaptive countdown backoff
+            for (let sec = pauseSeconds; sec > 0; sec--) {
               if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
               const notifyCountdown = options.onRateLimitCountdown || this.onRateLimitCountdown;
               if (typeof notifyCountdown === "function") {
@@ -315,7 +319,11 @@
             if (typeof notifyResume === "function") {
               notifyResume();
             }
-            // Retry the call
+            // If primary model repeatedly throttles, failover to temporary fallback model
+            if (attempt >= 2 && currentModel === PRIMARY_MODEL) {
+              console.warn(`[ApiClient] Persistent 429 on ${PRIMARY_MODEL}. Trying fallback model: ${TEMPORARY_FALLBACK_MODEL}`);
+              currentModel = TEMPORARY_FALLBACK_MODEL;
+            }
             continue;
           }
 

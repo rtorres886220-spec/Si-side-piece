@@ -66,15 +66,23 @@
       const { signal, elementHint, cognitiveLedger, thinkingLevel = "HIGH" } = options;
       const enclaveId = getSafeEnclaveId(options);
 
-      const elementListStr = (interactiveElements || []).slice(0, 80).map((el) => {
-        const cleanLabel = sanitizeElementLabel(el.label);
+      // Spatial & modal layer prioritization: front modal controls first, expanding capacity to 150 elements
+      const sortedElements = [...(interactiveElements || [])].sort((a, b) => {
+        if (a.inActiveModal && !b.inActiveModal) return -1;
+        if (!a.inActiveModal && b.inActiveModal) return 1;
+        return 0;
+      });
+
+      const elementListStr = sortedElements.slice(0, 150).map((el) => {
+        const cleanLabel = sanitizeElementLabel(el.label || el.text);
         const valStr = el.value ? ` [value: "${sanitizeElementLabel(el.value).slice(0, 30)}"]` : "";
         const checkedStr = el.checked ? ` [checked]` : "";
         const groupStr = el.group ? ` [group: "${sanitizeElementLabel(el.group).slice(0, 40)}"]` : "";
+        const modalStr = el.inActiveModal ? ` [FRONT_MODAL]` : "";
         const optionsStr = (el.options && Array.isArray(el.options) && el.options.length > 0)
           ? ` [options: ${el.options.slice(0, 8).map(o => `"${sanitizeElementLabel(o.text || o.value)}"`).join(", ")}]`
           : "";
-        return `[#${el.id}] ${el.role.toUpperCase()}: "${cleanLabel}"${groupStr}${valStr}${checkedStr}${optionsStr}`;
+        return `[#${el.id}] ${el.role.toUpperCase()}: "${cleanLabel}"${groupStr}${valStr}${checkedStr}${modalStr}${optionsStr}`;
       }).join("\n");
 
       let continuousSection = "";
@@ -372,6 +380,7 @@ CRITICAL GROUNDING RULES:
 3. Every number, price, statistic, date, and fee in your answer MUST appear in the evidence.
 4. ANTI-LAZY RULE: If the evidence contains the answer, answer it thoroughly. Do NOT say "the page does not say" if relevant terms are present in the evidence.
 5. If the evidence genuinely contains zero proof for a specific aspect, note it honestly in unverifiedClaims.
+6. USER HIGHLIGHT PRIORITY: If "[Active User Selection]" is present in the evidence, the user specifically highlighted this text. You MUST prioritize and base your answer directly on this highlighted selection before referencing general page context.
 
 Respond with ONLY valid JSON:
 {

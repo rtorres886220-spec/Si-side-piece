@@ -87,12 +87,8 @@ const AUTOMATION_DENYLIST = [
   "coinbase.com", "binance.com", "kraken.com", "gemini.com", "plaid.com",
   "sofi.com", "ally.com", "discover.com", "1password.com", "bitwarden.com",
   "lastpass.com", "dashlane.com", "keepersecurity.com", "nordpass.com",
-  "roboform.com", "accounts.google.com", "mail.google.com",
-  "login.microsoftonline.com", "outlook.live.com", "auth0.com", "okta.com",
-  "id.me", "irs.gov", "login.gov", "usps.com", "ssa.gov", "turbotax.intuit.com",
-  "taxact.com", "console.aws.amazon.com", "aws.amazon.com",
-  "console.cloud.google.com", "portal.azure.com", "workday.com",
-  "adp.com", "gusto.com", "mychart.com", "epic.com", "github.com"
+  "roboform.com", "auth0.com", "okta.com", "id.me", "irs.gov", "login.gov",
+  "ssa.gov", "turbotax.intuit.com", "taxact.com"
 ];
 
 function checkDomainAllowed(urlStr) {
@@ -124,19 +120,34 @@ function checkDomainAllowed(urlStr) {
     throw new Error("Security Exception: Chrome restricts debugging on the Chrome Web Store.");
   }
 
-  // Exempt benign docs
+  // Exempt benign developer and documentation resources
   if (hostname === "docs.aws.amazon.com" || hostname === "docs.stripe.com" || hostname === "developer.paypal.com") {
     return true;
   }
 
-  for (const denied of AUTOMATION_DENYLIST) {
-    if (denied === "github.com") {
-      if ((hostname === "github.com" || hostname.endsWith(".github.com")) &&
-          (pathname.includes("/settings/security") || pathname.includes("/settings/keys") || pathname.includes("/settings/tokens"))) {
-        throw new Error("Security Exception: Automation is prohibited on sensitive GitHub security settings.");
-      }
-      continue;
+  // Targeted sensitive security credential path locks
+  if (hostname === "github.com" || hostname.endsWith(".github.com")) {
+    if (pathname.includes("/settings/security") || pathname.includes("/settings/keys") || pathname.includes("/settings/tokens")) {
+      throw new Error("Security Exception: Automation is prohibited on sensitive GitHub security credentials.");
     }
+    return true;
+  }
+
+  if (hostname === "myaccount.google.com" || hostname === "accounts.google.com") {
+    if (pathname.includes("/signinoptions") || pathname.includes("/security") || pathname.includes("/password")) {
+      throw new Error("Security Exception: Automation is prohibited on account password or 2FA management.");
+    }
+    return true;
+  }
+
+  if (hostname.includes("microsoft") || hostname.includes("live.com")) {
+    if (pathname.includes("/proofs") || pathname.includes("/security") || pathname.includes("/password")) {
+      throw new Error("Security Exception: Automation is prohibited on security credential management.");
+    }
+    return true;
+  }
+
+  for (const denied of AUTOMATION_DENYLIST) {
     if (hostname === denied || hostname.endsWith("." + denied)) {
       throw new Error(`Security Exception: Automation is strictly prohibited on sensitive domain (${denied}).`);
     }
@@ -172,7 +183,7 @@ async function getManagedGroupState() {
   ]);
 
   let groupId = storage.sidekickManagedGroupId || null;
-  const isolationEnabled = storage.sidekickGroupIsolationEnabled !== false; // Default: Strict isolation
+  const isolationEnabled = storage.sidekickGroupIsolationEnabled === true; // Default: Permissive active tab mode (only isolate if explicitly enabled in Settings)
   let groupTitle = storage.sidekickManagedGroupName || "Si";
   let groupColor = "grey"; // "grey" is Chrome's ice white / silver tab group pill
   let groupTabs = [];
@@ -410,6 +421,10 @@ async function executeCDPActionOnTab(tabId, action, params = {}) {
       attachedLocally = !isInAgentSession;
     } catch (err) {
       console.warn("CDP Attach warning (falling back to DOM action):", err.message);
+      broadcastToSidepanel({
+        type: "AGENT_DEGRADED_NOTICE",
+        warning: `CDP hardware debugger unavailable (${err.message}). Using synthetic DOM event fallback.`
+      });
       return await dispatchDOMFallback(tabId, action, params);
     }
   }
@@ -809,13 +824,17 @@ class AutonomousAgentEngine {
     this.abortController = null;
     this.frameElementRegistry = new Map();
     this.state = {
-      status: "IDLE", // IDLE, RUNNING, PAUSED_429, WAITING_APPROVAL, COMPLETED, STOPPED, ERROR
+      status: "IDLE", // IDLE, RUNNING, PAUSED_429, WAITING_APPROVAL, PAUSED_FOR_USER, COMPLETED, STOPPED, ERROR
       objective: "",
       currentStep: 1,
       maxSteps: 50,
       startTime: 0,
       elapsedMs: 0,
       checklist: [],
+      completedMilestones: [],
+      domDelta: "Initial viewport state captured",
+      lastAction: null,
+      historySignatures: [],
       currentThought: "",
       logs: [],
       rateLimitNotice: null,
@@ -841,6 +860,17 @@ class AutonomousAgentEngine {
         console.log("[AutonomousAgentEngine] Successfully restored durable agent state from session storage:", this.state.status);
       }
     } catch {}
+  }
+
+  async resume(additionalSteps = 50) {
+    if (this.state.status === "RUNNING") return;
+    this.abortController = new AbortController();
+    this.state.maxSteps = this.state.currentStep + additionalSteps;
+    this.state.status = "RUNNING";
+    this.addLog("info", `Task resumed by user. Extended budget by ${additionalSteps} steps (max: ${this.state.maxSteps}).`);
+    startLoopKeepAlive();
+    await this.persistState();
+    this.runAgentLoop();
   }
 
   async start(prompt) {
@@ -1385,6 +1415,16 @@ ${(domData?.visiblePageText || "").slice(0, 3500)}`;
       });
     } catch {}
 
+    // Re-attach persistent CDP debugger session immediately
+    try {
+      if (activeDebuggerTabId !== tabId) {
+        await chrome.debugger.attach({ tabId }, "1.3");
+        activeDebuggerTabId = tabId;
+      }
+    } catch (attachErr) {
+      console.debug("[CDP] Re-attach after navigation notice:", attachErr.message);
+    }
+
     this.isNavigating = false;
     this.addLog("info", "Page navigation finished. Debugger and content script re-synchronized.");
     await this.persistState();
@@ -1479,6 +1519,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Autonomous Agent Control Messages
   if (message.type === "START_AGENT_LOOP") {
     activeAgentEngine.start(message.prompt)
+      .then(() => sendResponse({ success: true, state: activeAgentEngine.state }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "RESUME_AGENT_LOOP") {
+    activeAgentEngine.resume(message.additionalSteps || 50)
       .then(() => sendResponse({ success: true, state: activeAgentEngine.state }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;

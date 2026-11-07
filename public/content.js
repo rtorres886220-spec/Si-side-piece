@@ -65,27 +65,25 @@
     }
 
     // Direct Native Select Option Resolution (React & Framework Safe)
+    // Direct Select Option & Custom Combobox Resolution (Native + ARIA Listbox Safe)
     if (message.action === "SELECT_OPTION" || message.type === "SELECT_OPTION") {
-      try {
-        const targetId = message.elementId || message.targetId || message.id || message.selector;
-        let selectEl = resolveTargetElement(targetId);
-        if (selectEl && selectEl.tagName !== "SELECT") {
-          selectEl = selectEl.querySelector("select") || selectEl.closest("select");
-        }
-        if (!selectEl) {
-          selectEl = document.querySelector("select");
-        }
-        if (selectEl) {
-          const val = message.value || message.option_value || message.text || message.option;
-          const res = selectNativeOption(selectEl, val);
-          sendResponse(res);
-        } else {
-          sendResponse({ success: false, error: `Select element '${targetId}' not found in DOM` });
-        }
-      } catch (err) {
-        sendResponse({ success: false, error: err.message });
+      const targetId = message.elementId || message.targetId || message.id || message.selector;
+      const val = message.value || message.option_value || message.text || message.option;
+      let targetEl = resolveTargetElement(targetId);
+      if (!targetEl && targetId) {
+        try { targetEl = document.querySelector(targetId); } catch {}
       }
-      return false;
+      if (!targetEl) {
+        targetEl = document.querySelector("select, [role='combobox'], [role='listbox']");
+      }
+      if (targetEl) {
+        selectDropdownOrComboboxOption(targetEl, val)
+          .then((res) => sendResponse(res))
+          .catch((err) => sendResponse({ success: false, error: err.message }));
+      } else {
+        sendResponse({ success: false, error: `Select or combobox element '${targetId}' not found in DOM` });
+      }
+      return true; // Keep message channel open for async response
     }
 
     // System-Native Visible Cursor Controls
@@ -929,6 +927,112 @@
       value: selectEl.value,
       text: (matchedOption.text || matchedOption.innerText || "").trim(),
       verified: selectEl.value === matchedOption.value
+    };
+  }
+
+  async function selectDropdownOrComboboxOption(targetEl, valueOrText) {
+    if (!targetEl) return { success: false, error: "Dropdown target element not found." };
+    const query = String(valueOrText || "").trim().toLowerCase();
+
+    // 1. If element is or contains native <select>
+    let nativeSelect = targetEl.tagName === "SELECT" ? targetEl : (targetEl.querySelector ? targetEl.querySelector("select") : null);
+    if (!nativeSelect && targetEl.closest) {
+      nativeSelect = targetEl.closest("select");
+    }
+    if (nativeSelect) {
+      return selectNativeOption(nativeSelect, query);
+    }
+
+    // 2. Custom ARIA Combobox / Listbox Solver (Headless UI, Radix, Tailwind, Custom Select)
+    try {
+      if (typeof targetEl.focus === "function") targetEl.focus();
+      if (typeof targetEl.click === "function") {
+        targetEl.click();
+      } else {
+        targetEl.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      }
+    } catch {}
+
+    // Wait briefly for dropdown menu / portal to render into DOM
+    await new Promise((r) => setTimeout(r, 160));
+
+    // Search for matching option within candidate selectors across active DOM and portals
+    const optionSelectors = [
+      '[role="option"]',
+      '[role="listbox"] [role="option"]',
+      '[role="listbox"] li',
+      'ul[role="listbox"] > li',
+      '.select__option',
+      '[data-option]',
+      '.dropdown-item',
+      '.menu-item'
+    ];
+
+    let candidateOptions = [];
+    for (const sel of optionSelectors) {
+      try {
+        const found = Array.from(document.querySelectorAll(sel));
+        if (found.length > 0) {
+          candidateOptions.push(...found);
+        }
+      } catch {}
+    }
+
+    // Filter to visible candidates
+    candidateOptions = Array.from(new Set(candidateOptions)).filter((opt) => isElementStrippedVisible(opt));
+
+    let matchedOpt = null;
+    if (candidateOptions.length > 0) {
+      matchedOpt = candidateOptions.find((o) => {
+        const t = (o.innerText || o.textContent || o.getAttribute("aria-label") || "").trim().toLowerCase();
+        return t === query;
+      });
+      if (!matchedOpt && query.length >= 2) {
+        matchedOpt = candidateOptions.find((o) => {
+          const t = (o.innerText || o.textContent || o.getAttribute("aria-label") || "").toLowerCase();
+          return t.includes(query);
+        });
+      }
+      if (!matchedOpt) {
+        matchedOpt = candidateOptions.find((o) => {
+          const v = (o.getAttribute("data-value") || o.getAttribute("value") || "").toLowerCase();
+          return v === query || (v.length >= 2 && v.includes(query));
+        });
+      }
+    }
+
+    if (matchedOpt) {
+      try {
+        matchedOpt.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        if (typeof matchedOpt.focus === "function") matchedOpt.focus();
+        matchedOpt.click();
+        matchedOpt.setAttribute("aria-selected", "true");
+        targetEl.setAttribute("aria-expanded", "false");
+        targetEl.dispatchEvent(new Event("change", { bubbles: true }));
+        targetEl.dispatchEvent(new Event("input", { bubbles: true }));
+
+        const r = matchedOpt.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          const cx = Math.round(r.left + r.width / 2);
+          const cy = Math.round(r.top + r.height / 2);
+          updateVisibleCursor(cx, cy, 90);
+          triggerClickPulse(cx, cy);
+        }
+
+        return {
+          success: true,
+          selected: true,
+          isCustomCombobox: true,
+          text: (matchedOpt.innerText || matchedOpt.textContent || "").trim()
+        };
+      } catch (clickErr) {
+        return { success: false, error: clickErr.message };
+      }
+    }
+
+    return {
+      success: false,
+      error: `Could not locate matching option for "${valueOrText}" in dropdown/combobox.`
     };
   }
 
@@ -2578,6 +2682,8 @@
         try { targetEl.dispatchEvent(new PointerEvent("pointerover", evtInit)); } catch {}
         try { targetEl.dispatchEvent(new PointerEvent("pointerenter", evtInit)); } catch {}
         try { targetEl.dispatchEvent(new MouseEvent("mouseover", evtInit)); } catch {}
+        try { targetEl.dispatchEvent(new PointerEvent("pointermove", evtInit)); } catch {}
+        try { targetEl.dispatchEvent(new MouseEvent("mousemove", evtInit)); } catch {}
         try { targetEl.dispatchEvent(new PointerEvent("pointerdown", evtInit)); } catch {}
         try { targetEl.dispatchEvent(new MouseEvent("mousedown", evtInit)); } catch {}
         if (typeof targetEl.focus === "function") targetEl.focus();

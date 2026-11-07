@@ -483,6 +483,8 @@
               pageContext = await getPageContextFn();
               continue;
             } else {
+              controllerState = "FAILED";
+              cognitiveLedger.state = "FAILED";
               break;
             }
           }
@@ -493,6 +495,8 @@
         cognitiveLedger.historySignatures.push(currentSignature);
         const last3 = cognitiveLedger.historySignatures.slice(-3);
         if (last3.length === 3 && last3[0] === last3[1] && last3[1] === last3[2]) {
+          controllerState = "CYCLE_HALT";
+          cognitiveLedger.state = "CYCLE_HALT";
           onVerificationUpdate("Halting: Detected 3 identical consecutive actions without DOM state progress to prevent runaway loops.");
           break;
         }

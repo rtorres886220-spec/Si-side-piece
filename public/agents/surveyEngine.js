@@ -69,7 +69,13 @@
     /(?:leave|keep)\s+(?:this\s+question|all\s+options)\s+(?:blank|empty|unselected)/i,
     /(?:type|enter)\s+(?:the\s+word|the\s+phrase|the\s+letters?)\s+['"]?([a-zA-Z0-9_-]+)['"]?/i,
     /(?:enter|type)\s+(?:the\s+number)\s+['"]?([0-9]+)['"]?/i,
-    /(?:rate\s+this\s+item\s+as\s+['"]?([^'"]+?)['"]?\s+to\s+demonstrate)/i
+    /(?:rate\s+this\s+item\s+as\s+['"]?([^'"]+?)['"]?\s+to\s+demonstrate)/i,
+    /(?:regardless\s+of\s+(?:your\s+)?(?:opinion|feelings?|views?|thoughts?))[,\s]+(?:please\s+)?(?:select|choose|click|mark)\s+['"]?([^'"]+?)['"]?/i,
+    /(?:if\s+you\s+(?:agree|strongly\s+agree|disagree))[,\s]+(?:please\s+)?(?:select|choose|click|mark)\s+['"]?([^'"]+?)['"]?/i,
+    /(?:to\s+(?:ensure|verify)\s+(?:data\s+integrity|that\s+responses\s+are\s+valid))[,\s]+(?:please\s+)?(?:select|choose|click|mark)\s+['"]?([^'"]+?)['"]?/i,
+    /(?:select|choose|click|mark)\s+(?:only|strictly)\s+['"]?([^'"]+?)['"]?\s+(?:and\s+nothing\s+else)/i,
+    /(?:select|choose|check)\s+(?:all\s+except|every\s+option\s+except|everything\s+except)\s+['"]?([^'"]+?)['"]?/i,
+    /(?:do\s+not\s+select|never\s+select|avoid\s+selecting)\s+['"]?([^'"]+?)['"]?/i
   ];
 
   // Foil / Impossible answer options (fictional brands, impossible activities) injected to disqualify automated bots
@@ -78,7 +84,11 @@
     /\b(?:own(?:ed)?\s+a\s+(?:dinosaur|unicorn|extraterrestrial|nuclear\s+submarine|alien))\b/i,
     /\b(?:purchased?\s+(?:a\s+space\s*shuttle|a\s+stealth\s+bomber|an\s+aircraft\s+carrier|a\s+flying\s+car))\b/i,
     /\b(?:fakebrand|fictionalbrand|bogusbrand|fictitious\s+brand|madeupbrand)\b/i,
-    /\b(?:perpetual\s+motion|anti-gravity\s+device|invisibility\s+cloak)\b/i
+    /\b(?:perpetual\s+motion|anti-gravity\s+device|invisibility\s+cloak)\b/i,
+    /\b(?:traveled?\s+to\s+atlantis|visited\s+narnia|lived\s+in\s+middle-earth|met\s+a\s+leprechaun)\b/i,
+    /\b(?:purchased?\s+(?:a\s+teleporter|a\s+lightsaber|a\s+time\s+machine|a\s+hoverboard\s+that\s+flies))\b/i,
+    /\b(?:employed\s+as\s+a\s+(?:wizard|jedi|space\s+pirate|dragon\s+trainer))\b/i,
+    /\b(?:used\s+(?:telepathy|telekinesis|mind\s+reading)\s+in\s+the\s+past\s+30\s+days)\b/i
   ];
 
   // Unified, Non-Contradictory Persona Profile for Survey Junkie & Partner Routers
@@ -1987,8 +1997,8 @@
         const questions = surveyData.questions;
         const currentProgress = surveyData.progress || "";
 
-        // Find unanswered or partially answered questions on current page
-        const answeredIds = new Set(this.executionRecord.map((r) => r.questionId));
+        // Find unanswered or partially answered questions on current page (only genuinely verified answers count as completed)
+        const answeredIds = new Set(this.executionRecord.filter((r) => r.verified === true).map((r) => r.questionId));
         let questionsToAnswer = questions.filter((q) => {
           if (answeredIds.has(q.id)) return false;
           const hasAnyChecked = (q.options || []).some(o => o.checked || o.selected);

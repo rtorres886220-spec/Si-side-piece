@@ -244,8 +244,9 @@
         if (!rawNum) continue;
         const parsedVal = parseFloat(rawNum);
 
-        // Allow structural/index numbers (1-5) used in list enumerations if not currency/percent
-        const isStructural = !num.includes("$") && !num.includes("%") && Number.isInteger(parsedVal) && parsedVal >= 1 && parsedVal <= 5;
+        // Allow structural enumeration indices (1-5) strictly when used as item numbers, not metrics/quantities
+        const hasUnitOrMetric = /(?:%|usd|dollars?|cents?|days?|hours?|minutes?|seconds?|months?|years?|k|m|b|gb|mb|tb|ms|lbs?|kg|miles?|km|rating|stars?|items?|users?|people)\b/i.test(num);
+        const isStructural = !num.includes("$") && !num.includes("%") && !hasUnitOrMetric && Number.isInteger(parsedVal) && parsedVal >= 1 && parsedVal <= 5;
         if (isStructural) {
           continue;
         }
@@ -282,11 +283,13 @@
         }
       }
 
-      if (totalCitations > 0 && verifiedCitations === 0) {
+      if (totalCitations > 0 && (verifiedCitations === 0 || (verifiedCitations / totalCitations) < 0.5)) {
         return {
           passed: false,
-          reason: "All provided citation quotes failed normalized verbatim verification in source evidence.",
+          reason: `Citation integrity failure: ${totalCitations - verifiedCitations} of ${totalCitations} citation quotes failed verbatim verification in source text.`,
           code: "unverified_citations",
+          totalCitations,
+          verifiedCitations
         };
       }
 

@@ -795,6 +795,9 @@ async function verifyApiKey(apiKey, modelName = DEFAULT_MODEL, externalSignal = 
       if (msg.type === "AGENT_STATE_UPDATED" && msg.state) {
         renderAgentState(msg.state);
       }
+      if (msg.type === "AGENT_DEGRADED_NOTICE" && msg.warning) {
+        showToast(msg.warning);
+      }
       if (msg.type === "TAB_GROUP_STATE_UPDATED" && msg.state) {
         updateTabGroupUI(msg.state);
       }
