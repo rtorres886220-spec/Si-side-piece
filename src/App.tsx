@@ -53,6 +53,7 @@ const MANIFEST_CONTENT = `{
   "manifest_version": 3,
   "name": "Sidekick",
   "version": "1.1.3",
+  "minimum_chrome_version": "116",
   "description": "Minimalist browser companion with Just-In-Time CDP automation, click-to-locate citations, and enterprise-grade defense-in-depth security.",
   "permissions": [
     "sidePanel",
@@ -62,7 +63,8 @@ const MANIFEST_CONTENT = `{
     "webNavigation",
     "scripting",
     "storage",
-    "debugger"
+    "debugger",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>",
@@ -109,9 +111,44 @@ const BACKGROUND_CONTENT = `/**
  * Enterprise Defense-in-Depth Security & Hardware Event Dispatcher
  */
 
-chrome.sidePanel
-  .setPanelBehavior({ openPanelOnActionClick: true })
-  .catch((error) => console.error("Failed to set panel behavior:", error));
+// Side panel behavior
+if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+  chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .catch((error) => console.error("Failed to set panel behavior:", error));
+}
+
+// Keep-Alive Alarm (MV3 compliant)
+const KEEP_ALIVE_ALARM = "sidekick-keep-alive-alarm";
+if (chrome.alarms) {
+  chrome.alarms.get(KEEP_ALIVE_ALARM, (alarm) => {
+    if (!alarm) chrome.alarms.create(KEEP_ALIVE_ALARM, { periodInMinutes: 1.0 });
+  });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === KEEP_ALIVE_ALARM && chrome.storage?.session) {
+      chrome.storage.session.set({ _keepAliveTick: Date.now() }).catch(() => {});
+    }
+  });
+}
+
+// Sidepanel port connection keeper
+const activePorts = new Set();
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === "sidekick-sidepanel" || port.name === "sidekick-keepalive") {
+    activePorts.add(port);
+    port.onMessage.addListener((msg) => {
+      if (msg.type === "PING") port.postMessage({ type: "PONG", timestamp: Date.now() });
+    });
+    port.onDisconnect.addListener(() => activePorts.delete(port));
+  }
+});
+
+function broadcastToSidepanel(message) {
+  for (const port of activePorts) {
+    try { port.postMessage(message); } catch {}
+  }
+  chrome.runtime.sendMessage(message).catch(() => {});
+}
 
 const AUTOMATION_DENYLIST = [
   "chase.com",
@@ -148,6 +185,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     captureTabScreenshot(message.tabId, message.options)
       .then((dataUrl) => sendResponse({ success: true, dataUrl }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === "START_AGENT_LOOP") {
+    broadcastToSidepanel({ type: "AGENT_STATE_UPDATED", state: { status: "RUNNING", step: 1 } });
+    sendResponse({ success: true });
     return true;
   }
 });
@@ -2627,7 +2670,7 @@ export default function App() {
       const zip = new JSZip();
 
       // Read current files with cache-busting to ensure latest code including 3D cosmos engine bundle
-      const [manifestRes, bgRes, htmlRes, cssRes, jsRes, contentRes, cosmosRes] = await Promise.all([
+      const [manifestRes, bgRes, htmlRes, cssRes, jsRes, contentRes, cosmosRes, readmeRes] = await Promise.all([
         fetch(`/manifest.json?t=${t}`).then((r) => r.text()).catch(() => MANIFEST_CONTENT),
         fetch(`/background.js?t=${t}`).then((r) => r.text()).catch(() => BACKGROUND_CONTENT),
         fetch(`/sidepanel.html?t=${t}`).then((r) => r.text()).catch(() => ""),
@@ -2635,6 +2678,7 @@ export default function App() {
         fetch(`/sidepanel.js?t=${t}`).then((r) => r.text()).catch(() => ""),
         fetch(`/content.js?t=${t}`).then((r) => r.text()).catch(() => ""),
         fetch(`/cosmos.bundle.js?t=${t}`).then((r) => r.text()).catch(() => ""),
+        fetch(`/README.md?t=${t}`).then((r) => r.text()).catch(() => ""),
       ]);
 
       zip.file("manifest.json", manifestRes);
@@ -2707,26 +2751,39 @@ export default function App() {
 
       zip.file(
         "README.md",
-        `# Sidekick - Option B (Chrome DevTools Protocol) Chrome Extension (Manifest V3)
+        readmeRes || `# Sidekick - Chrome DevTools Protocol (CDP) Browser Companion (Manifest V3)
 
 Enterprise-grade browser companion with Just-In-Time (JIT) CDP hardware automation, click-to-locate citations, and defense-in-depth security.
 
-## Key Upgrades:
-1. **Option B Chrome DevTools Protocol (CDP)**: Dispatches true OS-level trusted mouse clicks and keyboard keystrokes via \`chrome.debugger\`.
-2. **Ephemeral JIT Attachment**: Calls \`chrome.debugger.attach\` only for milliseconds during approved actions and detaches immediately so the yellow warning banner does not linger.
-3. **High-Efficiency Intelligence**: Exclusively powered by Google's ultra-low latency gemini-3.5-flash-lite model with deep thinking enabled.
-4. **Defense-in-Depth Sanitization**: Strips hidden/invisible DOM elements, zero-width injection attacks, and automatically masks Credit Cards (Luhn validated), SSNs, and Bearer tokens.
-5. **Cryptographic UUID Enclaves**: Page contents are sealed in \`<<<UNTRUSTED_CONTENT_[UUID]>>>\` to neutralize Indirect Prompt Injection (IPI).
-6. **Human-in-the-Loop (HITL) Gate**: High-risk actions (Submit, Pay, Delete, Confirm) require explicit user approval.
-7. **Payment Widget Lockout**: Stripe iframes, credit card fields, and sensitive banking domains are strictly blocked.
+---
 
-## Installation:
-1. Extract this ZIP archive to a folder on your computer.
-2. Open Google Chrome and navigate to: chrome://extensions
-3. Enable "Developer mode" in the top-right corner.
-4. Click "Load unpacked" in the top-left corner.
-5. Select the extracted folder.
-6. Click the Sidekick extension icon in your Chrome toolbar to open the side panel!`
+## 💻 Installation on Chromebook (ChromeOS):
+
+1. **Download the ZIP**: Click the **Download** icon in the simulator header or download \`sidekick-extension.zip\`.
+2. **Extract Archive (CRITICAL for ChromeOS)**:
+   - Open the **Files** app on your Chromebook.
+   - Right-click \`sidekick-extension.zip\` and select **"Extract all"** (or create a folder named \`Sidekick\` under **"My files"** or **"Downloads"** and copy all files into it).
+   - *Note: Do NOT try to load directly from the mounted zip drive in the sidebar; it must be extracted into a regular folder.*
+3. **Open Extensions Page**:
+   - In Google Chrome, open a new tab and navigate to: \`chrome://extensions\`
+4. **Enable Developer Mode**:
+   - In the top-right corner of \`chrome://extensions\`, toggle **Developer mode** to ON.
+   *(Note: This is standard extension developer mode in Chrome; no OS wipe or BIOS developer mode is required).*
+5. **Load the Extension**:
+   - Click the **"Load unpacked"** button in the top-left corner.
+   - Select your extracted \`Sidekick\` folder (the folder containing \`manifest.json\`).
+6. **Set Up Gemini API Key**:
+   - Click the **Sidekick** extension icon in your Chrome toolbar or side panel.
+   - On first launch, enter your free Gemini API key (starts with \`AIzaSy...\`) from Google AI Studio.
+   - Default model is **\`gemini-3.5-flash-lite\`** (with auto-fallback to \`gemini-3.1-flash-lite\`).
+
+---
+
+## ⚡ Important Notes for Chromebook Users:
+- **School / Managed Chromebooks**: If your Chromebook is enrolled in an enterprise or school management program, administrators may disable "Developer mode" in \`chrome://extensions\` or block the \`debugger\` permission. On personal Chromebooks, this is fully unlocked.
+- **Chrome Protected Pages**: Chrome strictly prohibits all extensions from automating internal pages like \`chrome://extensions\`, \`chrome://settings\`, or the Chrome Web Store. Navigate to any regular website (e.g., Wikipedia, GitHub, news) to activate Sidekick.
+- **Chromebook Apps**: Sidekick controls Chrome browser tabs. It cannot interact with separate Android apps from Google Play or Linux Crostini desktop apps.
+`
       );
 
       const content = await zip.generateAsync({ type: "blob" });
